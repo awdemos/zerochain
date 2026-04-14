@@ -1,0 +1,21 @@
+[package]
+name = "zerochain-llm"
+version.workspace = true
+edition.workspace = true
+description = "LLM provider trait with OpenAI-compatible implementation"
+
+[dependencies]
+zerochain-cas = { path = "../zerochain-cas" }
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+blake3.workspace = true
+futures-core = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

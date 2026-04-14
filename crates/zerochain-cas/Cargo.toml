@@ -1,0 +1,17 @@
+[package]
+name = "zerochain-cas"
+version.workspace = true
+edition.workspace = true
+description = "Content-addressed storage using Blake3 hashing"
+
+[dependencies]
+blake3.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile = "3.0"

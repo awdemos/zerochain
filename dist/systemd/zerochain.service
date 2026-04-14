@@ -1,0 +1,41 @@
+# zerochain — filesystem-native multi-agent workflow daemon
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp zerochain.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now zerochain.service
+#
+# Configure:
+#   mkdir -p ~/.config/zerochain/workspace
+#   echo "OPENAI_API_KEY=sk-..." > ~/.config/zerochain/env
+#
+# Logs:
+#   journalctl --user -u zerochain -f
+
+[Unit]
+Description=zerochain workflow daemon (MCP server)
+Documentation=https://github.com/zerochain-dev/zerochain
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/zerochain serve
+WorkingDirectory=%h/.config/zerochain/workspace
+EnvironmentFile=-%h/.config/zerochain/env
+
+# Logging to stderr only — stdout is reserved for MCP JSON-RPC
+Environment=RUST_LOG=zerochain=info
+StandardOutput=journal
+StandardError=journal
+
+# Restart on failure, back off gradually
+Restart=on-failure
+RestartSec=5
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

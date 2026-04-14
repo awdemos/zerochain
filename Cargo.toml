@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zerochain-cas",
+    "crates/zerochain-core",
+    "crates/zerochain-fs",
+    "crates/zerochain-llm",
+    "crates/zerochain-daemon",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/zerochain-dev/zerochain"
+
+[workspace.dependencies]
+blake3 = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2.0"
+anyhow = "1.0"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+rmcp = "0.1"

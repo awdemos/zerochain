@@ -1,0 +1,16 @@
+[package]
+name = "zerochain-fs"
+version.workspace = true
+edition.workspace = true
+description = "Copy-on-write filesystem abstraction (Btrfs, APFS, directory fallback)"
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile = "3.0"

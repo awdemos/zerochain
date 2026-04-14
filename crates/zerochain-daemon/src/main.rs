@@ -1,0 +1,179 @@
+mod state;
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+use state::AppState;
+use std::path::PathBuf;
+use zerochain_fs::{acquire_lock, clean_output, mark_complete};
+use zerochain_core::stage::StageId;
+
+#[derive(Parser)]
+#[command(name = "zerochain", version, about = "Filesystem-native workflow engine")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+
+    #[arg(long, env = "ZEROCHAIN_WORKSPACE", default_value = "./workspace")]
+    workspace: PathBuf,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Init {
+        #[arg(short, long)]
+        name: String,
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+        #[arg(short, long)]
+        template: Option<String>,
+    },
+    Run {
+        workflow_id: String,
+        #[arg(short, long)]
+        stage: Option<String>,
+    },
+    Status {
+        workflow_id: Option<String>,
+    },
+    List,
+    Approve {
+        workflow_id: String,
+        stage_id: String,
+    },
+    Reject {
+        workflow_id: String,
+        stage_id: String,
+        #[arg(short, long)]
+        feedback: Option<String>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
+    let cli = Cli::parse();
+    let mut state = AppState::new(&cli.workspace);
+    state.load_workflows().await?;
+
+    match cli.command {
+        Commands::Init {
+            name,
+            path,
+            template,
+        } => {
+            state
+                .init_workflow(path.as_deref(), &name, template.as_deref())
+                .await?;
+            println!("initialized workflow: {}", name);
+        }
+        Commands::Run {
+            workflow_id,
+            stage,
+        } => {
+            let workflow = state
+                .get_workflow(&workflow_id)
+                .ok_or_else(|| anyhow::anyhow!("workflow not found: {}", workflow_id))?;
+            let plan = workflow.execution_plan();
+
+            if plan.is_complete() {
+                println!("workflow complete: {}", workflow_id);
+                return Ok(());
+            }
+
+            let stage_id = match &stage {
+                Some(s) => StageId::parse(s).map_err(|e| anyhow::anyhow!("{e}"))?,
+                None => {
+                    let next = plan
+                        .next_stage()
+                        .ok_or_else(|| anyhow::anyhow!("no pending stages"))?;
+                    next.clone()
+                }
+            };
+
+            let stage = workflow
+                .stage_by_id(&stage_id)
+                .ok_or_else(|| anyhow::anyhow!("stage not found: {}", stage_id.raw))?;
+
+            let _lock = acquire_lock(&stage.path).await?;
+            clean_output(&stage.path).await?;
+            println!("executing stage {} in {}", stage_id.raw, workflow_id);
+            println!("  input:  {}", stage.input_path.display());
+            println!("  output: {}", stage.output_path.display());
+
+            mark_complete(&stage.path, None).await?;
+            println!("stage complete: {}", stage_id.raw);
+        }
+        Commands::Status { workflow_id: None } => {
+            let workflows = state.list_workflows();
+            if workflows.is_empty() {
+                println!("no workflows");
+                return Ok(());
+            }
+            for (id, status) in workflows {
+                println!("{}\t{}", id, status);
+            }
+        }
+        Commands::Status {
+            workflow_id: Some(wid),
+        } => {
+            let workflow = state
+                .get_workflow(&wid)
+                .ok_or_else(|| anyhow::anyhow!("workflow not found: {}", wid))?;
+            let plan = workflow.execution_plan();
+            let complete = plan.is_complete();
+            let next = plan.next_stage().map(|s| s.raw.as_str()).unwrap_or("none");
+            println!("id:       {}", workflow.id);
+            println!("root:     {}", workflow.root.display());
+            println!("stages:   {}", workflow.stages.len());
+            println!("complete: {}", complete);
+            println!("next:     {}", next);
+            for stage in &workflow.stages {
+                let marker = if stage.is_complete {
+                    "done"
+                } else if stage.is_error {
+                    "error"
+                } else if stage.human_gate {
+                    "gate"
+                } else {
+                    "pending"
+                };
+                println!("  {} [{}]", stage.id.raw, marker);
+            }
+        }
+        Commands::List => {
+            let workflows = state.list_workflows();
+            if workflows.is_empty() {
+                println!("no workflows");
+                return Ok(());
+            }
+            for (id, status) in workflows {
+                println!("{}\t{}", id, status);
+            }
+        }
+        Commands::Approve {
+            workflow_id,
+            stage_id,
+        } => {
+            state
+                .mark_stage_complete(&workflow_id, &stage_id)
+                .await?;
+            println!("approved: {} / {}", workflow_id, stage_id);
+        }
+        Commands::Reject {
+            workflow_id,
+            stage_id,
+            feedback,
+        } => {
+            state
+                .mark_stage_error(&workflow_id, &stage_id, feedback.as_deref())
+                .await?;
+            println!("rejected: {} / {}", workflow_id, stage_id);
+        }
+    }
+
+    Ok(())
+}
