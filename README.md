@@ -1,8 +1,6 @@
 # zerochain
 
-Filesystem-native, content-addressed multi-agent workflow engine in Rust.
-
-Directories are stages. Files are state. Symlinks are data flow. No database, no message broker, no scheduler. Just directories and processes.
+Multi-agent orchestration via filesystem primitives. Directories are stages, files are state, symlinks are data flow. Or replace your agent framework with `mkdir`.
 
 This is an implementation of the agent architecture as files and folders proposed by [Jake Van Clief](https://www.youtube.com/shorts/tbVtt2-qUJo).
 
