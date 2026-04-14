@@ -88,7 +88,9 @@ my-workflow/
 
 ## Backlog.md Integration
 
-Tasks are defined in Backlog.md format with YAML frontmatter:
+[Backlog.md](https://backlog.md) is a task management format that lives in your repo as markdown files. zerochain parses Backlog.md tasks and turns them into executable workflow directory structures.
+
+Tasks are defined with YAML frontmatter:
 
 ```markdown
 ---
