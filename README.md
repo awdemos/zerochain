@@ -1,6 +1,6 @@
 # zerochain
 
-Multi-agent orchestration via filesystem primitives. Directories are stages, files are state, symlinks are data flow. Or replace your agent framework with `mkdir`.
+Multi-agent orchestration via filesystem primitives. Directories are stages, files are state, symlinks are data flow. Your agent framework starts with `mkdir`.
 
 This is an implementation of the agent architecture as files and folders proposed by [Jake Van Clief](https://www.youtube.com/shorts/tbVtt2-qUJo).
 
