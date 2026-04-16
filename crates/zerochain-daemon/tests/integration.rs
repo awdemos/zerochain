@@ -15,6 +15,10 @@ use zerochain_fs::atomic::{
     mark_complete, mark_error, mark_executing,
 };
 use zerochain_cas::CasStore;
+use zerochain_daemon::state::AppState;
+use zerochain_llm::{
+    CompleteResponse, LLM, LLMConfig, Message, ProviderId, Role,
+};
 
 fn make_task(id: &str, stages: Vec<&str>) -> Task {
     Task::new(
@@ -426,4 +430,132 @@ async fn full_workflow_lifecycle() {
         assert!(!stage.path.join(".lock").exists(), "stale .lock in {}", stage.id.raw);
         assert!(!stage.path.join(".executing").exists(), "stale .executing in {}", stage.id.raw);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: execute_stage_with_mock_llm
+// ---------------------------------------------------------------------------
+
+struct MockLLM {
+    response_content: String,
+}
+
+impl MockLLM {
+    fn new(content: impl Into<String>) -> Self {
+        Self { response_content: content.into() }
+    }
+}
+
+#[async_trait::async_trait]
+impl LLM for MockLLM {
+    fn provider_id(&self) -> &ProviderId {
+        static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
+        ID.get_or_init(|| ProviderId::OpenAI)
+    }
+
+    async fn complete(
+        &self,
+        _config: &LLMConfig,
+        messages: &[Message],
+        _tools: Option<&[zerochain_llm::Tool]>,
+    ) -> Result<CompleteResponse, zerochain_llm::LLMError> {
+        let user_input = messages
+            .iter()
+            .find(|m| matches!(m.role, Role::User))
+            .map(|m| match &m.content {
+                zerochain_llm::Content::Text(s) => s.clone(),
+            })
+            .unwrap_or_default();
+
+        let content = if user_input.contains("echo") {
+            user_input
+        } else if !user_input.is_empty() {
+            format!("MOCK RECEIVED: {}", user_input)
+        } else {
+            self.response_content.clone()
+        };
+
+        Ok(CompleteResponse::new(content))
+    }
+
+    fn supports_multimodal(&self) -> bool { false }
+    fn context_window(&self) -> usize { 128_000 }
+    async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
+}
+
+#[tokio::test]
+async fn execute_stage_writes_result_from_llm() {
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("llm-test", vec!["01_analyze", "02_synthesize"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage1 = wf.stage_by_name("analyze").expect("stage 1");
+
+    let state = AppState::new(tmp.path());
+    let mock = MockLLM::new("Mock analysis result from LLM.");
+    state
+        .execute_stage_with_llm("llm-test", stage1, &mock)
+        .await
+        .expect("execute stage");
+
+    let result_path = stage1.output_path.join("result.md");
+    assert!(result_path.exists(), "result.md should be written");
+    let content = tokio::fs::read_to_string(&result_path)
+        .await
+        .expect("read result.md");
+    assert_eq!(content, "Mock analysis result from LLM.");
+}
+
+#[tokio::test]
+async fn execute_stage_passes_context_to_llm() {
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("ctx-test", vec!["01_review"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("review").expect("stage 1");
+    tokio::fs::write(
+        &stage.context_path,
+        "---\nrole: code reviewer\n---\nReview the code for bugs.\n",
+    )
+    .await
+    .expect("write context");
+
+    tokio::fs::write(stage.input_path.join("previous.md"), "Here is the prior output.")
+        .await
+        .expect("write input");
+
+    let echo_mock = MockLLM::new(String::new());
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("ctx-test", stage, &echo_mock)
+        .await
+        .expect("execute stage");
+
+    let result_path = stage.output_path.join("result.md");
+    let content = tokio::fs::read_to_string(&result_path)
+        .await
+        .expect("read result");
+    assert!(content.contains("Here is the prior output."), "should pass input files to LLM");
+}
+
+#[tokio::test]
+async fn execute_stage_handles_missing_context_gracefully() {
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("no-ctx", vec!["01_step"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("step").expect("stage 1");
+    tokio::fs::remove_file(&stage.context_path).await.expect("remove context");
+
+    let mock = MockLLM::new("No context needed.");
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("no-ctx", stage, &mock)
+        .await
+        .expect("execute without context");
+
+    let content = tokio::fs::read_to_string(stage.output_path.join("result.md"))
+        .await
+        .expect("read result");
+    assert_eq!(content, "No context needed.");
 }
