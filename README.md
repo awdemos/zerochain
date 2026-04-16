@@ -12,8 +12,8 @@ Environment variables, no config files:
 |---|---|---|
 | `OPENAI_API_KEY` | — | Required for LLM calls |
 | `ZEROCHAIN_LLM_PROVIDER` | `openai` | Provider ID |
-| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL |
-| `ZEROCHAIN_MODEL` | `glm5-turbo` | Model name |
+| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL (include version path) |
+| `ZEROCHAIN_MODEL` | `glm-5-turbo` | Model name |
 | `ZEROCHAIN_WORKSPACE` | `./workspace` | Workspace root |
 
 ## Agent Self-Install
@@ -169,7 +169,7 @@ Environment variables, no config files:
 |---|---|---|
 | `OPENAI_API_KEY` | — | Required for LLM calls |
 | `ZEROCHAIN_LLM_PROVIDER` | `openai` | Provider ID |
-| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL |
+| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL (include version path) |
 | `ZEROCHAIN_MODEL` | `gpt-4o` | Model name |
 | `ZEROCHAIN_WORKSPACE` | `./workspace` | Workspace root |
 
