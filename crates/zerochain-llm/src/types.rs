@@ -28,6 +28,15 @@ pub struct Message {
     pub content: Content,
 }
 
+impl Message {
+    pub fn new(role: Role, content: impl Into<Content>) -> Self {
+        Self {
+            role,
+            content: content.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {

@@ -104,6 +104,14 @@ async fn main() -> Result<()> {
             println!("  input:  {}", stage.input_path.display());
             println!("  output: {}", stage.output_path.display());
 
+            if let Err(e) = state.execute_stage(&workflow_id, stage).await {
+                let error_marker = stage.path.join(".error");
+                tokio::fs::write(&error_marker, format!("{e}"))
+                    .await
+                    .map_err(|io_err| anyhow::anyhow!("failed to write error marker: {io_err}"))?;
+                anyhow::bail!("stage execution failed: {e}");
+            }
+
             mark_complete(&stage.path, None).await?;
             println!("stage complete: {}", stage_id.raw);
         }
