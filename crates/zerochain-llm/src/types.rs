@@ -137,6 +137,18 @@ pub struct LLMConfig {
     pub context_window: usize,
 }
 
+impl CompleteResponse {
+    pub fn new(content: impl Into<Option<String>>) -> Self {
+        Self {
+            content: content.into(),
+            tool_calls: vec![],
+            usage: Usage::default(),
+            finish_reason: FinishReason::Stop,
+            model: String::new(),
+        }
+    }
+}
+
 impl LLMConfig {
     /// Create an LLMConfig with sensible defaults for the given provider/model.
     pub fn new(provider: ProviderId, model: impl Into<String>) -> Self {
