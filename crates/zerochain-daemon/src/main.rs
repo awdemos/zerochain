@@ -1,8 +1,6 @@
-mod state;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use state::AppState;
+use zerochain_daemon::state::AppState;
 use std::path::PathBuf;
 use zerochain_fs::{acquire_lock, clean_output, mark_complete};
 use zerochain_core::stage::StageId;

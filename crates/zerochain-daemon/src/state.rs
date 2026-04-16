@@ -7,7 +7,7 @@ use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
 use zerochain_llm::{
-    LLMConfig, LLMFactory, Message, ProviderId, Role,
+    LLM, LLMConfig, LLMFactory, Message, ProviderId, Role,
 };
 
 pub struct AppState {
@@ -153,6 +153,17 @@ impl AppState {
         workflow_id: &str,
         stage: &Stage,
     ) -> anyhow::Result<()> {
+        let llm = self.create_llm()?;
+        self.execute_stage_with_llm(workflow_id, stage, llm.as_ref()).await
+    }
+
+    /// Execute a stage using an injected LLM (for testing).
+    pub async fn execute_stage_with_llm(
+        &self,
+        workflow_id: &str,
+        stage: &Stage,
+        llm: &dyn LLM,
+    ) -> anyhow::Result<()> {
         let ctx = if stage.context_path.exists() {
             Some(StageContext::from_file(&stage.context_path).await?)
         } else {
@@ -161,29 +172,8 @@ impl AppState {
 
         let input_content = self.read_input_files(&stage.input_path).await?;
 
-        let provider_name =
-            std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
-        let base_url =
-            std::env::var("ZEROCHAIN_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".into());
-        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-            anyhow::anyhow!("OPENAI_API_KEY environment variable is required")
-        })?;
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
-
-        let provider = match provider_name.as_str() {
-            "openai" => ProviderId::OpenAI,
-            _ => ProviderId::OpenAICompatible {
-                base_url,
-                api_key_env: "OPENAI_API_KEY".into(),
-            },
-        };
-
-        let config = LLMConfig::new(provider, &model);
-
-        std::env::set_var("OPENAI_API_KEY", &api_key);
-        let llm = LLMFactory::create(&config)
-            .map_err(|e| anyhow::anyhow!("failed to create LLM provider: {e}"))?;
+        let config = LLMConfig::new(ProviderId::OpenAI, &model);
 
         let mut messages = Vec::new();
 
@@ -233,6 +223,31 @@ impl AppState {
         );
 
         Ok(())
+    }
+
+    fn create_llm(&self) -> anyhow::Result<Box<dyn LLM>> {
+        let provider_name =
+            std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
+        let base_url =
+            std::env::var("ZEROCHAIN_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".into());
+        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+            anyhow::anyhow!("OPENAI_API_KEY environment variable is required")
+        })?;
+        let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
+
+        let provider = match provider_name.as_str() {
+            "openai" => ProviderId::OpenAI,
+            _ => ProviderId::OpenAICompatible {
+                base_url,
+                api_key_env: "OPENAI_API_KEY".into(),
+            },
+        };
+
+        let config = LLMConfig::new(provider, &model);
+        std::env::set_var("OPENAI_API_KEY", &api_key);
+        LLMFactory::create(&config)
+            .map_err(|e| anyhow::anyhow!("failed to create LLM provider: {e}"))
     }
 
     async fn read_input_files(&self, input_path: &Path) -> anyhow::Result<String> {
