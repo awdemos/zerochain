@@ -1,10 +1,61 @@
 # zerochain
 
-Multi-agent orchestration via filesystem primitives. Directories are stages, files are state, symlinks are data flow. Your agent framework starts with `mkdir`.
+This is a multi-agent orchestration system that works with using text files as agents and workflows. Directories are stages, files are state, symlinks are data flow. Your agent framework starts with `mkdir`.
 
-This is an implementation of the agent architecture as files and folders proposed by [Jake Van Clief](https://www.youtube.com/shorts/tbVtt2-qUJo).
+This is an implementation of the agent architecture as files and folders proposed by Jake Van Clief[in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
+
+## Configuration
+
+Environment variables, no config files:
+
+| Variable | Default | Description |
+|---|---|---|
+| `OPENAI_API_KEY` | — | Required for LLM calls |
+| `ZEROCHAIN_LLM_PROVIDER` | `openai` | Provider ID |
+| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL |
+| `ZEROCHAIN_MODEL` | `glm5-turbo` | Model name |
+| `ZEROCHAIN_WORKSPACE` | `./workspace` | Workspace root |
+
+## Agent Self-Install
+
+Copy this block and run it to build zerochain from source:
+
+```sh
+# zerochain — filesystem-native multi-agent workflow engine
+# Requires: Rust nightly (rustup default nightly)
+set -euo pipefail
+REPO="https://github.com/awdemos/zerochain.git"
+DEST="${ZEROCHAIN_INSTALL_DIR:-$HOME/.local/share/zerochain}"
+BIN="${ZEROCHAIN_BIN_DIR:-$HOME/.cargo/bin}"
+echo "==> Cloning zerochain..."
+git clone --depth 1 "$REPO" "$DEST/src"
+cd "$DEST/src"
+echo "==> Building (nightly required)..."
+cargo build --release --workspace
+echo "==> Installing binary..."
+cp target/release/zerochain "$BIN/zerochain"
+echo "==> Verifying..."
+zerochain --help
+echo "==> Done. Run 'zerochain init --help' to get started."
+```
+
+## Architecture
+
+**Content-addressed storage.** All artifacts are stored by Blake3 hash. No filenames matter — content identity is the hash.
+
+**Copy-on-write snapshots.** Each stage execution gets a CoW snapshot of the previous stage's output. `DirectoryCow` does recursive copies today; Btrfs subvolume snapshots are planned for zero-copy.
+
+**Deterministic LLM config.** The `LLMConfig::deterministic()` method derives a Blake3 seed from the content CID, enabling reproducible LLM execution for the same inputs.
+
+**Optional Jujutsu.** If `jj` is installed, every stage completion creates a commit. If not installed, everything works without it. No hard dependency but the future of zerochain images will be using these.
+
+**No unsafe code.** All I/O is async (tokio). Every fallible operation returns `Result`. Atomic writes use temp file + rename. Advisory file locks protect concurrent access.
 
 ## Build
+
+There are two versions: a bash script and a Rust version.
+The Rust version is intended to be the production workload
+version but the shell version is totally viable.
 
 Requires Rust nightly (1.90+).
 
@@ -163,7 +214,6 @@ echo "==> Done. Run 'zerochain init --help' to get started."
 - [ ] Btrfs copy-on-write snapshots (zero-copy stage isolation)
 - [ ] OpenCode TypeScript plugin
 - [ ] Dagger CI module
-- [ ] Talos Linux + NVIDIA DGX/H200 deployment manifests
 - [ ] Template registry for common workflow patterns
 
 ## License
