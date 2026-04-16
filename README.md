@@ -122,16 +122,6 @@ Environment variables, no config files:
 | `ZEROCHAIN_MODEL` | `gpt-4o` | Model name |
 | `ZEROCHAIN_WORKSPACE` | `./workspace` | Workspace root |
 
-## Systemd
-
-User-level service unit for running the daemon:
-
-```sh
-dist/systemd/install.sh
-```
-
-This copies the unit file, creates `~/.config/zerochain/`, and enables the service. Logs go to `journalctl --user -u zerochain -f`.
-
 ## Agent Self-Install
 
 Copy this block and run it to build zerochain from source:
