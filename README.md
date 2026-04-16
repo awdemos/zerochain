@@ -2,7 +2,7 @@
 
 This is a multi-agent orchestration system that works with using text files as agents and workflows. Directories are stages, files are state, symlinks are data flow. Your agent framework starts with `mkdir`.
 
-This is an implementation of the agent architecture as files and folders proposed by Jake Van Clief[in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
+This is an implementation of the agent architecture as files and folders proposed by Jake Van Clief [in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
 
 ## Configuration
 
