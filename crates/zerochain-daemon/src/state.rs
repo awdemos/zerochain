@@ -193,6 +193,8 @@ impl AppState {
 
         if !input_content.is_empty() {
             messages.push(Message::new(Role::User, input_content));
+        } else if !messages.is_empty() {
+            messages.push(Message::new(Role::User, "Execute the task described above."));
         }
 
         tracing::info!(
@@ -228,20 +230,29 @@ impl AppState {
     fn create_llm(&self) -> anyhow::Result<Box<dyn LLM>> {
         let provider_name =
             std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
-        let base_url =
-            std::env::var("ZEROCHAIN_BASE_URL")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".into());
+        let custom_base_url =
+            std::env::var("ZEROCHAIN_BASE_URL").ok();
+        let base_url = custom_base_url.as_deref()
+            .unwrap_or("https://api.openai.com/v1");
+
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             anyhow::anyhow!("OPENAI_API_KEY environment variable is required")
         })?;
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
 
-        let provider = match provider_name.as_str() {
-            "openai" => ProviderId::OpenAI,
-            _ => ProviderId::OpenAICompatible {
-                base_url,
+        let provider = if custom_base_url.is_some() {
+            ProviderId::OpenAICompatible {
+                base_url: base_url.to_owned(),
                 api_key_env: "OPENAI_API_KEY".into(),
-            },
+            }
+        } else {
+            match provider_name.as_str() {
+                "openai" => ProviderId::OpenAI,
+                _ => ProviderId::OpenAICompatible {
+                    base_url: base_url.to_owned(),
+                    api_key_env: "OPENAI_API_KEY".into(),
+                },
+            }
         };
 
         let config = LLMConfig::new(provider, &model);

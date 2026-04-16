@@ -491,6 +491,10 @@ async fn execute_stage_writes_result_from_llm() {
 
     let stage1 = wf.stage_by_name("analyze").expect("stage 1");
 
+    tokio::fs::write(stage1.input_path.join("data.md"), "Mock analysis result from LLM.")
+        .await
+        .expect("write input");
+
     let state = AppState::new(tmp.path());
     let mock = MockLLM::new("Mock analysis result from LLM.");
     state
@@ -503,7 +507,7 @@ async fn execute_stage_writes_result_from_llm() {
     let content = tokio::fs::read_to_string(&result_path)
         .await
         .expect("read result.md");
-    assert_eq!(content, "Mock analysis result from LLM.");
+    assert_eq!(content, "MOCK RECEIVED: --- data.md ---\nMock analysis result from LLM.");
 }
 
 #[tokio::test]
