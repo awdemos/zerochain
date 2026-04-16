@@ -19,7 +19,7 @@ impl LLMFactory {
                     LLMError::Config("OPENAI_API_KEY environment variable not set".into())
                 })?;
                 Ok(Box::new(OpenAICompatibleProvider::new(
-                    "https://api.openai.com".into(),
+                    "https://api.openai.com/v1".into(),
                     api_key,
                     config.model.clone(),
                 )))
@@ -85,7 +85,7 @@ mod tests {
         std::env::remove_var("MY_TEST_KEY");
         let config = LLMConfig::new(
             ProviderId::OpenAICompatible {
-                base_url: "http://localhost:11434".into(),
+                base_url: "http://localhost:11434/v1".into(),
                 api_key_env: "MY_TEST_KEY".into(),
             },
             "llama3",

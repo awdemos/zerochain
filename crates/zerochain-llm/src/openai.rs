@@ -192,7 +192,7 @@ impl LLM for OpenAICompatibleProvider {
         messages: &[Message],
         tools: Option<&[Tool]>,
     ) -> Result<CompleteResponse, LLMError> {
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
         let chat_messages: Vec<ChatMessage> = messages
             .iter()
@@ -304,7 +304,7 @@ impl LLM for OpenAICompatibleProvider {
     }
 
     async fn health_check(&self) -> Result<(), LLMError> {
-        let url = format!("{}/v1/models", self.base_url.trim_end_matches('/'));
+        let url = format!("{}/models", self.base_url.trim_end_matches('/'));
         let resp = self
             .client
             .get(&url)

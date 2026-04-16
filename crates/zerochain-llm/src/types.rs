@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn provider_id_serde_roundtrip() {
         let p = ProviderId::OpenAICompatible {
-            base_url: "http://localhost:11434".into(),
+            base_url: "http://localhost:11434/v1".into(),
             api_key_env: "OLLAMA_KEY".into(),
         };
         let json = serde_json::to_string(&p).unwrap();
