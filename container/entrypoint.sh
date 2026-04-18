@@ -11,5 +11,11 @@ if ! [ -d "$workspace/.jj" ]; then
     jj config set --repo user.email "zerochain@daemon" 2>/dev/null || true
 fi
 
+if command -v btrfs &>/dev/null && stat -f --format %T "$workspace" 2>/dev/null | grep -q btrfs; then
+    echo "==> CoW backend: btrfs (zero-copy snapshots)"
+else
+    echo "==> CoW backend: directory (file-level copy)"
+fi
+
 echo "==> Starting zerochaind on ${ZEROCHAIN_LISTEN:-0.0.0.0:8080}"
 exec /usr/local/bin/zerochaind

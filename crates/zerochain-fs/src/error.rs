@@ -25,6 +25,12 @@ pub enum FsError {
 
     #[error("lock already held at {path} by process {pid}")]
     LockHeld { path: PathBuf, pid: u32 },
+
+    #[error("btrfs command '{command}' failed: {reason}")]
+    BtrfsCommandFailed { command: String, reason: String },
+
+    #[error("btrfs subvolume error at {path}: {reason}")]
+    SubvolumeError { path: PathBuf, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, FsError>;

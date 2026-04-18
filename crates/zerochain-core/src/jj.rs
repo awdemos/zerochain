@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
@@ -144,6 +144,162 @@ pub async fn is_jj_installed() -> bool {
         .output()
         .await
         .is_ok()
+}
+
+pub struct JjWorkspace {
+    pub path: PathBuf,
+}
+
+impl JjWorkspace {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub async fn export_bundle(&self, output_path: &Path) -> Result<()> {
+        let output = tokio::process::Command::new("git")
+            .args([
+                "bundle",
+                "create",
+                &output_path.to_string_lossy(),
+                "--all",
+            ])
+            .current_dir(&self.path)
+            .output()
+            .await
+            .map_err(|e| Error::JjError {
+                message: format!("git bundle create failed: {e}"),
+            })?;
+
+        if !output.status.success() {
+            return Err(Error::JjError {
+                message: format!(
+                    "git bundle create failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn add_remote(&self, name: &str, url: &str) -> Result<()> {
+        let output = tokio::process::Command::new("git")
+            .args(["remote", "add", name, url])
+            .current_dir(&self.path)
+            .output()
+            .await
+            .map_err(|e| Error::JjError {
+                message: format!("git remote add failed: {e}"),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.contains("already exists") {
+                return Err(Error::JjError {
+                    message: format!("git remote add failed: {stderr}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn push_remote(&self, remote_name: &str) -> Result<()> {
+        let output = tokio::process::Command::new("jj")
+            .args(["git", "push", "-r", "@", "--remote", remote_name])
+            .current_dir(&self.path)
+            .output()
+            .await
+            .map_err(|e| Error::JjError {
+                message: format!("jj git push failed: {e}"),
+            })?;
+
+        if !output.status.success() {
+            return Err(Error::JjError {
+                message: format!(
+                    "jj git push failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub async fn workspace_size(&self) -> Result<u64> {
+        let mut total: u64 = 0;
+        self.dir_size(&self.path, &mut total).await?;
+        Ok(total)
+    }
+
+    pub async fn export_archive(&self, output_path: &Path) -> Result<()> {
+        let parent = output_path.parent().ok_or_else(|| Error::JjError {
+            message: "output path has no parent directory".into(),
+        })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| Error::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+
+        let file_name = output_path
+            .file_name()
+            .ok_or_else(|| Error::JjError {
+                message: "output path has no file name".into(),
+            })?
+            .to_string_lossy()
+            .to_string();
+
+        let output = tokio::process::Command::new("tar")
+            .args([
+                "cf",
+                &file_name,
+                "-C",
+                &self.path.to_string_lossy(),
+                ".",
+            ])
+            .current_dir(parent)
+            .output()
+            .await
+            .map_err(|e| Error::JjError {
+                message: format!("tar create failed: {e}"),
+            })?;
+
+        if !output.status.success() {
+            return Err(Error::JjError {
+                message: format!(
+                    "tar create failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn dir_size<'a>(
+        &'a self,
+        dir: &'a Path,
+        total: &'a mut u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| Error::Io {
+                path: dir.to_path_buf(),
+                source: e,
+            })?;
+
+            while let Some(entry) = entries.next_entry().await.map_err(|e| Error::Io {
+                path: dir.to_path_buf(),
+                source: e,
+            })? {
+                let meta = entry.metadata().await.map_err(|e| Error::Io {
+                    path: entry.path(),
+                    source: e,
+                })?;
+                if meta.is_dir() {
+                    self.dir_size(&entry.path(), total).await?;
+                } else {
+                    *total += meta.len();
+                }
+            }
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]

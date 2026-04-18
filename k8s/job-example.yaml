@@ -1,0 +1,45 @@
+# Example: run a single workflow as a Kubernetes Job.
+# This creates a temporary pod that runs the workflow end-to-end
+# and then exits.  Useful for batch AI pipelines.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zerochain-batch-example
+  namespace: zerochain
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: zerochain
+          image: zerochaind:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              # Initialize workflow
+              curl -sf -X POST http://zerochaind:8080/v1/workflows \
+                -H "Content-Type: application/json" \
+                -d '{"name":"batch-task","template":"00_spec,01_implement,02_verify"}'
+              
+              # Run all stages sequentially
+              curl -sf -X POST http://zerochaind:8080/v1/workflows/batch-task/run
+              curl -sf -X POST http://zerochaind:8080/v1/workflows/batch-task/run
+              curl -sf -X POST http://zerochaind:8080/v1/workflows/batch-task/run
+              
+              # Fetch output
+              curl -sf http://zerochaind:8080/v1/workflows/batch-task/output/02_verify
+          envFrom:
+            - configMapRef:
+                name: zerochain-config
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: OPENAI_API_KEY
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"

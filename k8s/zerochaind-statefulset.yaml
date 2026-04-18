@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: zerochaind
+  namespace: zerochain
+spec:
+  serviceName: zerochaind
+  replicas: 3
+  selector:
+    matchLabels:
+      app: zerochaind
+  template:
+    metadata:
+      labels:
+        app: zerochaind
+    spec:
+      containers:
+        - name: zerochaind
+          image: zerochaind:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: zerochain-config
+          env:
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: OPENAI_API_KEY
+            - name: ZEROCHAIN_CAS_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: ZEROCHAIN_CAS_S3_BUCKET
+            - name: ZEROCHAIN_CAS_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: ZEROCHAIN_CAS_S3_ACCESS_KEY
+            - name: ZEROCHAIN_CAS_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: ZEROCHAIN_CAS_S3_SECRET_KEY
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          livenessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi

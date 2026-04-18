@@ -1,0 +1,114 @@
+use std::any::Any;
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use tokio::fs;
+use tokio::io::AsyncRead;
+
+use crate::cid::Cid;
+use crate::error::{CasError, Result};
+
+/// Abstraction over content-addressed storage backends.
+#[async_trait]
+pub trait StorageBackend: Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+
+    /// Store bytes and return their content identifier.
+    async fn put(&self, data: &[u8]) -> Result<Cid>;
+
+    /// Retrieve content by its CID.
+    async fn get(&self, cid: &Cid) -> Result<Vec<u8>>;
+
+    /// Return a streaming reader for the given CID.
+    async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>>;
+
+    /// Check whether content exists in the store.
+    async fn exists(&self, cid: &Cid) -> bool;
+}
+
+/// Filesystem-backed content-addressed storage.
+///
+/// Files are stored using a two-level layout: `{base_dir}/ab/abcdef...`
+/// where `ab` is the first two hex characters of the Blake3 hash.
+/// Writes are atomic (temp file + rename) to prevent partial reads.
+#[derive(Clone, Debug)]
+pub struct LocalBackend {
+    base_dir: PathBuf,
+}
+
+impl LocalBackend {
+    /// Create a new local backend rooted at `base_dir`.
+    pub async fn new(base_dir: PathBuf) -> Result<Self> {
+        fs::create_dir_all(&base_dir)
+            .await
+            .map_err(|e| CasError::StoreDirectory {
+                path: base_dir.clone(),
+                source: e,
+            })?;
+        Ok(Self { base_dir })
+    }
+
+    /// Full filesystem path for a given CID.
+    pub fn path_for(&self, cid: &Cid) -> PathBuf {
+        self.base_dir.join(cid.relative_path())
+    }
+
+    /// Return the base directory.
+    pub fn base_dir(&self) -> &Path {
+        &self.base_dir
+    }
+}
+
+#[async_trait]
+impl StorageBackend for LocalBackend {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    async fn put(&self, data: &[u8]) -> Result<Cid> {
+        let cid = Cid::from_bytes(data);
+        let path = self.path_for(&cid);
+
+        // Fast path: already stored
+        if path.exists() {
+            return Ok(cid);
+        }
+
+        // Atomic write: temp file in same directory, then rename
+        let parent = path
+            .parent()
+            .expect("CID path always has a parent directory");
+        fs::create_dir_all(parent).await?;
+
+        let temp_path = path.with_extension("tmp");
+        fs::write(&temp_path, data).await?;
+        fs::rename(&temp_path, &path).await?;
+
+        tracing::debug!(cid = %cid, "stored content");
+        Ok(cid)
+    }
+
+    async fn get(&self, cid: &Cid) -> Result<Vec<u8>> {
+        let path = self.path_for(cid);
+        match fs::read(&path).await {
+            Ok(data) => Ok(data),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(CasError::NotFound(cid.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        let path = self.path_for(cid);
+        if !path.exists() {
+            return Err(CasError::NotFound(cid.to_string()));
+        }
+        let file = fs::File::open(&path).await?;
+        Ok(Box::new(tokio::io::BufReader::new(file)))
+    }
+
+    async fn exists(&self, cid: &Cid) -> bool {
+        self.path_for(cid).exists()
+    }
+}
