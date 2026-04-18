@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 
+use zerochain_broker::memory::MemoryBroker;
+use zerochain_cas::CasStore;
 use zerochain_server::routes;
 use zerochain_server::state;
 
@@ -17,6 +19,12 @@ struct Cli {
 
     #[arg(long, env = "ZEROCHAIN_WORKSPACE", default_value = "/workspace")]
     workspace: PathBuf,
+
+    #[arg(long, env = "ZEROCHAIN_CAS_DIR", default_value = "/workspace/.zerochain/cas")]
+    cas_dir: PathBuf,
+
+    #[arg(long, env = "ZEROCHAIN_BROKER_ENABLED")]
+    broker_enabled: bool,
 }
 
 #[tokio::main]
@@ -33,10 +41,24 @@ async fn main() -> Result<()> {
     tracing::info!(
         listen = %cli.listen,
         workspace = %cli.workspace.display(),
+        cas_dir = %cli.cas_dir.display(),
+        broker_enabled = cli.broker_enabled,
         "starting zerochaind"
     );
 
-    let server_state = state::ServerState::new(&cli.workspace);
+    let mut server_state = state::ServerState::new(&cli.workspace);
+
+    // Initialize CAS backend
+    let cas = CasStore::new(cli.cas_dir).await?;
+    server_state = server_state.with_cas(cas);
+
+    // Initialize broker if enabled
+    if cli.broker_enabled {
+        let broker = MemoryBroker::new();
+        server_state = server_state.with_broker(broker);
+        tracing::info!("broker enabled (memory backend)");
+    }
+
     server_state.refresh().await?;
 
     let app = routes::routes(server_state);

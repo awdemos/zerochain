@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/zerochain-broker",
     "crates/zerochain-cas",
     "crates/zerochain-core",
     "crates/zerochain-fs",
