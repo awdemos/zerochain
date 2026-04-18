@@ -2,6 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use zerochain_broker::memory::MemoryBroker;
+use zerochain_cas::CasStore;
 use zerochain_daemon::state::AppState;
 
 /// Shared server state, Clone-able for axum's State extractor.
@@ -12,6 +14,8 @@ use zerochain_daemon::state::AppState;
 pub struct ServerState {
     pub inner: Arc<Mutex<AppState>>,
     pub workspace: PathBuf,
+    pub cas: Option<CasStore>,
+    pub broker: Option<MemoryBroker>,
 }
 
 impl ServerState {
@@ -20,7 +24,19 @@ impl ServerState {
         Self {
             inner: Arc::new(Mutex::new(app_state)),
             workspace: workspace.to_path_buf(),
+            cas: None,
+            broker: None,
         }
+    }
+
+    pub fn with_cas(mut self, cas: CasStore) -> Self {
+        self.cas = Some(cas);
+        self
+    }
+
+    pub fn with_broker(mut self, broker: MemoryBroker) -> Self {
+        self.broker = Some(broker);
+        self
     }
 
     pub async fn refresh(&self) -> anyhow::Result<()> {
