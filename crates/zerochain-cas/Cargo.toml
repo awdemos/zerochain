@@ -12,6 +12,14 @@ tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+
+# Optional S3 backend
+rust-s3 = { version = "0.35", optional = true }
+
+[features]
+default = []
+s3 = ["dep:rust-s3"]
 
 [dev-dependencies]
 tempfile = "3.0"
