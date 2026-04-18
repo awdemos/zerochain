@@ -1,7 +1,7 @@
 # zerochain
 
 This is a Multi-agent orchestration tool using text files as Agents and Workflows using the filesystem as a storage system. Everything lives in folders and files. Directories are stages, files are state, symlinks are data flow. It is designed to be as simple
-as digitally possibble and can start the agent framework with `mkdir`.
+as digitally possible. Build AI agents with `mkdir`.
 
 An implementation of the agent architecture as files and folders proposed by Jake Van Clief [in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
 
