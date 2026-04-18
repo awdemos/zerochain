@@ -1,0 +1,15 @@
+name = "research"
+description = "Investigate a question and synthesize findings"
+
+[stages."00_question"]
+role = "research analyst"
+body = "Define the research question precisely. Break it down into sub-questions and identify what information is needed. Output the analysis plan to result.md."
+
+[stages."01_research"]
+role = "research analyst"
+body = "Investigate each sub-question using the provided input. Gather evidence, note sources, and identify patterns. Output raw findings to result.md."
+
+[stages."02_synthesize"]
+role = "research analyst"
+human_gate = true
+body = "Synthesize the research findings into a coherent answer to the original question. Highlight key insights and remaining uncertainties. Output to result.md."

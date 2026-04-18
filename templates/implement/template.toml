@@ -1,0 +1,20 @@
+name = "implement"
+description = "Design and implement a feature with verification"
+
+[stages."00_spec"]
+role = "product engineer"
+body = "Analyze the requirements in the input. Define clear acceptance criteria, edge cases, and constraints. Output the specification to result.md."
+
+[stages."01_design"]
+role = "software architect"
+human_gate = true
+body = "Design the solution based on the specification. Define the architecture, key data structures, interfaces, and error handling strategy. Output the design document to result.md."
+
+[stages."02_implement"]
+role = "senior developer"
+body = "Implement the solution following the design document. Write clean, well-tested code. Follow existing codebase patterns and conventions. Output the implementation to result.md."
+
+[stages."03_verify"]
+role = "QA engineer"
+human_gate = true
+body = "Verify the implementation against the acceptance criteria. Run tests, check edge cases, and validate error handling. Output the verification report to result.md."

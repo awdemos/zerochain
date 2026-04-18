@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct StageDef {
@@ -37,6 +38,22 @@ pub struct TemplateRegistry {
     templates: HashMap<String, Template>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct TemplateToml {
+    name: String,
+    description: String,
+    stages: HashMap<String, StageToml>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StageToml {
+    role: String,
+    #[serde(default)]
+    human_gate: bool,
+    #[serde(default)]
+    body: String,
+}
+
 impl TemplateRegistry {
     pub fn new() -> Self {
         let mut registry = Self::default();
@@ -52,6 +69,49 @@ impl TemplateRegistry {
         let mut list: Vec<_> = self.templates.values().collect();
         list.sort_by(|a, b| a.name.cmp(&b.name));
         list
+    }
+
+    pub fn load_from_dir(&mut self, dir: &Path) -> Result<(), LoadFromDirError> {
+        if !dir.is_dir() {
+            return Err(LoadFromDirError::NotADirectory(dir.to_path_buf()));
+        }
+        let entries = std::fs::read_dir(dir).map_err(LoadFromDirError::Io)?;
+        for entry in entries {
+            let entry = entry.map_err(LoadFromDirError::Io)?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let manifest = path.join("template.toml");
+            if !manifest.exists() {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&manifest).map_err(LoadFromDirError::Io)?;
+            let parsed: TemplateToml =
+                toml::from_str(&raw).map_err(|e| LoadFromDirError::Parse {
+                    path: manifest.clone(),
+                    source: e,
+                })?;
+
+            let mut stages: Vec<StageDef> = parsed
+                .stages
+                .into_iter()
+                .map(|(name, s)| StageDef {
+                    name,
+                    role: s.role,
+                    body: s.body,
+                    human_gate: s.human_gate,
+                })
+                .collect();
+            stages.sort_by(|a, b| a.name.cmp(&b.name));
+
+            self.register(Template {
+                name: parsed.name,
+                description: parsed.description,
+                stages,
+            });
+        }
+        Ok(())
     }
 
     fn register(&mut self, template: Template) {
@@ -166,6 +226,20 @@ impl TemplateRegistry {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum LoadFromDirError {
+    #[error("not a directory: {}", .0.display())]
+    NotADirectory(std::path::PathBuf),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parse error in {}: {source}", .path.display())]
+    Parse {
+        path: std::path::PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +333,134 @@ mod tests {
         };
         let md = stage.to_context_md();
         assert!(md.ends_with("Test things.\n"));
+    }
+
+    #[test]
+    fn load_from_dir_reads_template_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("custom-task");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            r#"
+name = "custom-task"
+description = "A custom task template"
+
+[stages."00_analyze"]
+role = "analyst"
+body = "Analyze input."
+
+[stages."01_execute"]
+role = "executor"
+body = "Execute the plan."
+human_gate = true
+"#,
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_dir(dir.path()).unwrap();
+
+        let tpl = reg.get("custom-task").expect("custom-task should be loaded");
+        assert_eq!(tpl.description, "A custom task template");
+        assert_eq!(tpl.stages.len(), 2);
+        assert_eq!(tpl.stages[0].name, "00_analyze");
+        assert!(!tpl.stages[0].human_gate);
+        assert_eq!(tpl.stages[1].name, "01_execute");
+        assert!(tpl.stages[1].human_gate);
+    }
+
+    #[test]
+    fn load_from_dir_skips_dirs_without_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty_dir = dir.path().join("no-manifest");
+        std::fs::create_dir_all(&empty_dir).unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_dir(dir.path()).unwrap();
+        assert!(reg.get("no-manifest").is_none());
+    }
+
+    #[test]
+    fn load_from_dir_overrides_builtin() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("code-review");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            r#"
+name = "code-review"
+description = "Overridden code review"
+
+[stages."00_check"]
+role = "checker"
+body = "Check things."
+"#,
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_dir(dir.path()).unwrap();
+
+        let tpl = reg.get("code-review").unwrap();
+        assert_eq!(tpl.description, "Overridden code review");
+        assert_eq!(tpl.stages.len(), 1);
+    }
+
+    #[test]
+    fn load_from_dir_rejects_nonexistent() {
+        let mut reg = TemplateRegistry::new();
+        let result = reg.load_from_dir(Path::new("/no/such/path"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_from_dir_reports_bad_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("bad");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::write(tpl_dir.join("template.toml"), "not valid toml {{{").unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        let result = reg.load_from_dir(dir.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("parse error"), "expected parse error, got: {err}");
+    }
+
+    #[test]
+    fn load_from_dir_stages_sorted_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("sorted");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            r#"
+name = "sorted"
+description = "test ordering"
+
+[stages."02_second"]
+role = "worker"
+body = "Second step."
+
+[stages."00_first"]
+role = "worker"
+body = "First step."
+
+[stages."01_middle"]
+role = "worker"
+body = "Middle step."
+"#,
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_dir(dir.path()).unwrap();
+
+        let tpl = reg.get("sorted").unwrap();
+        assert_eq!(
+            tpl.stage_names(),
+            vec!["00_first", "01_middle", "02_second"]
+        );
     }
 }
