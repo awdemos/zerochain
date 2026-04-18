@@ -1,0 +1,5 @@
+{
+  "name": "zerochain",
+  "sdk": "go",
+  "source": ".dagger"
+}
