@@ -1,3 +1,17 @@
 target/
 .git/
 .jj/
+.claude/
+.dagger/
+.desloppify/
+plugins/
+*.png
+*.tar
+*.tar.gz
+zerochain.sh
+LICENSE
+README.md
+scorecard.png
+.dockerignore
+.gitignore
+dagger.json

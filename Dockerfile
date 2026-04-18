@@ -14,12 +14,29 @@ RUN apk add --no-cache \
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /src
-COPY . .
 
-RUN cargo build --release --bin zerochaind
+# Cache dependencies by building a dummy crate first
+COPY Cargo.toml Cargo.lock ./
+COPY crates/zerochain-cas/Cargo.toml crates/zerochain-cas/Cargo.toml
+COPY crates/zerochain-fs/Cargo.toml crates/zerochain-fs/Cargo.toml
+COPY crates/zerochain-llm/Cargo.toml crates/zerochain-llm/Cargo.toml
+COPY crates/zerochain-core/Cargo.toml crates/zerochain-core/Cargo.toml
+COPY crates/zerochain-daemon/Cargo.toml crates/zerochain-daemon/Cargo.toml
+COPY crates/zerochain-server/Cargo.toml crates/zerochain-server/Cargo.toml
+RUN mkdir -p crates/zerochain-cas/src crates/zerochain-fs/src crates/zerochain-llm/src \
+    && mkdir -p crates/zerochain-core/src crates/zerochain-daemon/src crates/zerochain-server/src \
+    && echo "pub fn main(){}" > crates/zerochain-daemon/src/main.rs \
+    && touch crates/zerochain-cas/src/lib.rs crates/zerochain-fs/src/lib.rs \
+    && touch crates/zerochain-llm/src/lib.rs crates/zerochain-core/src/lib.rs \
+    && touch crates/zerochain-server/src/lib.rs \
+    && cargo build --release --bin zerochaind 2>/dev/null || true
+
+# Now build with real source (dependency layer is cached)
+COPY . .
+RUN touch crates/*/src/*.rs && cargo build --release --bin zerochaind
 
 # -- Runtime stage ---------------------------------------------------------
-FROM ghcr.io/wolfi-dev/sdk:latest AS runtime
+FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
 
 RUN apk add --no-cache \
     bash \
