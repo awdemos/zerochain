@@ -43,6 +43,9 @@ pub enum Error {
 
     #[error("task parse error in {path}: {reason}")]
     TaskParse { path: PathBuf, reason: String },
+
+    #[error("Lua error: {message}")]
+    Lua { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -168,6 +168,83 @@ impl Workflow {
         self.stages.iter().find(|s| s.id.name == name)
     }
 
+    pub fn stage_index(&self, raw: &str) -> Option<usize> {
+        self.stages.iter().position(|s| s.id.raw == raw)
+    }
+
+    pub async fn insert_stage_after(
+        &mut self,
+        after_raw: &str,
+        new_stage_name: &str,
+    ) -> Result<()> {
+        let idx = self
+            .stage_index(after_raw)
+            .ok_or_else(|| Error::InvalidStageName {
+                name: after_raw.to_string(),
+            })?;
+
+        let after_stage = &self.stages[idx];
+        let next_seq = if idx + 1 < self.stages.len() {
+            let cur = after_stage.id.sequence;
+            let next = self.stages[idx + 1].id.sequence;
+            if next > cur {
+                cur
+            } else {
+                cur
+            }
+        } else {
+            after_stage.id.sequence
+        };
+
+        let new_seq = next_seq + 1;
+        let new_raw = format!("{new_seq:02}_{new_stage_name}");
+
+        let new_dir = self.root.join(&new_raw);
+        tokio::fs::create_dir_all(new_dir.join("input"))
+            .await
+            .map_err(|e| Error::Io {
+                path: new_dir.clone(),
+                source: e,
+            })?;
+        tokio::fs::create_dir_all(new_dir.join("output"))
+            .await
+            .map_err(|e| Error::Io {
+                path: new_dir.clone(),
+                source: e,
+            })?;
+        tokio::fs::write(
+            new_dir.join("CONTEXT.md"),
+            format!("---\nrole: {}\n---\n# {new_stage_name}\n", new_stage_name),
+        )
+        .await
+        .map_err(|e| Error::Io {
+            path: new_dir.join("CONTEXT.md"),
+            source: e,
+        })?;
+
+        let new_stage = Stage::from_dir(&new_dir).await?;
+        self.stages.insert(idx + 1, new_stage);
+
+        Ok(())
+    }
+
+    pub async fn remove_stage(&mut self, raw: &str) -> Result<()> {
+        let idx = self
+            .stage_index(raw)
+            .ok_or_else(|| Error::InvalidStageName {
+                name: raw.to_string(),
+            })?;
+        let stage_dir = self.stages[idx].path.clone();
+        tokio::fs::remove_dir_all(&stage_dir)
+            .await
+            .map_err(|e| Error::Io {
+                path: stage_dir,
+                source: e,
+            })?;
+        self.stages.remove(idx);
+        Ok(())
+    }
+
     async fn find_task(path: &Path) -> Result<Option<Task>> {
         let candidates = ["task.md", "TASK.md", "Backlog.md", "backlog.md"];
         for candidate in candidates {
