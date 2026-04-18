@@ -26,6 +26,8 @@ anyhow.workspace = true
 chrono.workspace = true
 clap = { version = "4.0", features = ["derive", "env"] }
 base64 = "0.22"
+rmcp.workspace = true
+schemars.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
