@@ -128,12 +128,33 @@ Because zerochaind is filesystem-native, every workflow mutation is a file opera
 
 ---
 
+## 🔄 CI/CD with Dagger
+
+Zerochain ships a Dagger module for reproducible CI pipelines — no `Dockerfile` maintenance, no CI YAML drift.
+
+```bash
+# Run the full pipeline (lint, test, build)
+dagger call all --source=. --progress=plain
+
+# Individual steps
+dagger call lint --source=. --progress=plain
+dagger call test --source=. --progress=plain
+dagger call build --source=.
+
+# Build the zerochaind container image
+dagger call docker --source=. -o zerochaind-image.tar
+```
+
+The module mounts cargo cache volumes for incremental builds, so repeated runs are fast. Same source, same pipeline, anywhere Dagger runs.
+
+---
+
 ## 🗺️ Roadmap
 
 - [ ] Chainguard container execution for stage isolation
 - [ ] Btrfs copy-on-write snapshots (zero-copy isolation)
 - [ ] OpenCode TypeScript plugin
-- [ ] Dagger CI module
+- [x] Dagger CI module
 - [ ] Template registry for common workflow patterns
 
 ---
