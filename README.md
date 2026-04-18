@@ -1,11 +1,41 @@
+<div align="center">
+
 # zerochain
 
-This is a Multi-agent orchestration tool using text files as Agents and Workflows using the filesystem as a storage system. Everything lives in folders and files. Directories are stages, files are state, symlinks are data flow. It is designed to be as simple
-as digitally possible. Build AI agents with `mkdir`.
+**Build AI agents with `mkdir`.**
 
-An implementation of the agent architecture as files and folders proposed by Jake Van Clief [in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
+Multi-agent orchestration using the filesystem.<br>
+Directories are stages. Files are state. Symlinks are data flow.
 
-The main project is Rust based but that is not needed to run this project, you can Run the Bash script of the project if you prefer.
+<p>
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
+  &nbsp;
+  <img src="https://img.shields.io/badge/rust-nightly_1.90+-orange.svg" alt="Rust nightly" />
+  &nbsp;
+  <img src="https://img.shields.io/badge/unsafe-no-brightgreen.svg" alt="No unsafe" />
+  &nbsp;
+  <img src="https://img.shields.io/badge/runtime-tokio-9cf.svg" alt="Tokio" />
+</p>
+
+**[Quick Start](#quick-start)** · **[Install](#install)** · **[CLI](#cli)** · **[How It Works](#how-workflows-work)** · **[Architecture](#architecture)**
+
+</div>
+
+---
+
+> An implementation of the agent architecture as files and folders proposed by Jake Van Clief
+> in a [short YouTube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
+
+### Highlights
+
+| | |
+|---|---|
+| **Filesystem-native** | No databases needed. Directories are stages, files are state. CLI or HTTP daemon. |
+| **Content-addressed** | Blake3 hashing. Every artifact identified by its content hash. |
+| **Crash-safe** | Atomic writes, PID-based stale lock detection, automatic recovery. |
+| **Deterministic LLM** | Config derived from content hash. Same input, same execution. |
+| **Provider-agnostic** | Any OpenAI-compatible API — OpenAI, Ollama, Moonshot, and more. |
+| **Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
 
 ## Quick Start
 
@@ -191,6 +221,71 @@ zerochain reject my-task 03_review --feedback "needs rework"
 
 Global `--workspace` flag or `ZEROCHAIN_WORKSPACE` env var sets the workspace root. Defaults to `./workspace`.
 
+## Container (zerochaind)
+
+Run zerochain as a stateless HTTP daemon inside a container. Every stage completion, error, DAG mutation, and state change is auto-committed via jj for a full audit trail.
+
+### Build
+
+```sh
+docker build -t zerochaind .
+```
+
+### Run
+
+```sh
+docker run -d \
+  -p 8080:8080 \
+  -e OPENAI_API_KEY="sk-..." \
+  -e ZEROCHAIN_BASE_URL="https://api.openai.com/v1" \
+  -e ZEROCHAIN_MODEL="gpt-4o" \
+  -v zerochain-data:/workspace \
+  zerochaind
+```
+
+### API
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/v1/health` | Health check |
+| `POST` | `/v1/workflows` | Init workflow (body: `{"name", "template"?}`) |
+| `GET` | `/v1/workflows` | List workflows |
+| `GET` | `/v1/workflows/{id}` | Workflow status |
+| `POST` | `/v1/workflows/{id}/run` | Run next pending stage |
+| `POST` | `/v1/workflows/{id}/run/{stage}` | Run specific stage |
+| `POST` | `/v1/workflows/{id}/approve/{stage}` | Approve stage |
+| `POST` | `/v1/workflows/{id}/reject/{stage}` | Reject stage (body: `{"feedback"?}`) |
+| `GET` | `/v1/workflows/{id}/output/{stage}` | Read `result.md` |
+| `GET` | `/v1/workflows/{id}/reasoning/{stage}` | Read `reasoning.md` |
+
+### Quick Example
+
+```sh
+# Init a workflow
+curl -X POST http://localhost:8080/v1/workflows \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "my-task"}'
+
+# Run the first stage
+curl -X POST http://localhost:8080/v1/workflows/my-task/run
+
+# Check status
+curl http://localhost:8080/v1/workflows/my-task
+
+# Read output
+curl http://localhost:8080/v1/workflows/my-task/output/00_spec
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `ZEROCHAIN_LISTEN` | `0.0.0.0:8080` | Listen address |
+| `ZEROCHAIN_WORKSPACE` | `/workspace` | Workspace root inside container |
+| `OPENAI_API_KEY` | — | Required for LLM calls |
+| `ZEROCHAIN_BASE_URL` | `https://api.openai.com/v1` | API base URL |
+| `ZEROCHAIN_MODEL` | `gpt-4o` | Model name |
+
 ## How Workflows Work
 
 A workflow is a directory tree where each subdirectory is a stage:
@@ -228,6 +323,77 @@ human_gate: true
 Review the code in the input directory for correctness, performance,
 and adherence to Rust best practices. Output a summary to result.md.
 ```
+
+### CONTEXT.lua (Programmable Config)
+
+Replace `CONTEXT.md` with a Lua script for dynamic stage configuration:
+
+```lua
+-- CONTEXT.lua
+return {
+  role = "senior rust developer",
+  provider_profile = "kimi-k2",
+  thinking_mode = "extended",
+  capture_reasoning = true,
+  human_gate = false,
+}
+```
+
+**Lifecycle hooks** — define functions that run at specific points:
+
+```lua
+-- CONTEXT.lua
+return {
+  role = "code reviewer",
+  provider_profile = "kimi-k2",
+}
+
+function on_validate(ctx)
+  -- Skip this stage if env var is set
+  if ctx:get_env("SKIP_SLOW_STAGES") == "true" then
+    ctx:set_skip(true)
+  end
+end
+
+function on_complete(ctx)
+  local output = ctx:read_output()
+
+  -- Dynamically add a review stage if issues found
+  if output and output:match("NEEDS_REVIEW") then
+    ctx:insert_stage_after("01b_manual_review")
+  end
+
+  -- Store value for later stages
+  ctx:store("review_passed", true)
+end
+```
+
+**Available hooks:**
+
+| Hook | When | Can do |
+|---|---|---|
+| `on_validate` | Before LLM call | Skip stage, check env vars |
+| `on_complete` | After LLM response written | Read output, mutate DAG, store data |
+
+**Available `ctx` methods:**
+
+| Method | Returns | Description |
+|---|---|---|
+| `ctx:get_env(key)` | `string\|nil` | Read environment variable |
+| `ctx:read_output()` | `string\|nil` | Read LLM output (on_complete only) |
+| `ctx:token_usage()` | `number\|nil` | Token count used |
+| `ctx:set_skip(bool)` | — | Skip this stage |
+| `ctx:list_stages()` | `{string}` | List all stage names in workflow |
+| `ctx:stage_complete(name)` | `bool` | Check if a stage is complete |
+| `ctx:stage_output(name)` | `string\|nil` | Read another stage's output |
+| `ctx:insert_stage_after(name)` | — | Add a new stage after current |
+| `ctx:remove_stage(name)` | — | Remove a stage from the workflow |
+| `ctx:store(key, value)` | — | Save value for other stages |
+| `ctx:load(key)` | `any` | Retrieve stored value |
+
+**Shared state** is persisted to `.state/lua_store.json` in the workflow root.
+
+**Sandboxing:** Lua scripts run with no `io`, `os`, `package`, or `debug` libraries. 10MB memory limit, 1M instruction limit.
 
 **Context inheritance:** Parent stage context is flattened into child stages automatically.
 
@@ -282,17 +448,22 @@ Implement JWT-based authentication for the REST API.
 | **zerochain-cas** | Blake3 content-addressed storage. Put bytes, get a CID. Two-level directory sharding (`ab/abcdef...`), atomic writes. |
 | **zerochain-fs** | Copy-on-write filesystem abstraction. `DirectoryCow` for now, Btrfs later. Atomic file ops, advisory file locking, `.complete`/`.error`/`.executing` stage markers, output cleanup. |
 | **zerochain-llm** | LLM provider trait. OpenAI-compatible HTTP backend. Provider profiles (generic, kimi-k2) for per-model feature augmentation. Deterministic config derived from content CID via Blake3 seed. Tool call support. |
-| **zerochain-core** | Workflow model. Stages, execution plans, parallel groups, context inheritance, Backlog.md task parsing, optional Jujutsu integration. |
+| **zerochain-core** | Workflow model. Stages, execution plans, parallel groups, context inheritance, Lua config engine with lifecycle hooks and DAG mutation, Backlog.md task parsing, optional Jujutsu integration. |
 | **zerochain-daemon** | CLI binary. Init, run, approve, and inspect workflows from the command line. |
+| **zerochain-server** | HTTP daemon (`zerochaind`). REST API wrapping AppState, jj auto-commit for audit trail. Runs in a Wolfi container. |
 
 ## Roadmap
 
-- [ ] Chainguard container execution for stage isolation
+- [x] Chainguard container execution for stage isolation
 - [ ] Btrfs copy-on-write snapshots (zero-copy stage isolation)
 - [ ] OpenCode TypeScript plugin
 - [ ] Dagger CI module
 - [ ] Template registry for common workflow patterns
 
-## License
+---
 
-MIT
+<div align="center">
+
+Released under the [MIT License](LICENSE).
+
+</div>
