@@ -68,6 +68,11 @@ pub struct Context {
 
 impl Context {
     pub async fn from_file(path: &Path) -> Result<Self> {
+        let lua_path = path.with_extension("lua");
+        if tokio::fs::try_exists(&lua_path).await.unwrap_or(false) {
+            return Self::from_lua_file(&lua_path).await;
+        }
+
         let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: e,
@@ -75,6 +80,19 @@ impl Context {
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
         Ok(ctx)
+    }
+
+    pub async fn from_lua_file(path: &Path) -> Result<Self> {
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let frontmatter = crate::lua_engine::eval_context_lua(&content)?;
+        Ok(Context {
+            frontmatter,
+            body: String::new(),
+            source_path: Some(path.to_path_buf()),
+        })
     }
 
     pub fn parse(content: &str) -> Result<Self> {
