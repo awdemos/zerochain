@@ -1,0 +1,21 @@
+{
+  "name": "zerochain-opencode",
+  "version": "0.1.0",
+  "description": "OpenCode plugin for zerochain workflow orchestration",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun --external '@opencode-ai/plugin' --external '@opencode-ai/sdk' --external zod",
+    "typecheck": "tsc --noEmit"
+  },
+    "dependencies": {
+    "@opencode-ai/plugin": "latest",
+    "@opencode-ai/sdk": "latest"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "latest",
+    "bun-types": "latest",
+    "typescript": "latest"
+  }
+}
