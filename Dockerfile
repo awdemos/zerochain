@@ -23,6 +23,7 @@ FROM ghcr.io/wolfi-dev/sdk:latest AS runtime
 
 RUN apk add --no-cache \
     bash \
+    btrfs-progs \
     ca-certificates \
     git \
     && adduser -D -u 1000 zerochain

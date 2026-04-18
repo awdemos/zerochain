@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zerochaind
+  namespace: zerochain
+spec:
+  selector:
+    app: zerochaind
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# Headless service for direct pod addressing.
+# Use zerochaind-0.zerochaind.zerochain.svc.cluster.local to target a specific pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: zerochaind-headless
+  namespace: zerochain
+spec:
+  selector:
+    app: zerochaind
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  clusterIP: None

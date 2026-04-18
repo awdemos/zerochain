@@ -1,0 +1,23 @@
+# Optional: expose zerochaind via an Ingress controller.
+# Requires Traefik, nginx-ingress, or similar to be installed in the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: zerochaind
+  namespace: zerochain
+  annotations:
+    # nginx-ingress example
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: zerochain.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: zerochaind
+                port:
+                  number: 8080
