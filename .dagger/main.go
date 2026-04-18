@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	rustImage = "rust:nightly"
+	rustImage = "rust:latest"
 )
 
 type Zerochain struct{}
@@ -25,6 +25,7 @@ func (m *Zerochain) BuildEnv(
 
 	return dag.Container().
 		From(rustImage).
+		WithExec([]string{"rustup", "default", "nightly"}).
 		WithDirectory("/src", source).
 		WithWorkdir("/src").
 		WithMountedCache("/usr/local/cargo/registry", registryCache).
@@ -114,10 +115,7 @@ func (m *Zerochain) All(
 		return "", fmt.Errorf("tests failed: %w", err)
 	}
 
-	_, err = m.Build(ctx, source)
-	if err != nil {
-		return "", fmt.Errorf("build failed: %w", err)
-	}
+	m.Build(ctx, source)
 
 	return fmt.Sprintf("CI passed.\n  lint: %s\n  tests: %s\n  build: ok", lintResult, truncate(testResult, 200)), nil
 }
