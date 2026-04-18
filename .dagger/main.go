@@ -99,6 +99,19 @@ func (m *Zerochain) Docker(
 	return source.DockerBuild()
 }
 
+// Publish builds the zerochaind image and pushes it to a registry.
+// Returns the published image reference.
+func (m *Zerochain) Publish(
+	ctx context.Context,
+	// +defaultPath="/"
+	source *dagger.Directory,
+	// Registry address (e.g. "ttl.sh/myuser-zerochaind")
+	// +required
+	registry string,
+) (string, error) {
+	return source.DockerBuild().Publish(ctx, registry)
+}
+
 // All runs the full CI pipeline: lint, test, and build.
 func (m *Zerochain) All(
 	ctx context.Context,
