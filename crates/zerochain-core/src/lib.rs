@@ -5,6 +5,7 @@ pub mod lua_engine;
 pub mod plan;
 pub mod stage;
 pub mod task;
+pub mod template;
 pub mod workflow;
 
 pub use context::{Context, ContextFrontmatter, MultimodalInput};
@@ -17,4 +18,5 @@ pub use lua_engine::{
 pub use plan::{ExecutionPlan, StageGroup, StageNode, StageState};
 pub use stage::{Stage, StageId};
 pub use task::{Task, TaskExecution};
+pub use template::{StageDef, Template, TemplateRegistry};
 pub use workflow::Workflow;

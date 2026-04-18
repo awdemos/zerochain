@@ -2424,6 +2424,7 @@ dependencies = [
  "clap",
  "http",
  "http-body-util",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
