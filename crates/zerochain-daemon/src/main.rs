@@ -4,6 +4,7 @@ use zerochain_daemon::state::AppState;
 use std::path::PathBuf;
 use zerochain_fs::{acquire_lock, clean_output, mark_complete};
 use zerochain_core::stage::StageId;
+use zerochain_core::template::TemplateRegistry;
 
 #[derive(Parser)]
 #[command(
@@ -62,6 +63,8 @@ enum Commands {
         #[arg(short, long, help = "Feedback for rejection")]
         feedback: Option<String>,
     },
+    #[command(about = "List available workflow templates")]
+    Templates,
 }
 
 #[tokio::main]
@@ -197,6 +200,21 @@ async fn main() -> Result<()> {
                 .mark_stage_error(&workflow_id, &stage_id, feedback.as_deref())
                 .await?;
             println!("rejected: {} / {}", workflow_id, stage_id);
+        }
+        Commands::Templates => {
+            let registry = TemplateRegistry::new();
+            let list = registry.list();
+            if list.is_empty() {
+                println!("no templates available");
+                return Ok(());
+            }
+            for template in list {
+                println!("{}\t{}", template.name, template.description);
+                for stage in &template.stages {
+                    let gate = if stage.human_gate { " [gate]" } else { "" };
+                    println!("  {} {}{}", stage.name, stage.role, gate);
+                }
+            }
         }
     }
 
