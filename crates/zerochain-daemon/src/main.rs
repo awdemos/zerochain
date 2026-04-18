@@ -65,6 +65,8 @@ enum Commands {
     },
     #[command(about = "List available workflow templates")]
     Templates,
+    #[command(about = "Start MCP server over stdio for AI tool integration")]
+    Mcp,
 }
 
 #[tokio::main]
@@ -215,6 +217,9 @@ async fn main() -> Result<()> {
                     println!("  {} {}{}", stage.name, stage.role, gate);
                 }
             }
+        }
+        Commands::Mcp => {
+            zerochain_daemon::mcp::run_stdio_server(cli.workspace).await?;
         }
     }
 
