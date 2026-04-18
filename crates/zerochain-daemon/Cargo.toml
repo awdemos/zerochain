@@ -25,6 +25,7 @@ tracing-subscriber.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap = { version = "4.0", features = ["derive", "env"] }
+base64 = "0.22"
 
 [dev-dependencies]
 async-trait.workspace = true

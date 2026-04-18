@@ -10,9 +10,8 @@ The main project is Rust based but that is not needed to run this project, you c
 ## Quick Start
 
 ```sh
-# Install
-cargo build --release --workspace
-cp target/release/zerochain ~/.cargo/bin/
+# Install and configure oh-my-opencode by following the instructions here:
+# https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/refs/heads/dev/docs/guide/installation.md
 
 # Set your API key
 export OPENAI_API_KEY="sk-..."
@@ -70,10 +69,10 @@ Environment variables, no config files:
 Any OpenAI-compatible API works. Set `ZEROCHAIN_BASE_URL` and `ZEROCHAIN_MODEL`:
 
 ```sh
-# Z.AI
-export OPENAI_API_KEY="your-zai-key"
-export ZEROCHAIN_BASE_URL="https://api.z.ai/api/paas/v4"
-export ZEROCHAIN_MODEL="glm-5-turbo"
+# Kimi K2.5 (Moonshot AI)
+export OPENAI_API_KEY="your-moonshot-key"
+export ZEROCHAIN_BASE_URL="https://api.moonshot.ai/v1"
+export ZEROCHAIN_MODEL="kimi-k2.5"
 
 # OpenAI (default)
 export OPENAI_API_KEY="sk-..."
@@ -83,6 +82,86 @@ export ZEROCHAIN_MODEL="gpt-4o"
 export OPENAI_API_KEY="ollama"
 export ZEROCHAIN_BASE_URL="http://localhost:11434/v1"
 export ZEROCHAIN_MODEL="llama3"
+```
+
+## Provider Profiles
+
+Zerochain supports provider-specific features through **profiles** — opt-in flags in `CONTEXT.md` frontmatter. Without any profile set, behavior is identical to previous versions.
+
+### Quick Example: Kimi K2.5 with Reasoning Capture
+
+```yaml
+---
+provider_profile: kimi-k2
+role: senior code reviewer
+thinking_mode: extended
+capture_reasoning: true
+---
+Review the authentication flow for security vulnerabilities.
+```
+
+Running this stage produces two files in `output/`:
+- `result.md` — the final answer
+- `reasoning.md` — the model's chain-of-thought
+
+### Available Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `provider_profile` | `generic` | Set to `kimi-k2` to enable Kimi-specific handling |
+| `thinking_mode` | `default` | `default`, `disabled`, or `extended` (injects thinking controls into request) |
+| `capture_reasoning` | `false` | Writes `reasoning_content` to `output/reasoning.md` |
+| `multimodal_input` | `[]` | Array of file attachments (images) sent with the prompt |
+
+### Thinking Modes
+
+```yaml
+# Disable thinking (faster, cheaper)
+thinking_mode: disabled
+
+# Extended thinking with a token budget
+thinking_mode: extended   # defaults to 8192 budget tokens
+```
+
+### Multimodal Input
+
+```yaml
+---
+provider_profile: kimi-k2
+multimodal_input:
+  - type: image
+    path: "./wireframes/auth-flow.png"
+    detail: high
+---
+Describe what you see in the wireframe.
+```
+
+### Environment Variable Fallbacks
+
+Set these globally — `CONTEXT.md` frontmatter always takes precedence:
+
+```sh
+export ZEROCHAIN_PROVIDER_PROFILE="kimi-k2"
+export ZEROCHAIN_CAPTURE_REASONING="true"
+export ZEROCHAIN_THINKING_MODE="extended"
+```
+
+### Full Kimi K2.5 Setup
+
+```sh
+# 1. Set your Moonshot API key
+export OPENAI_API_KEY="sk-your-key"
+
+# 2. Point to Kimi API
+export ZEROCHAIN_BASE_URL="https://api.moonshot.ai/v1"
+export ZEROCHAIN_MODEL="kimi-k2.5"
+
+# 3. Create a workflow with a kimi-k2 profile stage
+zerochain init --name my-task
+# Edit 00_spec/CONTEXT.md to add provider_profile: kimi-k2
+
+# 4. Run
+zerochain run my-task
 ```
 
 ## CLI
@@ -202,7 +281,7 @@ Implement JWT-based authentication for the REST API.
 |---|---|
 | **zerochain-cas** | Blake3 content-addressed storage. Put bytes, get a CID. Two-level directory sharding (`ab/abcdef...`), atomic writes. |
 | **zerochain-fs** | Copy-on-write filesystem abstraction. `DirectoryCow` for now, Btrfs later. Atomic file ops, advisory file locking, `.complete`/`.error`/`.executing` stage markers, output cleanup. |
-| **zerochain-llm** | LLM provider trait. OpenAI-compatible HTTP backend. Deterministic config derived from content CID via Blake3 seed. Tool call support. |
+| **zerochain-llm** | LLM provider trait. OpenAI-compatible HTTP backend. Provider profiles (generic, kimi-k2) for per-model feature augmentation. Deterministic config derived from content CID via Blake3 seed. Tool call support. |
 | **zerochain-core** | Workflow model. Stages, execution plans, parallel groups, context inheritance, Backlog.md task parsing, optional Jujutsu integration. |
 | **zerochain-daemon** | CLI binary. Init, run, approve, and inspect workflows from the command line. |
 

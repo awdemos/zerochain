@@ -18,6 +18,32 @@ pub enum ProviderId {
 }
 
 // ---------------------------------------------------------------------------
+// Thinking Mode
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingMode {
+    #[default]
+    Default,
+    Disabled,
+    Extended { budget_tokens: usize },
+}
+
+// ---------------------------------------------------------------------------
+// Multimodal Input
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MultimodalInput {
+    #[serde(rename = "type")]
+    pub input_type: String,
+    pub path: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
@@ -35,6 +61,10 @@ impl Message {
             content: content.into(),
         }
     }
+
+    pub fn with_content(role: Role, content: Content) -> Self {
+        Self { role, content }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,14 +80,29 @@ pub enum Role {
 #[serde(untagged)]
 pub enum Content {
     Text(String),
-    // Multimodal deferred to later phase
+    #[serde(rename = "image_url")]
+    ImageUrl {
+        image_url: ImageUrlContent,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImageUrlContent {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 impl Content {
     pub fn text(&self) -> Option<&str> {
         match self {
             Content::Text(s) => Some(s),
+            _ => None,
         }
+    }
+
+    pub fn is_text(&self) -> bool {
+        matches!(self, Content::Text(_))
     }
 }
 
@@ -105,6 +150,7 @@ pub struct CompleteResponse {
     pub usage: Usage,
     pub finish_reason: FinishReason,
     pub model: String,
+    pub reasoning: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -145,12 +191,12 @@ impl CompleteResponse {
             usage: Usage::default(),
             finish_reason: FinishReason::Stop,
             model: String::new(),
+            reasoning: None,
         }
     }
 }
 
 impl LLMConfig {
-    /// Create an LLMConfig with sensible defaults for the given provider/model.
     pub fn new(provider: ProviderId, model: impl Into<String>) -> Self {
         Self {
             provider,
@@ -163,9 +209,6 @@ impl LLMConfig {
         }
     }
 
-    /// Derive deterministic seed from content hash (Blake3 of CID string).
-    ///
-    /// Sets temperature to 0.0 and top_p to 1.0 for full reproducibility.
     pub fn deterministic(mut self, content_cid: &str) -> Self {
         let hash = blake3::hash(content_cid.as_bytes());
         self.seed = Some(u64::from_le_bytes(
@@ -232,6 +275,24 @@ mod tests {
     fn content_text_access() {
         let c = Content::Text("hello".into());
         assert_eq!(c.text(), Some("hello"));
+    }
+
+    #[test]
+    fn content_image_url_has_no_text() {
+        let c = Content::ImageUrl {
+            image_url: ImageUrlContent {
+                url: "https://example.com/img.png".into(),
+                detail: None,
+            },
+        };
+        assert!(c.text().is_none());
+        assert!(!c.is_text());
+    }
+
+    #[test]
+    fn thinking_mode_default_serde() {
+        let tm = ThinkingMode::default();
+        assert!(matches!(tm, ThinkingMode::Default));
     }
 
     #[test]

@@ -6,7 +6,7 @@ pub mod stage;
 pub mod task;
 pub mod workflow;
 
-pub use context::{Context, ContextFrontmatter};
+pub use context::{Context, ContextFrontmatter, MultimodalInput};
 pub use error::{Error, Result};
 pub use jj::{CommitEntry, JjManager};
 pub use plan::{ExecutionPlan, StageGroup, StageNode, StageState};
