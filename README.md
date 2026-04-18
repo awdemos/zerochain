@@ -5,7 +5,8 @@
 **Build AI agents with `mkdir`.**
 
 Multi-agent orchestration using the filesystem.<br>
-Directories are stages. Files are state. Symlinks are data flow.
+Directories are stages. Files are state. Symlinks are data flow.<br>
+Optional Lua config engine for self-modifying workflows.
 
 <p>
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
@@ -36,6 +37,7 @@ Directories are stages. Files are state. Symlinks are data flow.
 | **Deterministic LLM** | Config derived from content hash. Same input, same execution. |
 | **Provider-agnostic** | Any OpenAI-compatible API — OpenAI, Ollama, Moonshot, and more. |
 | **Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
+| **Self-modifying workflows** | Optional Lua config engine. Stages can insert/remove subsequent stages at runtime. Entirely opt-in — plain `CONTEXT.md` works unchanged. |
 
 ## Quick Start
 
