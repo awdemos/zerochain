@@ -11,7 +11,7 @@
 **Multi-agent orchestration using the filesystem.**  
 Directories are stages. Files are state. Symlinks are data flow.
 
-[⚡ Quick Start](#quick-start) · [📖 How It Works](#how-workflows-work) · [🖥️ CLI](#cli) · [🌐 HTTP API](#container-zerochaind) · [🏗️ Architecture](#architecture)
+[⚡ Quick Start](#-quick-start) · [✨ Highlights](#-highlights) · [🖥️ CLI](#-cli) · [🌐 HTTP API](#-container-zerochaind) · [🏗️ Architecture](#-architecture)
 
 </div>
 
@@ -33,6 +33,7 @@ Directories are stages. Files are state. Symlinks are data flow.
 | **🎯 Deterministic LLM** | Config derived from content hash. Same input, same execution. |
 | **🔌 Provider-agnostic** | Any OpenAI-compatible API — OpenAI, Ollama, Moonshot, and more. |
 | **🦀 Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
+| **🏛️ Auditable** | Because state is files, every mutation is a file operation. Layer a VCS (jj) underneath and you get an immutable, queryable audit trail for free — no extra database or infrastructure. |
 | **🧬 Self-modifying workflows** | Optional Lua config engine. Stages can insert/remove subsequent stages at runtime. |
 
 ---
