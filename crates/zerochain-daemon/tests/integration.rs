@@ -464,6 +464,7 @@ impl LLM for MockLLM {
             .find(|m| matches!(m.role, Role::User))
             .map(|m| match &m.content {
                 zerochain_llm::Content::Text(s) => s.clone(),
+                _ => String::new(),
             })
             .unwrap_or_default();
 
@@ -481,6 +482,7 @@ impl LLM for MockLLM {
     fn supports_multimodal(&self) -> bool { false }
     fn context_window(&self) -> usize { 128_000 }
     async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
+    fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
 #[tokio::test]
@@ -562,4 +564,206 @@ async fn execute_stage_handles_missing_context_gracefully() {
         .await
         .expect("read result");
     assert_eq!(content, "No context needed.");
+}
+
+// ---------------------------------------------------------------------------
+// Profile system tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn execute_stage_with_generic_profile_no_flags() {
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("generic-profile", vec!["01_step"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("step").expect("stage 1");
+    tokio::fs::write(
+        &stage.context_path,
+        "---\nrole: helper\n---\nDo the thing.\n",
+    )
+    .await
+    .expect("write context");
+
+    let mock = MockLLM::new("done");
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("generic-profile", stage, &mock)
+        .await
+        .expect("execute with generic profile");
+
+    let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
+        .await
+        .expect("read result");
+    assert_eq!(result, "MOCK RECEIVED: Execute the task described above.");
+
+    assert!(
+        !stage.output_path.join("reasoning.md").exists(),
+        "generic profile should not write reasoning.md"
+    );
+}
+
+#[tokio::test]
+async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
+    struct ReasoningMock {
+        content: String,
+        reasoning: String,
+    }
+
+    #[async_trait::async_trait]
+    impl LLM for ReasoningMock {
+        fn provider_id(&self) -> &ProviderId {
+            static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| ProviderId::OpenAI)
+        }
+
+        async fn complete(
+            &self,
+            _config: &LLMConfig,
+            _messages: &[Message],
+            _tools: Option<&[zerochain_llm::Tool]>,
+        ) -> Result<CompleteResponse, zerochain_llm::LLMError> {
+            let mut resp = CompleteResponse::new(self.content.clone());
+            resp.reasoning = Some(self.reasoning.clone());
+            Ok(resp)
+        }
+
+        fn supports_multimodal(&self) -> bool { false }
+        fn context_window(&self) -> usize { 128_000 }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+    }
+
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("kimi-reasoning", vec!["01_think"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("think").expect("stage 1");
+    tokio::fs::write(
+        &stage.context_path,
+        "---\nprovider_profile: kimi-k2\ncapture_reasoning: true\n---\nThink deeply.\n",
+    )
+    .await
+    .expect("write context with kimi-k2 profile");
+
+    let mock = ReasoningMock {
+        content: "The answer is 42.".into(),
+        reasoning: "I considered multiple approaches...".into(),
+    };
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("kimi-reasoning", stage, &mock)
+        .await
+        .expect("execute with kimi-k2 profile");
+
+    let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
+        .await
+        .expect("read result.md");
+    assert_eq!(result, "The answer is 42.");
+
+    let reasoning = tokio::fs::read_to_string(stage.output_path.join("reasoning.md"))
+        .await
+        .expect("reasoning.md should exist");
+    assert!(reasoning.contains("considered multiple approaches"));
+}
+
+#[tokio::test]
+async fn execute_stage_kimi_k2_no_capture_skips_reasoning_file() {
+    struct ReasoningMock;
+
+    #[async_trait::async_trait]
+    impl LLM for ReasoningMock {
+        fn provider_id(&self) -> &ProviderId {
+            static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| ProviderId::OpenAI)
+        }
+
+        async fn complete(
+            &self,
+            _config: &LLMConfig,
+            _messages: &[Message],
+            _tools: Option<&[zerochain_llm::Tool]>,
+        ) -> Result<CompleteResponse, zerochain_llm::LLMError> {
+            let mut resp = CompleteResponse::new(String::from("result"));
+            resp.reasoning = Some("secret reasoning".into());
+            Ok(resp)
+        }
+
+        fn supports_multimodal(&self) -> bool { false }
+        fn context_window(&self) -> usize { 128_000 }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+    }
+
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("kimi-no-reason", vec!["01_step"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("step").expect("stage 1");
+    tokio::fs::write(
+        &stage.context_path,
+        "---\nprovider_profile: kimi-k2\ncapture_reasoning: false\n---\nDo stuff.\n",
+    )
+    .await
+    .expect("write context");
+
+    let mock = ReasoningMock;
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("kimi-no-reason", stage, &mock)
+        .await
+        .expect("execute");
+
+    assert!(stage.output_path.join("result.md").exists());
+    assert!(
+        !stage.output_path.join("reasoning.md").exists(),
+        "should not write reasoning.md when capture_reasoning is false"
+    );
+}
+
+#[tokio::test]
+async fn execute_stage_default_profile_no_reasoning_file() {
+    struct ReasoningMock;
+
+    #[async_trait::async_trait]
+    impl LLM for ReasoningMock {
+        fn provider_id(&self) -> &ProviderId {
+            static ID: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
+            ID.get_or_init(|| ProviderId::OpenAI)
+        }
+
+        async fn complete(
+            &self,
+            _config: &LLMConfig,
+            _messages: &[Message],
+            _tools: Option<&[zerochain_llm::Tool]>,
+        ) -> Result<CompleteResponse, zerochain_llm::LLMError> {
+            let mut resp = CompleteResponse::new(String::from("plain result"));
+            resp.reasoning = Some("should be ignored".into());
+            Ok(resp)
+        }
+
+        fn supports_multimodal(&self) -> bool { false }
+        fn context_window(&self) -> usize { 128_000 }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
+        fn as_any(&self) -> &dyn std::any::Any { self }
+    }
+
+    let tmp = TempDir::new().expect("tempdir");
+    let task = make_task("default-no-reason", vec!["01_step"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+
+    let stage = wf.stage_by_name("step").expect("stage 1");
+
+    let mock = ReasoningMock;
+    let state = AppState::new(tmp.path());
+    state
+        .execute_stage_with_llm("default-no-reason", stage, &mock)
+        .await
+        .expect("execute");
+
+    assert!(stage.output_path.join("result.md").exists());
+    assert!(
+        !stage.output_path.join("reasoning.md").exists(),
+        "default profile should never write reasoning.md"
+    );
 }
