@@ -1,8 +1,11 @@
 # zerochain
 
-Multi-agent orchestration using text files as agents and workflows. Directories are stages, files are state, symlinks are data flow. Your agent framework starts with `mkdir`.
+This is a Multi-agent orchestration tool using text files as Agents and Workflows using the filesystem as a storage system. Everything lives in folders and files. Directories are stages, files are state, symlinks are data flow. It is designed to be as simple
+as digitally possibble and can start the agent framework with `mkdir`.
 
 An implementation of the agent architecture as files and folders proposed by Jake Van Clief [in a short youtube video explainer](https://www.youtube.com/shorts/tbVtt2-qUJo).
+
+The main project is Rust based but that is not needed to run this project, you can Run the Bash script of the project if you prefer.
 
 ## Quick Start
 
