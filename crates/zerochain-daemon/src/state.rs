@@ -130,14 +130,22 @@ impl AppState {
             .await
             .with_context(|| format!("creating workflow dir: {}", wf_base.display()))?;
 
-        let stage_names: Vec<String> = template
-            .map(|t| {
-                t.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect()
-            })
-            .unwrap_or_else(|| vec!["00_spec".into(), "01_implement".into(), "02_verify".into()]);
+        let registry = zerochain_core::template::TemplateRegistry::new();
+        let named_template = template.and_then(|t| registry.get(t));
+
+        let (stage_names, stage_defs): (Vec<String>, Option<&Vec<zerochain_core::template::StageDef>>) = if let Some(tpl) = named_template {
+            (tpl.stage_names(), Some(&tpl.stages))
+        } else {
+            let names: Vec<String> = template
+                .map(|t| {
+                    t.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_else(|| vec!["00_spec".into(), "01_implement".into(), "02_verify".into()]);
+            (names, None)
+        };
 
         let task = Task::new(
             name.to_string(),
@@ -154,6 +162,16 @@ impl AppState {
         );
 
         let workflow = Workflow::init(&task, &wf_base).await?;
+
+        if let Some(defs) = stage_defs {
+            for def in defs {
+                let ctx_path = workflow.root.join(&def.name).join("CONTEXT.md");
+                tokio::fs::write(&ctx_path, def.to_context_md())
+                    .await
+                    .with_context(|| format!("writing CONTEXT.md for stage {}", def.name))?;
+            }
+        }
+
         self.workflows.insert(workflow.id.clone(), workflow.clone());
         Ok(workflow)
     }
