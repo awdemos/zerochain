@@ -21,6 +21,23 @@ pub struct ContextFrontmatter {
     pub network: Option<String>,
     #[serde(default)]
     pub definition_of_done: Option<String>,
+    #[serde(default)]
+    pub provider_profile: Option<String>,
+    #[serde(default)]
+    pub thinking_mode: Option<String>,
+    #[serde(default)]
+    pub capture_reasoning: bool,
+    #[serde(default)]
+    pub multimodal_input: Vec<MultimodalInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MultimodalInput {
+    #[serde(rename = "type")]
+    pub input_type: String,
+    pub path: String,
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 impl Default for ContextFrontmatter {
@@ -33,6 +50,10 @@ impl Default for ContextFrontmatter {
             timeout: None,
             network: None,
             definition_of_done: None,
+            provider_profile: None,
+            thinking_mode: None,
+            capture_reasoning: false,
+            multimodal_input: vec![],
         }
     }
 }
@@ -47,6 +68,11 @@ pub struct Context {
 
 impl Context {
     pub async fn from_file(path: &Path) -> Result<Self> {
+        let lua_path = path.with_extension("lua");
+        if tokio::fs::try_exists(&lua_path).await.unwrap_or(false) {
+            return Self::from_lua_file(&lua_path).await;
+        }
+
         let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: e,
@@ -54,6 +80,19 @@ impl Context {
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
         Ok(ctx)
+    }
+
+    pub async fn from_lua_file(path: &Path) -> Result<Self> {
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let frontmatter = crate::lua_engine::eval_context_lua(&content)?;
+        Ok(Context {
+            frontmatter,
+            body: String::new(),
+            source_path: Some(path.to_path_buf()),
+        })
     }
 
     pub fn parse(content: &str) -> Result<Self> {
@@ -107,6 +146,23 @@ impl Context {
                 .definition_of_done
                 .clone()
                 .or(base.definition_of_done),
+            provider_profile: self
+                .frontmatter
+                .provider_profile
+                .clone()
+                .or(base.provider_profile),
+            thinking_mode: self
+                .frontmatter
+                .thinking_mode
+                .clone()
+                .or(base.thinking_mode),
+            capture_reasoning: self.frontmatter.capture_reasoning
+                || base.capture_reasoning,
+            multimodal_input: if self.frontmatter.multimodal_input.is_empty() {
+                base.multimodal_input
+            } else {
+                self.frontmatter.multimodal_input.clone()
+            },
         };
 
         Context {
@@ -192,5 +248,120 @@ Do the analysis here.
         assert_eq!(merged.frontmatter.role.as_deref(), Some("child"));
         assert_eq!(merged.frontmatter.command.as_deref(), Some("parent_cmd"));
         assert_eq!(merged.frontmatter.timeout, Some(30));
+    }
+
+    #[test]
+    fn parse_kimi_k2_profile_frontmatter() {
+        let input = r#"---
+provider_profile: kimi-k2
+role: senior code reviewer
+thinking_mode: disabled
+capture_reasoning: true
+---
+Review the code.
+"#;
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.provider_profile.as_deref(), Some("kimi-k2"));
+        assert_eq!(ctx.frontmatter.role.as_deref(), Some("senior code reviewer"));
+        assert_eq!(ctx.frontmatter.thinking_mode.as_deref(), Some("disabled"));
+        assert!(ctx.frontmatter.capture_reasoning);
+    }
+
+    #[test]
+    fn parse_multimodal_input_frontmatter() {
+        let input = r#"---
+multimodal_input:
+  - type: image
+    path: "./wireframes/auth.png"
+    detail: high
+---
+Check the wireframe.
+"#;
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.multimodal_input.len(), 1);
+        assert_eq!(ctx.frontmatter.multimodal_input[0].input_type, "image");
+        assert_eq!(ctx.frontmatter.multimodal_input[0].path, "./wireframes/auth.png");
+        assert_eq!(ctx.frontmatter.multimodal_input[0].detail.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn parse_default_fields_are_none_or_empty() {
+        let input = "---\nrole: test\n---\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert!(ctx.frontmatter.provider_profile.is_none());
+        assert!(ctx.frontmatter.thinking_mode.is_none());
+        assert!(!ctx.frontmatter.capture_reasoning);
+        assert!(ctx.frontmatter.multimodal_input.is_empty());
+    }
+
+    #[test]
+    fn flatten_inherits_provider_profile() {
+        let parent = Context::parse("---\nprovider_profile: kimi-k2\n---\n").unwrap();
+        let child = Context::parse("---\n---\nChild").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.provider_profile.as_deref(), Some("kimi-k2"));
+    }
+
+    #[test]
+    fn flatten_child_overrides_provider_profile() {
+        let parent = Context::parse("---\nprovider_profile: kimi-k2\n---\n").unwrap();
+        let child = Context::parse("---\nprovider_profile: generic\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.provider_profile.as_deref(), Some("generic"));
+    }
+
+    #[test]
+    fn flatten_inherits_thinking_mode() {
+        let parent = Context::parse("---\nthinking_mode: extended\n---\n").unwrap();
+        let child = Context::parse("---\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.thinking_mode.as_deref(), Some("extended"));
+    }
+
+    #[test]
+    fn flatten_capture_reasoning_or_logic() {
+        let parent = Context::parse("---\ncapture_reasoning: true\n---\n").unwrap();
+        let child = Context::parse("---\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert!(merged.frontmatter.capture_reasoning);
+
+        let parent2 = Context::parse("---\n---\n").unwrap();
+        let child2 = Context::parse("---\ncapture_reasoning: true\n---\n").unwrap();
+        let merged2 = child2.flatten(Some(&parent2));
+        assert!(merged2.frontmatter.capture_reasoning);
+    }
+
+    #[test]
+    fn flatten_multimodal_input_child_takes_precedence() {
+        let parent = Context::parse(r#"---
+multimodal_input:
+  - type: image
+    path: parent.png
+---
+"#).unwrap();
+        let child = Context::parse(r#"---
+multimodal_input:
+  - type: image
+    path: child.png
+    detail: low
+---
+"#).unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.multimodal_input.len(), 1);
+        assert_eq!(merged.frontmatter.multimodal_input[0].path, "child.png");
+    }
+
+    #[test]
+    fn flatten_multimodal_input_inherits_when_child_empty() {
+        let parent = Context::parse(r#"---
+multimodal_input:
+  - type: image
+    path: parent.png
+---
+"#).unwrap();
+        let child = Context::parse("---\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.multimodal_input.len(), 1);
+        assert_eq!(merged.frontmatter.multimodal_input[0].path, "parent.png");
     }
 }

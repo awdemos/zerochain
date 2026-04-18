@@ -6,6 +6,7 @@ members = [
     "crates/zerochain-fs",
     "crates/zerochain-llm",
     "crates/zerochain-daemon",
+    "crates/zerochain-server",
 ]
 
 [workspace.package]
@@ -29,3 +30,6 @@ uuid = { version = "1.0", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 rmcp = "0.1"
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
