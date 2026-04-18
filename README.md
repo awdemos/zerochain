@@ -101,6 +101,10 @@ docker run -d \
 | `GET` | `/v1/workflows/{id}` | Workflow status |
 | `GET` | `/v1/workflows/{id}/output/{stage}` | Read result |
 
+### 🔍 Audit Trails
+
+Because zerochaind is filesystem-native, every workflow mutation is a file operation. `jj op log` gives you a complete, immutable timeline of every operation — no audit database, no extra infrastructure. The VCS *is* the audit log.
+
 ---
 
 ## 🏗️ Architecture
