@@ -86,12 +86,16 @@ zerochain approve my-task 03_review
 Run zerochain as a stateless HTTP daemon with full audit trails via jj:
 
 ```bash
+# Build locally
 docker build -t zerochaind .
 docker run -d \
   -p 8080:8080 \
   -e OPENAI_API_KEY="sk-..." \
   -v zerochain-data:/workspace \
   zerochaind
+
+# Or build and push to a registry with Dagger
+dagger call publish --registry ttl.sh/$USER-zerochaind:1h
 ```
 
 | Method | Endpoint | Description |
