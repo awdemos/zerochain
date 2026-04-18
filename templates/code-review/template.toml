@@ -1,0 +1,15 @@
+name = "code-review"
+description = "Review code for correctness, style, and security"
+
+[stages."00_spec"]
+role = "senior developer"
+body = "Describe the code in the input directory. Identify the main components, their responsibilities, and how they interact. Output a summary to result.md."
+
+[stages."01_review"]
+role = "senior code reviewer"
+body = "Review the code described in the previous stage. Check for: correctness, performance issues, security vulnerabilities, and style violations. Output findings to result.md."
+
+[stages."02_report"]
+role = "technical writer"
+human_gate = true
+body = "Synthesize the code review findings into a clear, actionable report. Prioritize issues by severity. Output the report to result.md."
