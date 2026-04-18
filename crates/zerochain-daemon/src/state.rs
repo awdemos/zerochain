@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use anyhow::Context as _;
 use zerochain_core::context::Context as StageContext;
+use zerochain_core::lua_engine::{
+    create_sandboxed_vm, execute_hook, load_shared_store, save_shared_store, LuaContext,
+};
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
@@ -103,6 +106,18 @@ impl AppState {
         self.workflows.get(id)
     }
 
+    pub fn get_workflow_mut(&mut self, id: &str) -> Option<&mut Workflow> {
+        self.workflows.get_mut(id)
+    }
+
+    pub async fn reload_workflow(&mut self, id: &str) -> anyhow::Result<()> {
+        let wf = self.workflows.get(id).context("workflow not found")?;
+        let root = wf.root.clone();
+        let reloaded = Workflow::from_dir(&root).await?;
+        self.workflows.insert(id.to_string(), reloaded);
+        Ok(())
+    }
+
     pub async fn init_workflow(
         &mut self,
         path: Option<&Path>,
@@ -199,7 +214,7 @@ impl AppState {
     }
 
     pub async fn execute_stage(
-        &self,
+        &mut self,
         workflow_id: &str,
         stage: &Stage,
     ) -> anyhow::Result<()> {
@@ -208,7 +223,7 @@ impl AppState {
     }
 
     pub async fn execute_stage_with_llm(
-        &self,
+        &mut self,
         workflow_id: &str,
         stage: &Stage,
         llm: &dyn LLM,
@@ -217,6 +232,15 @@ impl AppState {
             Some(StageContext::from_file(&stage.context_path).await?)
         } else {
             None
+        };
+
+        let lua_script = {
+            let lua_path = stage.path.join("CONTEXT.lua");
+            if lua_path.exists() {
+                Some(tokio::fs::read_to_string(&lua_path).await?)
+            } else {
+                None
+            }
         };
 
         let input_content = self.read_input_files(&stage.input_path).await?;
@@ -255,6 +279,29 @@ impl AppState {
         profile.validate_config(&config, &stage_ctx).map_err(|e| {
             anyhow::anyhow!("profile validation failed: {e}")
         })?;
+
+        let shared_store = match self.workflows.get(workflow_id) {
+            Some(wf) => load_shared_store(&wf.root),
+            None => load_shared_store(Path::new(".")),
+        };
+
+        if let Some(ref script) = lua_script {
+            let lua = create_sandboxed_vm()
+                .map_err(|e| anyhow::anyhow!("Lua VM init failed: {e}"))?;
+            let mut lua_ctx = LuaContext::new(
+                &stage.id.raw,
+                &stage.path,
+                &self.workflows.get(workflow_id)
+                    .map(|wf| wf.root.clone())
+                    .unwrap_or_else(|| stage.path.clone()),
+            ).with_shared_store(shared_store.clone());
+            execute_hook(&lua, "on_validate", &mut lua_ctx, script)
+                .map_err(|e| anyhow::anyhow!("on_validate hook failed: {e}"))?;
+            if lua_ctx.skip {
+                tracing::info!(stage = %stage.id.raw, "skipped by on_validate hook");
+                return Ok(());
+            }
+        }
 
         let mut messages = Vec::new();
 
@@ -381,6 +428,42 @@ impl AppState {
             bytes = content.len(),
             "wrote LLM output"
         );
+
+        if let Some(ref script) = lua_script {
+            let lua = create_sandboxed_vm()
+                .map_err(|e| anyhow::anyhow!("Lua VM init failed: {e}"))?;
+            let wf_root = self.workflows.get(workflow_id)
+                .map(|wf| wf.root.clone())
+                .unwrap_or_else(|| stage.path.clone());
+            let mut lua_ctx = LuaContext::new(
+                &stage.id.raw,
+                &stage.path,
+                &wf_root,
+            )
+            .with_output(&content, response.usage.completion_tokens as u64)
+            .with_shared_store(shared_store.clone());
+            if let Err(e) = execute_hook(&lua, "on_complete", &mut lua_ctx, script) {
+                tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
+            } else {
+                if let Err(e) = save_shared_store(&wf_root, &shared_store) {
+                    tracing::warn!(error = %e, "failed to save shared store");
+                }
+                for new_stage in &lua_ctx.hooks.insert_after {
+                    if let Some(wf) = self.workflows.get_mut(workflow_id) {
+                        if let Err(e) = wf.insert_stage_after(&stage.id.raw, new_stage).await {
+                            tracing::warn!(stage = new_stage, error = %e, "failed to insert stage");
+                        }
+                    }
+                }
+                for remove_raw in &lua_ctx.hooks.remove_stages {
+                    if let Some(wf) = self.workflows.get_mut(workflow_id) {
+                        if let Err(e) = wf.remove_stage(remove_raw).await {
+                            tracing::warn!(stage = remove_raw, error = %e, "failed to remove stage");
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

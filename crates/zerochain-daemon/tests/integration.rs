@@ -497,7 +497,7 @@ async fn execute_stage_writes_result_from_llm() {
         .await
         .expect("write input");
 
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     let mock = MockLLM::new("Mock analysis result from LLM.");
     state
         .execute_stage_with_llm("llm-test", stage1, &mock)
@@ -531,7 +531,7 @@ async fn execute_stage_passes_context_to_llm() {
         .expect("write input");
 
     let echo_mock = MockLLM::new(String::new());
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("ctx-test", stage, &echo_mock)
         .await
@@ -554,7 +554,7 @@ async fn execute_stage_handles_missing_context_gracefully() {
     tokio::fs::remove_file(&stage.context_path).await.expect("remove context");
 
     let mock = MockLLM::new("No context needed.");
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("no-ctx", stage, &mock)
         .await
@@ -585,7 +585,7 @@ async fn execute_stage_with_generic_profile_no_flags() {
     .expect("write context");
 
     let mock = MockLLM::new("done");
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("generic-profile", stage, &mock)
         .await
@@ -649,7 +649,7 @@ async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
         content: "The answer is 42.".into(),
         reasoning: "I considered multiple approaches...".into(),
     };
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("kimi-reasoning", stage, &mock)
         .await
@@ -707,7 +707,7 @@ async fn execute_stage_kimi_k2_no_capture_skips_reasoning_file() {
     .expect("write context");
 
     let mock = ReasoningMock;
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("kimi-no-reason", stage, &mock)
         .await
@@ -755,7 +755,7 @@ async fn execute_stage_default_profile_no_reasoning_file() {
     let stage = wf.stage_by_name("step").expect("stage 1");
 
     let mock = ReasoningMock;
-    let state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path());
     state
         .execute_stage_with_llm("default-no-reason", stage, &mock)
         .await

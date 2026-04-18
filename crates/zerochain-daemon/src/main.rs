@@ -6,7 +6,13 @@ use zerochain_fs::{acquire_lock, clean_output, mark_complete};
 use zerochain_core::stage::StageId;
 
 #[derive(Parser)]
-#[command(name = "zerochain", version, about = "Filesystem-native workflow engine")]
+#[command(
+    name = "zerochain",
+    version,
+    about = "Filesystem-native workflow engine — build AI agents with mkdir",
+    after_long_help = "Stage config: CONTEXT.md (YAML) or CONTEXT.lua (Lua script)\n\
+                       Docs: https://github.com/awdemos/zerochain"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -17,31 +23,43 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(about = "Create a new workflow with numbered stages")]
     Init {
-        #[arg(short, long)]
+        #[arg(short, long, help = "Workflow name")]
         name: String,
-        #[arg(short, long)]
+        #[arg(short, long, help = "Path to workspace root")]
         path: Option<PathBuf>,
-        #[arg(short, long)]
+        #[arg(short, long, help = "Comma-separated stage names (e.g. \"research,design,implement\")")]
         template: Option<String>,
     },
+    #[command(about = "Execute the next pending stage (or a specific stage)")]
     Run {
+        #[arg(help = "Workflow ID")]
         workflow_id: String,
-        #[arg(short, long)]
+        #[arg(short, long, help = "Specific stage to run (e.g. 02_design)")]
         stage: Option<String>,
     },
+    #[command(about = "Show workflow status and stage states")]
     Status {
+        #[arg(help = "Workflow ID (omit to list all)")]
         workflow_id: Option<String>,
     },
+    #[command(about = "List all workflows")]
     List,
+    #[command(about = "Approve a stage waiting at a human gate")]
     Approve {
+        #[arg(help = "Workflow ID")]
         workflow_id: String,
+        #[arg(help = "Stage ID (e.g. 03_review)")]
         stage_id: String,
     },
+    #[command(about = "Reject a stage and mark it as error")]
     Reject {
+        #[arg(help = "Workflow ID")]
         workflow_id: String,
+        #[arg(help = "Stage ID (e.g. 03_review)")]
         stage_id: String,
-        #[arg(short, long)]
+        #[arg(short, long, help = "Feedback for rejection")]
         feedback: Option<String>,
     },
 }
@@ -94,7 +112,8 @@ async fn main() -> Result<()> {
 
             let stage = workflow
                 .stage_by_id(&stage_id)
-                .ok_or_else(|| anyhow::anyhow!("stage not found: {}", stage_id.raw))?;
+                .ok_or_else(|| anyhow::anyhow!("stage not found: {}", stage_id.raw))?
+                .clone();
 
             let _lock = acquire_lock(&stage.path).await?;
             clean_output(&stage.path).await?;
@@ -102,7 +121,7 @@ async fn main() -> Result<()> {
             println!("  input:  {}", stage.input_path.display());
             println!("  output: {}", stage.output_path.display());
 
-            if let Err(e) = state.execute_stage(&workflow_id, stage).await {
+            if let Err(e) = state.execute_stage(&workflow_id, &stage).await {
                 let error_marker = stage.path.join(".error");
                 tokio::fs::write(&error_marker, format!("{e}"))
                     .await
