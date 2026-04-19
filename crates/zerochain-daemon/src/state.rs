@@ -265,17 +265,17 @@ impl AppState {
 
         let profile_name = ctx
             .as_ref()
-            .map(|c| resolve_profile_name(c))
+            .map(resolve_profile_name)
             .unwrap_or_else(|| "generic".to_string());
 
         let thinking_mode = ctx
             .as_ref()
-            .map(|c| resolve_thinking_mode(c))
+            .map(resolve_thinking_mode)
             .unwrap_or_default();
 
         let capture_reasoning = ctx
             .as_ref()
-            .map(|c| resolve_capture_reasoning(c))
+            .map(resolve_capture_reasoning)
             .unwrap_or(false);
 
         let profile = resolve_profile(&profile_name);

@@ -1,3 +1,5 @@
+//! Message broker abstraction for cross-pod agent communication.
+
 use serde::{Deserialize, Serialize};
 use zerochain_cas::Cid;
 

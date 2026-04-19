@@ -1,3 +1,5 @@
+//! Copy-on-write filesystem abstraction (Btrfs, APFS, directory fallback).
+
 pub mod atomic;
 pub mod cow;
 pub mod error;

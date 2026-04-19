@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
+#[derive(Default)]
 pub struct ContextFrontmatter {
     #[serde(default)]
     pub role: Option<String>,
@@ -40,23 +41,6 @@ pub struct MultimodalInput {
     pub detail: Option<String>,
 }
 
-impl Default for ContextFrontmatter {
-    fn default() -> Self {
-        Self {
-            role: None,
-            container: None,
-            command: None,
-            human_gate: false,
-            timeout: None,
-            network: None,
-            definition_of_done: None,
-            provider_profile: None,
-            thinking_mode: None,
-            capture_reasoning: false,
-            multimodal_input: vec![],
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]

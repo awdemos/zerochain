@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
             state
                 .init_workflow(path.as_deref(), &name, template.as_deref())
                 .await?;
-            println!("initialized workflow: {}", name);
+            println!("initialized workflow: {name}");
         }
         Commands::Run {
             workflow_id,
@@ -97,11 +97,11 @@ async fn main() -> Result<()> {
         } => {
             let workflow = state
                 .get_workflow(&workflow_id)
-                .ok_or_else(|| anyhow::anyhow!("workflow not found: {}", workflow_id))?;
+                .ok_or_else(|| anyhow::anyhow!("workflow not found: {workflow_id}"))?;
             let plan = workflow.execution_plan();
 
             if plan.is_complete() {
-                println!("workflow complete: {}", workflow_id);
+                println!("workflow complete: {workflow_id}");
                 return Ok(());
             }
 
@@ -144,7 +144,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             for (id, status) in workflows {
-                println!("{}\t{}", id, status);
+                println!("{id}\t{status}");
             }
         }
         Commands::Status {
@@ -152,15 +152,15 @@ async fn main() -> Result<()> {
         } => {
             let workflow = state
                 .get_workflow(&wid)
-                .ok_or_else(|| anyhow::anyhow!("workflow not found: {}", wid))?;
+                .ok_or_else(|| anyhow::anyhow!("workflow not found: {wid}"))?;
             let plan = workflow.execution_plan();
             let complete = plan.is_complete();
             let next = plan.next_stage().map(|s| s.raw.as_str()).unwrap_or("none");
             println!("id:       {}", workflow.id);
             println!("root:     {}", workflow.root.display());
             println!("stages:   {}", workflow.stages.len());
-            println!("complete: {}", complete);
-            println!("next:     {}", next);
+            println!("complete: {complete}");
+            println!("next:     {next}");
             for stage in &workflow.stages {
                 let marker = if stage.is_complete {
                     "done"
@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             for (id, status) in workflows {
-                println!("{}\t{}", id, status);
+                println!("{id}\t{status}");
             }
         }
         Commands::Approve {
@@ -191,7 +191,7 @@ async fn main() -> Result<()> {
             state
                 .mark_stage_complete(&workflow_id, &stage_id)
                 .await?;
-            println!("approved: {} / {}", workflow_id, stage_id);
+            println!("approved: {workflow_id} / {stage_id}");
         }
         Commands::Reject {
             workflow_id,
@@ -201,7 +201,7 @@ async fn main() -> Result<()> {
             state
                 .mark_stage_error(&workflow_id, &stage_id, feedback.as_deref())
                 .await?;
-            println!("rejected: {} / {}", workflow_id, stage_id);
+            println!("rejected: {workflow_id} / {stage_id}");
         }
         Commands::Templates => {
             let registry = TemplateRegistry::new();

@@ -1,3 +1,5 @@
+//! Content-addressed storage using Blake3 hashing.
+
 mod backend;
 mod cid;
 mod error;

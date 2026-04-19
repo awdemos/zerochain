@@ -1,3 +1,5 @@
+//! Core workflow model: stages, CONTEXT.md parsing, execution DAG.
+
 pub mod context;
 pub mod error;
 pub mod jj;

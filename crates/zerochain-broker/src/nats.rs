@@ -1,4 +1,5 @@
 use async_nats::Client;
+use futures::stream::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::{Broker, BrokerError, BrokerMessage, Result};
