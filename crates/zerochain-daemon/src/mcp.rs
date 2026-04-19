@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::state::AppState;
+use crate::{state::AppState, DaemonError};
 
 pub struct ZerochainMcpServer {
     #[allow(dead_code)] // read by #[tool_router] macro-generated code
@@ -60,7 +60,7 @@ impl ZerochainMcpServer {
         }
     }
 
-    pub async fn load(&self) -> anyhow::Result<()> {
+    pub async fn load(&self) -> Result<(), DaemonError> {
         let mut state = self.state.lock().await;
         state.load_workflows().await?;
         Ok(())

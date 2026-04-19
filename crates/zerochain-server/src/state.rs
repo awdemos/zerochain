@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use zerochain_broker::memory::MemoryBroker;
 use zerochain_cas::CasStore;
-use zerochain_daemon::state::AppState;
+use zerochain_daemon::{AppState, DaemonError};
 
 /// Shared server state, Clone-able for axum's State extractor.
 ///
@@ -47,7 +47,7 @@ impl ServerState {
         self
     }
 
-    pub async fn refresh(&self) -> anyhow::Result<()> {
+    pub async fn refresh(&self) -> Result<(), DaemonError> {
         let mut state = self.inner.lock().await;
         state.load_workflows().await?;
         Ok(())
