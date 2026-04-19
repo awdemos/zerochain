@@ -157,7 +157,10 @@ impl StorageBackend for S3Backend {
         let key = Self::key_for(cid);
         match self.bucket.head_object(&key).await {
             Ok((_, code)) => code == 200,
-            Err(_) => false,
+            Err(e) => {
+                tracing::debug!(cid = %cid, key = %key, error = %e, "S3 head_object failed");
+                false
+            }
         }
     }
 }

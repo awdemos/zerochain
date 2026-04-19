@@ -225,7 +225,11 @@ pub async fn is_locked(dir: &Path) -> bool {
 
     let content = match tokio::fs::read_to_string(&lock_path).await {
         Ok(c) => c,
-        Err(_) => return false,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(e) => {
+            tracing::warn!(path = %lock_path.display(), error = %e, "failed to read lock file");
+            return false;
+        }
     };
 
     let Some((pid, _ts)) = parse_lock_content(&content) else {

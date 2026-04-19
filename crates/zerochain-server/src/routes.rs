@@ -240,10 +240,10 @@ async fn run_next(
 
 async fn finalize_stage_execution(
     state: &ServerState,
-    mut inner: tokio::sync::MutexGuard<'_, zerochain_daemon::state::AppState>,
+    mut inner: tokio::sync::MutexGuard<'_, zerochain_daemon::AppState>,
     id: &str,
     stage_raw: &str,
-    result: Result<(), zerochain_daemon::error::DaemonError>,
+    result: Result<(), zerochain_daemon::DaemonError>,
 ) -> axum::response::Response {
     match result {
         Ok(()) => {
