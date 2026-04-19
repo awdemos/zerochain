@@ -14,7 +14,7 @@ pub use context::{Context, ContextFrontmatter, MultimodalInput};
 pub use error::{Error, Result};
 pub use jj::{CommitEntry, JjManager};
 pub use lua_engine::{
-    HookResults, LuaContext, eval_context_lua, eval_context_lua_file, execute_hook,
+    HookResults, LuaContext, eval_context_lua, eval_context_lua_file,
     load_shared_store, save_shared_store, create_sandboxed_vm,
 };
 pub use plan::{ExecutionPlan, StageGroup, StageNode, StageState};

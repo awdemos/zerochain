@@ -24,11 +24,4 @@ pub fn eval_context_lua_file(path: &Path) -> Result<ContextFrontmatter> {
     eval_context_lua(&script)
 }
 
-pub fn execute_hook(
-    lua: &mlua::Lua,
-    hook_name: &str,
-    ctx: &mut LuaContext,
-    script: &str,
-) -> Result<()> {
-    run_hook(lua, hook_name, ctx, script)
-}
+

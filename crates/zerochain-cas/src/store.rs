@@ -67,7 +67,7 @@ impl CasStore {
     /// List all content identifiers currently stored.
     ///
     /// **Note:** This operation is only supported by the local filesystem
-    /// backend. Calling it with an S3 backend will return an empty list.
+    /// backend.
     pub async fn list(&self) -> Result<Vec<Cid>> {
         let local = self
             .backend
@@ -77,7 +77,9 @@ impl CasStore {
         if let Some(local) = local {
             list_local(local).await
         } else {
-            Ok(Vec::new())
+            Err(CasError::Unsupported(
+                "list not supported for non-local backend".into(),
+            ))
         }
     }
 
@@ -96,17 +98,19 @@ impl CasStore {
                 Err(e) => Err(e.into()),
             }
         } else {
-            tracing::warn!(cid = %cid, "delete not implemented for non-local backend");
-            Ok(())
+            Err(CasError::Unsupported(
+                "delete not supported for non-local backend".into(),
+            ))
         }
     }
 
     /// Return the base directory of this store, if backed by local filesystem.
-    pub fn base_dir(&self) -> Option<&Path> {
+    pub fn base_dir(&self) -> Result<&Path> {
         self.backend
             .as_any()
             .downcast_ref::<LocalBackend>()
             .map(|l| l.base_dir())
+            .ok_or_else(|| CasError::Unsupported("base_dir not supported for non-local backend".into()))
     }
 }
 
@@ -300,7 +304,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
         let store = CasStore::new(path.clone()).await.unwrap();
-        assert_eq!(store.base_dir(), Some(path.as_path()));
+        assert_eq!(store.base_dir().ok(), Some(path.as_path()));
     }
 
     #[tokio::test]

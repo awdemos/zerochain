@@ -21,7 +21,6 @@ impl LLMFactory {
                 Ok(Box::new(OpenAICompatibleProvider::new(
                     "https://api.openai.com/v1".into(),
                     api_key,
-                    config.model.clone(),
                 )))
             }
             crate::types::ProviderId::OpenAICompatible {
@@ -34,7 +33,6 @@ impl LLMFactory {
                 Ok(Box::new(OpenAICompatibleProvider::new(
                     base_url.clone(),
                     api_key,
-                    config.model.clone(),
                 )))
             }
             crate::types::ProviderId::LocalGGUF { .. } => Err(LLMError::unsupported(

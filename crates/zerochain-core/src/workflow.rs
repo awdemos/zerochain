@@ -82,7 +82,17 @@ impl Workflow {
     }
 
     pub async fn init(task: &Task, base_path: &Path) -> Result<Self> {
-        let workflow_dir = base_path.join(&task.id);
+        let sanitized_id = task
+            .id
+            .replace(['/', '\\'], "-")
+            .replace("..", "-")
+            .replace('\0', "");
+        if sanitized_id.is_empty() || sanitized_id.len() > 128 {
+            return Err(Error::InvalidWorkflowName {
+                name: task.id.clone(),
+            });
+        }
+        let workflow_dir = base_path.join(&sanitized_id);
         tokio::fs::create_dir_all(&workflow_dir)
             .await
             .map_err(|e| Error::Io {
