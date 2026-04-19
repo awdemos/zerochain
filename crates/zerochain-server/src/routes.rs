@@ -1,5 +1,5 @@
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{OriginalUri, Path, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response::IntoResponse;
@@ -67,11 +67,11 @@ pub fn routes(state: ServerState) -> Router {
         .route("/v1/workflows/{id}/reject/{stage}", post(reject))
         .route(
             "/v1/workflows/{id}/output/{stage}",
-            get(read_output),
+            get(read_stage_file_route),
         )
         .route(
             "/v1/workflows/{id}/reasoning/{stage}",
-            get(read_reasoning),
+            get(read_stage_file_route),
         )
         .route("/v1/artifacts", post(upload_artifact).get(list_artifacts))
         .route("/v1/artifacts/{cid}", get(download_artifact))
@@ -195,17 +195,19 @@ async fn run_next(
     State(state): State<ServerState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let mut inner = state.inner.lock().await;
-    let wf = match inner.get_workflow(&id) {
-        Some(wf) => wf.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(SimpleMessage {
-                    message: format!("workflow not found: {id}"),
-                }),
-            )
-                .into_response()
+    let wf = {
+        let inner = state.inner.lock().await;
+        match inner.get_workflow(&id) {
+            Some(wf) => wf.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(SimpleMessage {
+                        message: format!("workflow not found: {id}"),
+                    }),
+                )
+                    .into_response()
+            }
         }
     };
 
@@ -220,22 +222,7 @@ async fn run_next(
         }
     };
 
-    let stage = match wf.stage_by_name(&next_stage.name) {
-        Some(s) => s.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(SimpleMessage {
-                    message: format!("stage not found: {next_stage}"),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    let stage_raw = stage.id.raw.clone();
-    let result = inner.execute_stage(&id, &stage).await;
-    finalize_stage_execution(&state, inner, &id, &stage_raw, result).await
+    run_stage_by_id(&state, &id, &next_stage.name).await
 }
 
 async fn finalize_stage_execution(
@@ -274,11 +261,12 @@ async fn finalize_stage_execution(
     }
 }
 
-async fn run_stage(
-    State(state): State<ServerState>,
-    Path((id, stage_raw)): Path<(String, String)>,
-) -> impl IntoResponse {
-    let sid = match StageId::parse(&stage_raw) {
+async fn run_stage_by_id(
+    state: &ServerState,
+    id: &str,
+    stage_raw: &str,
+) -> axum::response::Response {
+    let sid = match StageId::parse(stage_raw) {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -292,7 +280,7 @@ async fn run_stage(
     };
 
     let mut inner = state.inner.lock().await;
-    let stage = match inner.get_workflow(&id).and_then(|wf| wf.stage_by_id(&sid)) {
+    let stage = match inner.get_workflow(id).and_then(|wf| wf.stage_by_id(&sid)) {
         Some(s) => s.clone(),
         None => {
             return (
@@ -305,8 +293,16 @@ async fn run_stage(
         }
     };
 
-    let result = inner.execute_stage(&id, &stage).await;
-    finalize_stage_execution(&state, inner, &id, &stage_raw, result).await
+    let stage_raw = stage.id.raw.clone();
+    let result = inner.execute_stage(id, &stage).await;
+    finalize_stage_execution(state, inner, id, &stage_raw, result).await
+}
+
+async fn run_stage(
+    State(state): State<ServerState>,
+    Path((id, stage_raw)): Path<(String, String)>,
+) -> impl IntoResponse {
+    run_stage_by_id(&state, &id, &stage_raw).await
 }
 
 async fn approve(
@@ -432,18 +428,17 @@ async fn read_stage_file(
     }
 }
 
-async fn read_output(
+async fn read_stage_file_route(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
+    OriginalUri(uri): OriginalUri,
 ) -> impl IntoResponse {
-    read_stage_file(&state, &id, &stage_raw, "result.md", "output not available".into()).await
-}
-
-async fn read_reasoning(
-    State(state): State<ServerState>,
-    Path((id, stage_raw)): Path<(String, String)>,
-) -> impl IntoResponse {
-    read_stage_file(&state, &id, &stage_raw, "reasoning.md", "reasoning not available".into()).await
+    let (filename, not_found_msg) = if uri.path().contains("/reasoning/") {
+        ("reasoning.md", "reasoning not available")
+    } else {
+        ("result.md", "output not available")
+    };
+    read_stage_file(&state, &id, &stage_raw, filename, not_found_msg.into()).await
 }
 
 

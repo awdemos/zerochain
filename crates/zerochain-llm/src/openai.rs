@@ -81,16 +81,15 @@ pub struct OpenAICompatibleProvider {
 }
 
 impl OpenAICompatibleProvider {
-    pub fn new(base_url: String, api_key: String) -> Self {
+    pub fn new(base_url: String, api_key: String) -> Result<Self, crate::error::LLMError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("failed to build reqwest client");
-        Self {
+            .build()?;
+        Ok(Self {
             base_url,
             api_key,
             client,
-        }
+        })
     }
 
     fn role_str(role: &Role) -> &'static str {
