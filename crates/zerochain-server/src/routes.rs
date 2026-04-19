@@ -16,6 +16,7 @@ use zerochain_core::{jj, is_valid_workflow_name};
 
 use crate::auth;
 use crate::state::ServerState;
+use zerochain_daemon::state::InitWorkflowParams;
 
 #[derive(Deserialize)]
 pub struct InitWorkflowRequest {
@@ -127,7 +128,11 @@ async fn init_workflow(
     }
     let mut inner = state.inner.lock().await;
     match inner
-        .init_workflow(None, &body.name, body.template.as_deref())
+        .init_workflow(InitWorkflowParams {
+            name: &body.name,
+            path: None,
+            template: body.template.as_deref(),
+        })
         .await
     {
         Ok(wf) => {

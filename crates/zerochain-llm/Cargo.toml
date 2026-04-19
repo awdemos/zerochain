@@ -8,6 +8,7 @@ description = "LLM provider trait with OpenAI-compatible implementation"
 
 [dependencies]
 zerochain-cas = { path = "../zerochain-cas" }
+zerochain-core = { path = "../zerochain-core" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
