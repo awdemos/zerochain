@@ -3,6 +3,7 @@ name = "zerochain-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Message broker abstraction for cross-pod agent communication"
 
 [dependencies]
