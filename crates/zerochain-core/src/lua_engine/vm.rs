@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn cannot_set_global_to_bypass_sandbox() {
         let lua = sandbox();
-        let result = lua.load(r#"
+        let _result = lua.load(r#"
             _G["io"] = nil
         "#).exec();
         let result2 = lua.load("io.open('/tmp/x')").exec();
@@ -226,7 +226,7 @@ mod tests {
     fn metatable_tampering_does_not_escape() {
         let lua = sandbox();
         // getmetatable("") returns nil in this sandbox — string metatables are protected
-        let result = lua.load(r#"
+        let _result = lua.load(r#"
             local mt = getmetatable("")
             if mt then
                 mt.__index = function(_, key)

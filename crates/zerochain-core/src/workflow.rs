@@ -297,7 +297,7 @@ mod tests {
                 .unwrap();
             tokio::fs::write(
                 stage_dir.join("CONTEXT.md"),
-                format!("---\nrole: {}\n---\n# {name}\n", name),
+                format!("---\nrole: {name}\n---\n# {name}\n"),
             )
             .await
             .unwrap();

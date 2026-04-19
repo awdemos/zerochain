@@ -96,7 +96,9 @@ impl AppState {
                 Ok(wf) => {
                     self.workflows.insert(wf.id.clone(), wf);
                 }
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to load workflow");
+                }
             }
         }
         Ok(())
@@ -479,7 +481,7 @@ impl AppState {
         let base_url = custom_base_url.as_deref()
             .unwrap_or("https://api.openai.com/v1");
 
-        let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+        let _api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
             DaemonError::MissingEnv("OPENAI_API_KEY".into())
         })?;
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
@@ -500,7 +502,6 @@ impl AppState {
         };
 
         let config = LLMConfig::new(provider, &model);
-        std::env::set_var("OPENAI_API_KEY", &api_key);
         LLMFactory::create(&config)
             .map_err(|e| DaemonError::Llm(format!("failed to create LLM provider: {e}")))
     }
@@ -538,5 +539,95 @@ impl AppState {
         }
 
         Ok(parts.join("\n\n"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn app_state_new_empty() {
+        let tmp = TempDir::new().unwrap();
+        let state = AppState::new(tmp.path());
+        assert!(state.workflows.is_empty());
+        assert_eq!(state.workspace_root, tmp.path());
+    }
+
+    #[test]
+    fn workflow_dir_format() {
+        let tmp = TempDir::new().unwrap();
+        let dir = workflow_dir(tmp.path());
+        assert_eq!(dir, tmp.path().join(".zerochain").join("workflows"));
+    }
+
+    #[test]
+    fn parse_thinking_mode_variants() {
+        assert!(matches!(parse_thinking_mode("disabled"), ThinkingMode::Disabled));
+        assert!(matches!(parse_thinking_mode("extended"), ThinkingMode::Extended { .. }));
+        assert!(matches!(
+            parse_thinking_mode("extended:4096"),
+            ThinkingMode::Extended { budget_tokens: 4096 }
+        ));
+        assert!(matches!(parse_thinking_mode("default"), ThinkingMode::Default));
+        assert!(matches!(parse_thinking_mode(""), ThinkingMode::Default));
+    }
+
+    #[tokio::test]
+    async fn init_workflow_creates_stages() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(None, "test-wf", None).await.unwrap();
+        assert_eq!(wf.id, "test-wf");
+        assert_eq!(wf.stages.len(), 3);
+        assert!(state.get_workflow("test-wf").is_some());
+    }
+
+    #[tokio::test]
+    async fn init_workflow_with_custom_template() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(None, "custom", Some("01_a,02_b")).await.unwrap();
+        assert_eq!(wf.stages.len(), 2);
+        assert_eq!(wf.stages[0].id.raw, "01_a");
+        assert_eq!(wf.stages[1].id.raw, "02_b");
+    }
+
+    #[tokio::test]
+    async fn list_workflows_returns_sorted() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        state.init_workflow(None, "beta", None).await.unwrap();
+        state.init_workflow(None, "alpha", None).await.unwrap();
+        let list = state.list_workflows();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].0, "alpha");
+        assert_eq!(list[1].0, "beta");
+    }
+
+    #[tokio::test]
+    async fn mark_stage_complete_creates_marker() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(None, "mark-test", Some("00_spec")).await.unwrap();
+        let stage = &wf.stages[0];
+
+        state.mark_stage_complete("mark-test", &stage.id.raw).await.unwrap();
+
+        assert!(stage.path.join(".complete").exists());
+    }
+
+    #[tokio::test]
+    async fn mark_stage_error_creates_marker() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(None, "err-test", Some("00_spec")).await.unwrap();
+        let stage = &wf.stages[0];
+
+        state.mark_stage_error("err-test", &stage.id.raw, Some("bad output")).await.unwrap();
+
+        let content = tokio::fs::read_to_string(stage.path.join(".error")).await.unwrap();
+        assert_eq!(content, "bad output");
     }
 }
