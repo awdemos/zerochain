@@ -142,8 +142,10 @@ impl AppState {
             return Ok(());
         }
 
-        let mut entries = tokio::fs::read_dir(&dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
+        let mut entries = tokio::fs::read_dir(&dir).await
+            .map_err(|e| DaemonError::io(&dir, e))?;
+        while let Some(entry) = entries.next_entry().await
+            .map_err(|e| DaemonError::io(&dir, e))? {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -239,10 +241,12 @@ impl AppState {
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".complete");
-        tokio::fs::write(&marker, "").await?;
+        tokio::fs::write(&marker, "").await
+            .map_err(|e| DaemonError::io(&marker, e))?;
         let err_marker = stage.path.join(".error");
         if err_marker.exists() {
-            tokio::fs::remove_file(err_marker).await?;
+            tokio::fs::remove_file(&err_marker).await
+                .map_err(|e| DaemonError::io(&err_marker, e))?;
         }
         Ok(())
     }
@@ -262,7 +266,8 @@ impl AppState {
 
         let marker = stage.path.join(".error");
         tokio::fs::write(&marker, feedback.unwrap_or(""))
-            .await?;
+            .await
+            .map_err(|e| DaemonError::io(&marker, e))?;
         Ok(())
     }
 
@@ -444,7 +449,8 @@ impl AppState {
         let lua_script = {
             let lua_path = stage.path.join("CONTEXT.lua");
             if lua_path.exists() {
-                Some(tokio::fs::read_to_string(&lua_path).await?)
+                Some(tokio::fs::read_to_string(&lua_path).await
+                    .map_err(|e| DaemonError::io(&lua_path, e))?)
             } else {
                 None
             }
@@ -604,15 +610,18 @@ impl AppState {
 
         let content = response.content.unwrap_or_default();
 
-        tokio::fs::create_dir_all(&stage.output_path).await?;
+        tokio::fs::create_dir_all(&stage.output_path).await
+            .map_err(|e| DaemonError::io(&stage.output_path, e))?;
 
         let result_path = stage.output_path.join("result.md");
-        tokio::fs::write(&result_path, &content).await?;
+        tokio::fs::write(&result_path, &content).await
+            .map_err(|e| DaemonError::io(&result_path, e))?;
 
         if let Some(ref reasoning) = response.reasoning {
             if stage_ctx.capture_reasoning {
                 let reasoning_path = stage.output_path.join("reasoning.md");
-                tokio::fs::write(&reasoning_path, reasoning).await?;
+                tokio::fs::write(&reasoning_path, reasoning).await
+                    .map_err(|e| DaemonError::io(&reasoning_path, e))?;
                 tracing::info!(
                     stage = %stage.id.raw,
                     path = %reasoning_path.display(),
@@ -779,10 +788,12 @@ impl AppState {
             return Ok(String::new());
         }
 
-        let mut entries = tokio::fs::read_dir(input_path).await?;
+        let mut entries = tokio::fs::read_dir(input_path).await
+            .map_err(|e| DaemonError::io(input_path, e))?;
         let mut parts = Vec::new();
 
-        while let Some(entry) = entries.next_entry().await? {
+        while let Some(entry) = entries.next_entry().await
+            .map_err(|e| DaemonError::io(input_path, e))? {
             let path = entry.path();
             if path.is_file() {
                 match tokio::fs::read_to_string(&path).await {
