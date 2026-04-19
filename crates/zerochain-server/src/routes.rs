@@ -413,7 +413,9 @@ async fn read_stage_file(
                 Ok(content) => content.into_response(),
                 Err(_) => (
                     StatusCode::NOT_FOUND,
-                    not_found_msg,
+                    Json(SimpleMessage {
+                        message: not_found_msg,
+                    }),
                 )
                     .into_response(),
             }
