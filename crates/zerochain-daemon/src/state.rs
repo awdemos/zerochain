@@ -476,14 +476,10 @@ impl AppState {
     fn create_llm(&self) -> Result<Box<dyn LLM>, DaemonError> {
         let provider_name =
             std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
-        let custom_base_url =
-            std::env::var("ZEROCHAIN_BASE_URL").ok();
-        let base_url = custom_base_url.as_deref()
+        let custom_base_url = std::env::var("ZEROCHAIN_BASE_URL").ok();
+        let base_url = custom_base_url
+            .as_deref()
             .unwrap_or("https://api.openai.com/v1");
-
-        let _api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-            DaemonError::MissingEnv("OPENAI_API_KEY".into())
-        })?;
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
 
         let provider = if custom_base_url.is_some() {
