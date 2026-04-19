@@ -2,6 +2,7 @@
 name = "zerochain-fs"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "Copy-on-write filesystem abstraction (Btrfs, APFS, directory fallback)"
 
 [dependencies]

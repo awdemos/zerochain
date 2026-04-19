@@ -2,6 +2,7 @@
 name = "zerochain-server"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "HTTP daemon (zerochaind) for containerized workflow execution with jj audit trail"
 
 [[bin]]
