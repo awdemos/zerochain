@@ -16,9 +16,12 @@ pub struct StageId {
     pub raw: String,
 }
 
+static STAGE_ID_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+static PARALLEL_GROUP_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
 impl StageId {
     pub fn parse(dir_name: &str) -> Result<Self> {
-        let re = regex::Regex::new(r"^(\d+)([a-z]?)_(.+)$").unwrap();
+        let re = STAGE_ID_RE.get_or_init(|| regex::Regex::new(r"^(\d+)([a-z]?)_(.+)$").unwrap());
         let caps = re
             .captures(dir_name)
             .ok_or_else(|| Error::InvalidStageName {
@@ -37,7 +40,7 @@ impl StageId {
     }
 
     pub fn parallel_group(&self) -> Option<String> {
-        let re = regex::Regex::new(r"^\d+([a-z])").unwrap();
+        let re = PARALLEL_GROUP_RE.get_or_init(|| regex::Regex::new(r"^\d+([a-z])").unwrap());
         re.captures(&self.raw).map(|caps| caps[1].to_string())
     }
 

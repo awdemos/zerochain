@@ -222,7 +222,7 @@ async fn run_next(
         }
     };
 
-    run_stage_by_id(&state, &id, &next_stage.name).await
+    run_stage_by_id(&state, &id, &next_stage.raw).await
 }
 
 async fn finalize_stage_execution(
