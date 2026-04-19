@@ -225,7 +225,7 @@ impl JjWorkspace {
 
     pub async fn workspace_size(&self) -> Result<u64> {
         let mut total: u64 = 0;
-        self.dir_size(&self.path, &mut total).await?;
+        Self::dir_size(&self.path, &mut total).await?;
         Ok(total)
     }
 
@@ -273,7 +273,6 @@ impl JjWorkspace {
     }
 
     fn dir_size<'a>(
-        &'a self,
         dir: &'a Path,
         total: &'a mut u64,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
@@ -292,7 +291,7 @@ impl JjWorkspace {
                     source: e,
                 })?;
                 if meta.is_dir() {
-                    self.dir_size(&entry.path(), total).await?;
+                    Self::dir_size(&entry.path(), total).await?;
                 } else {
                     *total += meta.len();
                 }

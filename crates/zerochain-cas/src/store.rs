@@ -148,7 +148,7 @@ async fn list_local(local: &LocalBackend) -> Result<Vec<Cid>> {
         }
     }
 
-    cids.sort_by(|a, b| a.as_hex().cmp(&b.as_hex()));
+    cids.sort_by_key(|a| a.as_hex());
     Ok(cids)
 }
 

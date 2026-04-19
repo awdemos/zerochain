@@ -1,3 +1,5 @@
+//! LLM provider trait with OpenAI-compatible implementation.
+
 pub mod error;
 pub mod factory;
 pub mod openai;

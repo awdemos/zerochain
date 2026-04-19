@@ -14,13 +14,12 @@ impl ProviderProfile for KimiK2Profile {
         config: &LLMConfig,
         ctx: &StageContext,
     ) -> Result<(), LLMError> {
-        if !matches!(ctx.thinking_mode, ThinkingMode::Disabled) {
-            if (config.temperature - 1.0).abs() > f32::EPSILON {
+        if !matches!(ctx.thinking_mode, ThinkingMode::Disabled)
+            && (config.temperature - 1.0).abs() > f32::EPSILON {
                 return Err(LLMError::Config(
                     "Kimi K2.5 thinking mode requires temperature=1.0".into(),
                 ));
             }
-        }
         Ok(())
     }
 

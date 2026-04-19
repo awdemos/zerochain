@@ -145,7 +145,7 @@ impl Workflow {
                     })?;
             }
 
-            let ctx_content = format!("---\nrole: {}\n---\n# {stage_name}\n", stage_name);
+            let ctx_content = format!("---\nrole: {stage_name}\n---\n# {stage_name}\n");
             let ctx_path = stage_dir.join("CONTEXT.md");
             tokio::fs::write(&ctx_path, ctx_content)
                 .await
@@ -184,17 +184,7 @@ impl Workflow {
             })?;
 
         let after_stage = &self.stages[idx];
-        let next_seq = if idx + 1 < self.stages.len() {
-            let cur = after_stage.id.sequence;
-            let next = self.stages[idx + 1].id.sequence;
-            if next > cur {
-                cur
-            } else {
-                cur
-            }
-        } else {
-            after_stage.id.sequence
-        };
+        let next_seq = after_stage.id.sequence;
 
         let new_seq = next_seq + 1;
         let new_raw = format!("{new_seq:02}_{new_stage_name}");
@@ -214,7 +204,7 @@ impl Workflow {
             })?;
         tokio::fs::write(
             new_dir.join("CONTEXT.md"),
-            format!("---\nrole: {}\n---\n# {new_stage_name}\n", new_stage_name),
+            format!("---\nrole: {new_stage_name}\n---\n# {new_stage_name}\n"),
         )
         .await
         .map_err(|e| Error::Io {
