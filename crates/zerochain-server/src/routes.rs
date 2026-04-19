@@ -10,6 +10,7 @@ use zerochain_broker::Broker;
 use zerochain_broker::BrokerMessage;
 use zerochain_cas::Cid;
 use zerochain_core::stage::StageId;
+use zerochain_fs::{acquire_lock, clean_output};
 
 use crate::auth;
 use crate::jj;
@@ -285,7 +286,7 @@ async fn run_stage_by_id(
         }
     };
 
-    let mut inner = state.inner.lock().await;
+    let inner = state.inner.lock().await;
     let stage = match inner.get_workflow(id).and_then(|wf| wf.stage_by_id(&sid)) {
         Some(s) => s.clone(),
         None => {
@@ -300,8 +301,27 @@ async fn run_stage_by_id(
     };
 
     let stage_raw = stage.id.raw.clone();
-    let result = inner.execute_stage(id, &stage).await;
-    finalize_stage_execution(state, inner, id, &stage_raw, result).await
+
+    // Drop the AppState mutex before acquiring the file lock to reduce contention
+    drop(inner);
+
+    match acquire_lock(&stage.path).await {
+        Ok(_guard) => {
+            if let Err(e) = clean_output(&stage.path).await {
+                tracing::warn!(error = %e, path = %stage.path.display(), "failed to clean stage output");
+            }
+            let mut inner = state.inner.lock().await;
+            let result = inner.execute_stage(id, &stage).await;
+            finalize_stage_execution(state, inner, id, &stage_raw, result).await
+        }
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(SimpleMessage {
+                message: format!("stage locked: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn run_stage(
