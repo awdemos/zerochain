@@ -12,8 +12,9 @@ use zerochain_cas::Cid;
 use zerochain_core::stage::StageId;
 use zerochain_fs::{acquire_lock, clean_output};
 
+use zerochain_core::{jj, is_valid_workflow_name};
+
 use crate::auth;
-use crate::jj;
 use crate::state::ServerState;
 
 #[derive(Deserialize)]
@@ -108,14 +109,6 @@ async fn list_workflows(State(state): State<ServerState>) -> impl IntoResponse {
             message: format!("{id}: {status}"),
         })
         .collect::<Vec<_>>())
-}
-
-fn is_valid_workflow_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
 async fn init_workflow(

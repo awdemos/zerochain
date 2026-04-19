@@ -311,6 +311,91 @@ impl JjWorkspace {
     }
 }
 
+// ── Sync convenience functions for non-async callers ──
+
+use std::process::Command;
+
+/// Initialize a jj repo at `workspace` if one doesn't already exist.
+/// Returns `true` on success (or already initialized), `false` on failure.
+pub fn init_repo(workspace: &Path) -> bool {
+    let jj_dir = workspace.join(".jj");
+    if jj_dir.exists() {
+        tracing::debug!("jj repo already initialized");
+        return true;
+    }
+
+    let result = Command::new("jj")
+        .args(["init", "--git"])
+        .current_dir(workspace)
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            if let Err(e) = Command::new("jj")
+                .args(["config", "set", "user.name", "zerochain"])
+                .current_dir(workspace)
+                .output()
+            {
+                tracing::warn!(error = %e, "failed to set jj user.name");
+            }
+            if let Err(e) = Command::new("jj")
+                .args(["config", "set", "user.email", "zerochain@daemon"])
+                .current_dir(workspace)
+                .output()
+            {
+                tracing::warn!(error = %e, "failed to set jj user.email");
+            }
+            tracing::debug!("jj repo initialized");
+            true
+        }
+        Ok(output) => {
+            tracing::warn!(
+                stderr = %String::from_utf8_lossy(&output.stderr),
+                "jj init failed"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::debug!("jj not available: {e}");
+            false
+        }
+    }
+}
+
+/// Commit current changes with the given message.
+pub fn auto_commit(workspace: &Path, message: &str) {
+    let result = Command::new("jj")
+        .args(["commit", "-m", message])
+        .current_dir(workspace)
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            tracing::debug!(message, "jj auto-commit");
+        }
+        Ok(output) => {
+            tracing::warn!(
+                stderr = %String::from_utf8_lossy(&output.stderr),
+                message,
+                "jj commit failed"
+            );
+        }
+        Err(e) => {
+            tracing::debug!("jj not available for commit: {e}");
+        }
+    }
+}
+
+/// Commit with a stage-complete message.
+pub fn commit_stage_complete(workspace: &Path, workflow_id: &str, stage_raw: &str) {
+    auto_commit(workspace, &format!("stage {stage_raw} complete: {workflow_id}"));
+}
+
+/// Commit with a stage-error message.
+pub fn commit_stage_error(workspace: &Path, workflow_id: &str, stage_raw: &str) {
+    auto_commit(workspace, &format!("stage {stage_raw} error: {workflow_id}"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +417,17 @@ mod tests {
         };
         assert_eq!(entry.change_id, "abc123");
         assert_eq!(entry.commit_id, Some("def456".to_string()));
+    }
+
+    #[test]
+    fn commit_message_format() {
+        let msg = format!("stage {} complete: {}", "00_spec", "my-workflow");
+        assert_eq!(msg, "stage 00_spec complete: my-workflow");
+    }
+
+    #[test]
+    fn dag_mutation_message() {
+        let msg = format!("dag: {} {}", "inserted", "01b_review");
+        assert_eq!(msg, "dag: inserted 01b_review");
     }
 }

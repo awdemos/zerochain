@@ -5,6 +5,14 @@ use crate::plan::ExecutionPlan;
 use crate::stage::{Stage, StageId};
 use crate::task::Task;
 
+pub fn is_valid_workflow_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Workflow {
