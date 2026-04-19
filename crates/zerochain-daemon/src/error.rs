@@ -48,19 +48,9 @@ pub enum DaemonError {
 }
 
 impl DaemonError {
-    /// Create an I/O error with the given path.
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
-            source,
-        }
-    }
-}
-
-impl From<std::io::Error> for DaemonError {
-    fn from(source: std::io::Error) -> Self {
-        Self::Io {
-            path: PathBuf::from("<unknown>"),
             source,
         }
     }
