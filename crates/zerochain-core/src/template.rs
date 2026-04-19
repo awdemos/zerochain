@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::context::Context;
+use crate::stage::StageId;
 
 #[derive(Debug, Clone)]
 pub struct StageDef {
@@ -7,6 +10,10 @@ pub struct StageDef {
     pub role: String,
     pub body: String,
     pub human_gate: bool,
+    /// Source directory for filesystem-tree templates.
+    /// When set, the stage content comes from copying this directory
+    /// instead of generating from inline fields.
+    pub source_dir: Option<PathBuf>,
 }
 
 impl StageDef {
@@ -26,11 +33,22 @@ pub struct Template {
     pub name: String,
     pub description: String,
     pub stages: Vec<StageDef>,
+    /// Root directory for filesystem-tree templates.
+    /// When set, stage directories can be copied directly during workflow init.
+    pub source_root: Option<PathBuf>,
 }
 
 impl Template {
     pub fn stage_names(&self) -> Vec<String> {
         self.stages.iter().map(|s| s.name.clone()).collect()
+    }
+
+    /// Returns the source directory for a given stage name, if this is a
+    /// filesystem-tree template.
+    pub fn stage_source_dir(&self, stage_name: &str) -> Option<&Path> {
+        self.stages.iter().find(|s| s.name == stage_name).and_then(|s| {
+            s.source_dir.as_deref()
+        })
     }
 }
 
@@ -43,11 +61,13 @@ pub struct TemplateRegistry {
 struct TemplateToml {
     name: String,
     description: String,
+    #[serde(default)]
     stages: HashMap<String, StageToml>,
 }
 
 #[derive(Debug, serde::Deserialize)]
 struct StageToml {
+    #[serde(default)]
     role: String,
     #[serde(default)]
     human_gate: bool,
@@ -72,6 +92,107 @@ impl TemplateRegistry {
         list
     }
 
+    /// Load templates from a filesystem-tree layout.
+    ///
+    /// Each template is a directory containing `template.toml` (metadata)
+    /// and subdirectories matching the `NN_name` stage pattern, each
+    /// containing a `CONTEXT.md` file. Stage content comes directly
+    /// from the CONTEXT.md files — no inline body strings needed.
+    ///
+    /// Directory layout:
+    /// ```text
+    /// templates/
+    ///   code-review/
+    ///     template.toml          # name + description only
+    ///     00_spec/
+    ///       CONTEXT.md           # role + body in native format
+    ///     01_review/
+    ///       CONTEXT.md
+    ///     02_report/
+    ///       CONTEXT.md
+    /// ```
+    pub fn load_from_tree(&mut self, dir: &Path) -> Result<(), LoadFromDirError> {
+        if !dir.is_dir() {
+            return Err(LoadFromDirError::NotADirectory(dir.to_path_buf()));
+        }
+        let entries = std::fs::read_dir(dir).map_err(LoadFromDirError::Io)?;
+        for entry in entries {
+            let entry = entry.map_err(LoadFromDirError::Io)?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let manifest = path.join("template.toml");
+            if !manifest.exists() {
+                continue;
+            }
+
+            let raw = std::fs::read_to_string(&manifest).map_err(LoadFromDirError::Io)?;
+            let parsed: TemplateToml =
+                toml::from_str(&raw).map_err(|e| LoadFromDirError::Parse {
+                    path: manifest.clone(),
+                    source: e,
+                })?;
+
+            let mut stages = Vec::new();
+            let stage_entries = std::fs::read_dir(&path).map_err(LoadFromDirError::Io)?;
+            for stage_entry in stage_entries {
+                let stage_entry = stage_entry.map_err(LoadFromDirError::Io)?;
+                let stage_path = stage_entry.path();
+                if !stage_path.is_dir() {
+                    continue;
+                }
+                let dir_name = match stage_entry.file_name().to_str() {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                let sid = match StageId::parse(&dir_name) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+
+                let context_path = stage_path.join("CONTEXT.md");
+                let (role, body, human_gate) = if context_path.exists() {
+                    let content = std::fs::read_to_string(&context_path)
+                        .map_err(LoadFromDirError::Io)?;
+                    match Context::parse(&content) {
+                        Ok(ctx) => (
+                            ctx.frontmatter.role.unwrap_or_default(),
+                            ctx.body,
+                            ctx.frontmatter.human_gate,
+                        ),
+                        Err(_) => (String::new(), String::new(), false),
+                    }
+                } else {
+                    (String::new(), String::new(), false)
+                };
+
+                stages.push(StageDef {
+                    name: sid.raw,
+                    role,
+                    body,
+                    human_gate,
+                    source_dir: Some(stage_path),
+                });
+            }
+
+            stages.sort_by(|a, b| a.name.cmp(&b.name));
+
+            self.register(Template {
+                name: parsed.name,
+                description: parsed.description,
+                stages,
+                source_root: Some(path),
+            });
+        }
+        Ok(())
+    }
+
+    /// Load templates from a directory, auto-detecting tree vs legacy layout.
+    ///
+    /// If a template directory contains `NN_name` subdirectories with
+    /// `CONTEXT.md` files, it is loaded as a filesystem-tree template.
+    /// Otherwise, inline TOML stage definitions are used.
     pub fn load_from_dir(&mut self, dir: &Path) -> Result<(), LoadFromDirError> {
         if !dir.is_dir() {
             return Err(LoadFromDirError::NotADirectory(dir.to_path_buf()));
@@ -94,23 +215,89 @@ impl TemplateRegistry {
                     source: e,
                 })?;
 
-            let mut stages: Vec<StageDef> = parsed
-                .stages
-                .into_iter()
-                .map(|(name, s)| StageDef {
-                    name,
-                    role: s.role,
-                    body: s.body,
-                    human_gate: s.human_gate,
-                })
-                .collect();
-            stages.sort_by(|a, b| a.name.cmp(&b.name));
+            let has_tree_stages = std::fs::read_dir(&path)
+                .map_err(LoadFromDirError::Io)?
+                .filter_map(|e| e.ok())
+                .any(|e| {
+                    e.path().is_dir() &&
+                    e.file_name().to_str().map(|n| StageId::parse(n).is_ok()).unwrap_or(false)
+                });
 
-            self.register(Template {
-                name: parsed.name,
-                description: parsed.description,
-                stages,
-            });
+            if has_tree_stages {
+                let template_dir = path.clone();
+                let name = parsed.name.clone();
+                let description = parsed.description.clone();
+
+                let mut stages = Vec::new();
+                let stage_entries = std::fs::read_dir(&template_dir).map_err(LoadFromDirError::Io)?;
+                for stage_entry in stage_entries {
+                    let stage_entry = stage_entry.map_err(LoadFromDirError::Io)?;
+                    let stage_path = stage_entry.path();
+                    if !stage_path.is_dir() {
+                        continue;
+                    }
+                    let dir_name = match stage_entry.file_name().to_str() {
+                        Some(n) => n.to_string(),
+                        None => continue,
+                    };
+                    let sid = match StageId::parse(&dir_name) {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+
+                    let context_path = stage_path.join("CONTEXT.md");
+                    let (role, body, human_gate) = if context_path.exists() {
+                        let content = std::fs::read_to_string(&context_path)
+                            .map_err(LoadFromDirError::Io)?;
+                        match Context::parse(&content) {
+                            Ok(ctx) => (
+                                ctx.frontmatter.role.unwrap_or_default(),
+                                ctx.body,
+                                ctx.frontmatter.human_gate,
+                            ),
+                            Err(_) => (String::new(), String::new(), false),
+                        }
+                    } else {
+                        (String::new(), String::new(), false)
+                    };
+
+                    stages.push(StageDef {
+                        name: sid.raw,
+                        role,
+                        body,
+                        human_gate,
+                        source_dir: Some(stage_path),
+                    });
+                }
+
+                stages.sort_by(|a, b| a.name.cmp(&b.name));
+                self.register(Template {
+                    name,
+                    description,
+                    stages,
+                    source_root: Some(template_dir),
+                });
+            } else {
+                let mut stages: Vec<StageDef> = parsed
+                    .stages
+                    .into_iter()
+                    .map(|(name, s)| StageDef {
+                        name,
+                        role: s.role,
+                        body: s.body,
+                        human_gate: s.human_gate,
+                        source_dir: None,
+                    })
+                    .collect();
+                stages.sort_by(|a, b| a.name.cmp(&b.name));
+
+                self.register(Template {
+                    name: parsed.name,
+                    description: parsed.description,
+                    stages,
+                    source_root: None,
+                });
+            }
         }
         Ok(())
     }
@@ -131,6 +318,7 @@ impl TemplateRegistry {
                            their responsibilities, and how they interact. Output a summary to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "01_review".into(),
@@ -140,6 +328,7 @@ impl TemplateRegistry {
                            Output findings to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "02_report".into(),
@@ -148,8 +337,10 @@ impl TemplateRegistry {
                            Prioritize issues by severity. Output the report to result.md."
                         .into(),
                     human_gate: true,
+                    source_dir: None,
                 },
             ],
+            source_root: None,
         });
 
         self.register(Template {
@@ -163,6 +354,7 @@ impl TemplateRegistry {
                            and identify what information is needed. Output the analysis plan to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "01_research".into(),
@@ -171,6 +363,7 @@ impl TemplateRegistry {
                            note sources, and identify patterns. Output raw findings to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "02_synthesize".into(),
@@ -179,8 +372,10 @@ impl TemplateRegistry {
                            question. Highlight key insights and remaining uncertainties. Output to result.md."
                         .into(),
                     human_gate: true,
+                    source_dir: None,
                 },
             ],
+            source_root: None,
         });
 
         self.register(Template {
@@ -194,6 +389,7 @@ impl TemplateRegistry {
                            edge cases, and constraints. Output the specification to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "01_design".into(),
@@ -203,6 +399,7 @@ impl TemplateRegistry {
                            Output the design document to result.md."
                         .into(),
                     human_gate: true,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "02_implement".into(),
@@ -212,6 +409,7 @@ impl TemplateRegistry {
                            Output the implementation to result.md."
                         .into(),
                     human_gate: false,
+                    source_dir: None,
                 },
                 StageDef {
                     name: "03_verify".into(),
@@ -221,8 +419,10 @@ impl TemplateRegistry {
                            report to result.md."
                         .into(),
                     human_gate: true,
+                    source_dir: None,
                 },
             ],
+            source_root: None,
         });
     }
 }
@@ -305,6 +505,7 @@ mod tests {
             role: "analyst".into(),
             body: "Do the thing.".into(),
             human_gate: false,
+            source_dir: None,
         };
         let md = stage.to_context_md();
         assert!(md.starts_with("---\nrole: analyst\n---"));
@@ -319,6 +520,7 @@ mod tests {
             role: "writer".into(),
             body: "Write report.".into(),
             human_gate: true,
+            source_dir: None,
         };
         let md = stage.to_context_md();
         assert!(md.contains("human_gate: true"));
@@ -331,6 +533,7 @@ mod tests {
             role: "tester".into(),
             body: "Test things.".into(),
             human_gate: false,
+            source_dir: None,
         };
         let md = stage.to_context_md();
         assert!(md.ends_with("Test things.\n"));
@@ -462,6 +665,140 @@ body = "Middle step."
         assert_eq!(
             tpl.stage_names(),
             vec!["00_first", "01_middle", "02_second"]
+        );
+    }
+
+    #[test]
+    fn load_from_tree_reads_context_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("tree-test");
+        let stage_dir = tpl_dir.join("00_analyze");
+        std::fs::create_dir_all(&stage_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            "name = \"tree-test\"\ndescription = \"tree based template\"",
+        )
+        .unwrap();
+        std::fs::write(
+            stage_dir.join("CONTEXT.md"),
+            "---\nrole: analyst\n---\n\nAnalyze the input.\n",
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_tree(dir.path()).unwrap();
+
+        let tpl = reg.get("tree-test").expect("tree-test should be loaded");
+        assert_eq!(tpl.description, "tree based template");
+        assert_eq!(tpl.stages.len(), 1);
+        assert_eq!(tpl.stages[0].name, "00_analyze");
+        assert_eq!(tpl.stages[0].role, "analyst");
+        assert_eq!(tpl.stages[0].body, "Analyze the input.\n");
+        assert!(tpl.stages[0].source_dir.is_some());
+        assert!(tpl.source_root.is_some());
+    }
+
+    #[test]
+    fn load_from_tree_human_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("gated");
+        let stage_dir = tpl_dir.join("00_review");
+        std::fs::create_dir_all(&stage_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            "name = \"gated\"\ndescription = \"has human gate\"",
+        )
+        .unwrap();
+        std::fs::write(
+            stage_dir.join("CONTEXT.md"),
+            "---\nrole: reviewer\nhuman_gate: true\n---\n\nReview things.\n",
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_tree(dir.path()).unwrap();
+
+        let tpl = reg.get("gated").unwrap();
+        assert!(tpl.stages[0].human_gate);
+    }
+
+    #[test]
+    fn load_from_dir_auto_detects_tree_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("auto-tree");
+        let stage_dir = tpl_dir.join("00_step");
+        std::fs::create_dir_all(&stage_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            "name = \"auto-tree\"\ndescription = \"auto detected\"",
+        )
+        .unwrap();
+        std::fs::write(
+            stage_dir.join("CONTEXT.md"),
+            "---\nrole: worker\n---\n\nDo work.\n",
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_dir(dir.path()).unwrap();
+
+        let tpl = reg.get("auto-tree").unwrap();
+        assert!(tpl.stages[0].source_dir.is_some(), "should detect tree layout");
+        assert!(tpl.source_root.is_some());
+    }
+
+    #[test]
+    fn stage_source_dir_returns_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("srcdir-test");
+        let stage_dir = tpl_dir.join("00_work");
+        std::fs::create_dir_all(&stage_dir).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            "name = \"srcdir-test\"\ndescription = \"source dir test\"",
+        )
+        .unwrap();
+        std::fs::write(
+            stage_dir.join("CONTEXT.md"),
+            "---\nrole: bot\n---\n\nWork.\n",
+        )
+        .unwrap();
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_tree(dir.path()).unwrap();
+
+        let tpl = reg.get("srcdir-test").unwrap();
+        assert!(tpl.stage_source_dir("00_work").is_some());
+        assert!(tpl.stage_source_dir("nonexistent").is_none());
+    }
+
+    #[test]
+    fn load_from_tree_multiple_stages_sorted() {
+        let dir = tempfile::tempdir().unwrap();
+        let tpl_dir = dir.path().join("multi");
+        std::fs::create_dir_all(tpl_dir.join("02_last")).unwrap();
+        std::fs::create_dir_all(tpl_dir.join("00_first")).unwrap();
+        std::fs::create_dir_all(tpl_dir.join("01_mid")).unwrap();
+        std::fs::write(
+            tpl_dir.join("template.toml"),
+            "name = \"multi\"\ndescription = \"multi stage\"",
+        )
+        .unwrap();
+        for (name, role) in [("00_first", "a"), ("01_mid", "b"), ("02_last", "c")] {
+            std::fs::write(
+                tpl_dir.join(name).join("CONTEXT.md"),
+                format!("---\nrole: {role}\n---\n\n{role} body.\n"),
+            )
+            .unwrap();
+        }
+
+        let mut reg = TemplateRegistry::new();
+        reg.load_from_tree(dir.path()).unwrap();
+
+        let tpl = reg.get("multi").unwrap();
+        assert_eq!(
+            tpl.stage_names(),
+            vec!["00_first", "01_mid", "02_last"]
         );
     }
 }

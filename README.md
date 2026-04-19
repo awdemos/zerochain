@@ -160,7 +160,7 @@ The module mounts cargo cache volumes for incremental builds, so repeated runs a
 - [ ] Btrfs copy-on-write snapshots (zero-copy isolation)
 - [ ] OpenCode TypeScript plugin
 - [x] Dagger CI module
-- [ ] Template registry for common workflow patterns
+- [x] Template registry for common workflow patterns
 
 ---
 

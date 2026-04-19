@@ -15,6 +15,13 @@ use zerochain_llm::{
 };
 
 
+pub struct InitWorkflowParams<'a> {
+    pub name: &'a str,
+    pub path: Option<&'a Path>,
+    pub template: Option<&'a str>,
+}
+
+
 pub struct AppState {
     pub workspace_root: PathBuf,
     pub workflows: HashMap<String, Workflow>,
@@ -86,8 +93,10 @@ impl AppState {
             return Ok(());
         }
 
-        let mut entries = tokio::fs::read_dir(&dir).await?;
-        while let Some(entry) = entries.next_entry().await? {
+        let mut entries = tokio::fs::read_dir(&dir).await
+            .map_err(|e| DaemonError::io(&dir, e))?;
+        while let Some(entry) = entries.next_entry().await
+            .map_err(|e| DaemonError::io(&dir, e))? {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
@@ -122,17 +131,23 @@ impl AppState {
 
     pub async fn init_workflow(
         &mut self,
-        path: Option<&Path>,
-        name: &str,
-        template: Option<&str>,
+        params: InitWorkflowParams<'_>,
     ) -> Result<Workflow, DaemonError> {
+        let InitWorkflowParams { name, path, template } = params;
         let base = path.unwrap_or(&self.workspace_root);
         let wf_base = workflow_dir(base);
         tokio::fs::create_dir_all(&wf_base)
             .await
             .map_err(|e| DaemonError::io(&wf_base, e))?;
 
-        let registry = zerochain_core::template::TemplateRegistry::new();
+        let mut registry = zerochain_core::template::TemplateRegistry::new();
+        let builtin_template_dir = self.workspace_root.join("templates");
+        if builtin_template_dir.is_dir() {
+            if let Err(e) = registry.load_from_dir(&builtin_template_dir) {
+                tracing::debug!(error = %e, "no builtin templates directory");
+            }
+        }
+
         let named_template = template.and_then(|t| registry.get(t));
 
         let (stage_names, stage_defs): (Vec<String>, Option<&Vec<zerochain_core::template::StageDef>>) = if let Some(tpl) = named_template {
@@ -160,10 +175,16 @@ impl AppState {
 
         if let Some(defs) = stage_defs {
             for def in defs {
-                let ctx_path = workflow.root.join(&def.name).join("CONTEXT.md");
-                tokio::fs::write(&ctx_path, def.to_context_md())
-                    .await
-                    .map_err(|e| DaemonError::io(&ctx_path, e))?;
+                let stage_dir = workflow.root.join(&def.name);
+                let ctx_path = stage_dir.join("CONTEXT.md");
+
+                if let Some(ref src_dir) = def.source_dir {
+                    copy_tree_stage(src_dir, &stage_dir).await?;
+                } else {
+                    tokio::fs::write(&ctx_path, def.to_context_md())
+                        .await
+                        .map_err(|e| DaemonError::io(&ctx_path, e))?;
+                }
             }
         }
 
@@ -184,10 +205,12 @@ impl AppState {
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".complete");
-        tokio::fs::write(&marker, "").await?;
+        tokio::fs::write(&marker, "").await
+            .map_err(|e| DaemonError::io(&marker, e))?;
         let err_marker = stage.path.join(".error");
         if err_marker.exists() {
-            tokio::fs::remove_file(err_marker).await?;
+            tokio::fs::remove_file(&err_marker).await
+                .map_err(|e| DaemonError::io(&err_marker, e))?;
         }
         Ok(())
     }
@@ -207,7 +230,8 @@ impl AppState {
 
         let marker = stage.path.join(".error");
         tokio::fs::write(&marker, feedback.unwrap_or(""))
-            .await?;
+            .await
+            .map_err(|e| DaemonError::io(&marker, e))?;
         Ok(())
     }
 
@@ -250,7 +274,8 @@ impl AppState {
         let lua_script = {
             let lua_path = stage.path.join("CONTEXT.lua");
             if lua_path.exists() {
-                Some(tokio::fs::read_to_string(&lua_path).await?)
+                Some(tokio::fs::read_to_string(&lua_path).await
+                    .map_err(|e| DaemonError::io(&lua_path, e))?)
             } else {
                 None
             }
@@ -402,15 +427,18 @@ impl AppState {
 
         let content = response.content.unwrap_or_default();
 
-        tokio::fs::create_dir_all(&stage.output_path).await?;
+        tokio::fs::create_dir_all(&stage.output_path).await
+            .map_err(|e| DaemonError::io(&stage.output_path, e))?;
 
         let result_path = stage.output_path.join("result.md");
-        tokio::fs::write(&result_path, &content).await?;
+        tokio::fs::write(&result_path, &content).await
+            .map_err(|e| DaemonError::io(&result_path, e))?;
 
         if let Some(ref reasoning) = response.reasoning {
             if stage_ctx.capture_reasoning {
                 let reasoning_path = stage.output_path.join("reasoning.md");
-                tokio::fs::write(&reasoning_path, reasoning).await?;
+                tokio::fs::write(&reasoning_path, reasoning).await
+                    .map_err(|e| DaemonError::io(&reasoning_path, e))?;
                 tracing::info!(
                     stage = %stage.id.raw,
                     path = %reasoning_path.display(),
@@ -504,10 +532,12 @@ impl AppState {
             return Ok(String::new());
         }
 
-        let mut entries = tokio::fs::read_dir(input_path).await?;
+        let mut entries = tokio::fs::read_dir(input_path).await
+            .map_err(|e| DaemonError::io(input_path, e))?;
         let mut parts = Vec::new();
 
-        while let Some(entry) = entries.next_entry().await? {
+        while let Some(entry) = entries.next_entry().await
+            .map_err(|e| DaemonError::io(input_path, e))? {
             let path = entry.path();
             if path.is_file() {
                 match tokio::fs::read_to_string(&path).await {
@@ -533,6 +563,34 @@ impl AppState {
 
         Ok(parts.join("\n\n"))
     }
+}
+
+fn copy_tree_stage<'a>(
+    src: &'a Path,
+    dst: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DaemonError>> + Send + 'a>> {
+    Box::pin(async move {
+        let mut entries = tokio::fs::read_dir(src).await.map_err(|e| DaemonError::io(src, e))?;
+        while let Some(entry) = entries.next_entry().await.map_err(|e| DaemonError::io(src, e))? {
+            let file_name = entry.file_name();
+            let src_path = entry.path();
+            let dst_path = dst.join(&file_name);
+
+            let file_type = entry.file_type().await.map_err(|e| DaemonError::io(&src_path, e))?;
+
+            if file_type.is_dir() {
+                tokio::fs::create_dir_all(&dst_path)
+                    .await
+                    .map_err(|e| DaemonError::io(&dst_path, e))?;
+                copy_tree_stage(&src_path, &dst_path).await?;
+            } else if file_type.is_file() {
+                tokio::fs::copy(&src_path, &dst_path)
+                    .await
+                    .map_err(|e| DaemonError::io(&src_path, e))?;
+            }
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -571,7 +629,7 @@ mod tests {
     async fn init_workflow_creates_stages() {
         let tmp = TempDir::new().unwrap();
         let mut state = AppState::new(tmp.path());
-        let wf = state.init_workflow(None, "test-wf", None).await.unwrap();
+        let wf = state.init_workflow(InitWorkflowParams { name: "test-wf", path: None, template: None }).await.unwrap();
         assert_eq!(wf.id, "test-wf");
         assert_eq!(wf.stages.len(), 3);
         assert!(state.get_workflow("test-wf").is_some());
@@ -581,7 +639,7 @@ mod tests {
     async fn init_workflow_with_custom_template() {
         let tmp = TempDir::new().unwrap();
         let mut state = AppState::new(tmp.path());
-        let wf = state.init_workflow(None, "custom", Some("01_a,02_b")).await.unwrap();
+        let wf = state.init_workflow(InitWorkflowParams { name: "custom", path: None, template: Some("01_a,02_b") }).await.unwrap();
         assert_eq!(wf.stages.len(), 2);
         assert_eq!(wf.stages[0].id.raw, "01_a");
         assert_eq!(wf.stages[1].id.raw, "02_b");
@@ -591,8 +649,8 @@ mod tests {
     async fn list_workflows_returns_sorted() {
         let tmp = TempDir::new().unwrap();
         let mut state = AppState::new(tmp.path());
-        state.init_workflow(None, "beta", None).await.unwrap();
-        state.init_workflow(None, "alpha", None).await.unwrap();
+        state.init_workflow(InitWorkflowParams { name: "beta", path: None, template: None }).await.unwrap();
+        state.init_workflow(InitWorkflowParams { name: "alpha", path: None, template: None }).await.unwrap();
         let list = state.list_workflows();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].0, "alpha");
@@ -603,7 +661,7 @@ mod tests {
     async fn mark_stage_complete_creates_marker() {
         let tmp = TempDir::new().unwrap();
         let mut state = AppState::new(tmp.path());
-        let wf = state.init_workflow(None, "mark-test", Some("00_spec")).await.unwrap();
+        let wf = state.init_workflow(InitWorkflowParams { name: "mark-test", path: None, template: Some("00_spec") }).await.unwrap();
         let stage = &wf.stages[0];
 
         state.mark_stage_complete("mark-test", &stage.id.raw).await.unwrap();
@@ -615,7 +673,7 @@ mod tests {
     async fn mark_stage_error_creates_marker() {
         let tmp = TempDir::new().unwrap();
         let mut state = AppState::new(tmp.path());
-        let wf = state.init_workflow(None, "err-test", Some("00_spec")).await.unwrap();
+        let wf = state.init_workflow(InitWorkflowParams { name: "err-test", path: None, template: Some("00_spec") }).await.unwrap();
         let stage = &wf.stages[0];
 
         state.mark_stage_error("err-test", &stage.id.raw, Some("bad output")).await.unwrap();
