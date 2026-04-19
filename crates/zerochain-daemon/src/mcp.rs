@@ -9,6 +9,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
+use zerochain_core::is_valid_workflow_name;
+
 use crate::{state::AppState, DaemonError};
 
 pub struct ZerochainMcpServer {
@@ -77,14 +79,6 @@ fn ok(text: String) -> rmcp::model::CallToolResult {
 
 fn err_result(msg: String) -> rmcp::model::CallToolResult {
     rmcp::model::CallToolResult::error(vec![Content::text(msg)])
-}
-
-fn is_valid_workflow_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 128
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
 #[tool_router]

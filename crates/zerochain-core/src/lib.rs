@@ -21,4 +21,4 @@ pub use plan::{ExecutionPlan, StageGroup, StageNode, StageState};
 pub use stage::{Stage, StageId};
 pub use task::{Task, TaskExecution};
 pub use template::{StageDef, Template, TemplateRegistry};
-pub use workflow::Workflow;
+pub use workflow::{Workflow, is_valid_workflow_name};
