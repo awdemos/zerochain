@@ -36,6 +36,11 @@ spec:
                 secretKeyRef:
                   name: zerochain-secrets
                   key: OPENAI_API_KEY
+            - name: ZEROCHAIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zerochain-secrets
+                  key: ZEROCHAIN_API_KEY
             - name: ZEROCHAIN_CAS_S3_BUCKET
               valueFrom:
                 secretKeyRef:

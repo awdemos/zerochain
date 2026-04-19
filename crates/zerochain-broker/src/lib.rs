@@ -46,6 +46,32 @@ impl BrokerMessage {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zerochain_cas::Cid;
+
+    fn dummy_cid() -> Cid {
+        Cid::from_bytes(b"test")
+    }
+
+    #[test]
+    fn broker_message_new() {
+        let msg = BrokerMessage::new("wf-1", "stage-a", "stage-b", dummy_cid());
+        assert_eq!(msg.workflow_id, "wf-1");
+        assert_eq!(msg.from_stage, "stage-a");
+        assert_eq!(msg.to_stage, "stage-b");
+        assert!(msg.metadata.is_null());
+    }
+
+    #[test]
+    fn broker_message_with_metadata() {
+        let msg = BrokerMessage::new("wf-1", "a", "b", dummy_cid())
+            .with_metadata(serde_json::json!({"priority": 1}));
+        assert_eq!(msg.metadata["priority"], 1);
+    }
+}
+
 /// Errors that can occur when interacting with the broker.
 #[derive(thiserror::Error, Debug)]
 pub enum BrokerError {

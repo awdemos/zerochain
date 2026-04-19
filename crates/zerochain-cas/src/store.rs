@@ -240,9 +240,9 @@ mod tests {
         let cid2 = store.put(b"bbb").await.unwrap();
         let cid3 = store.put(b"ccc").await.unwrap();
         let mut list = store.list().await.unwrap();
-        list.sort_by(|a, b| a.as_hex().cmp(&b.as_hex()));
+        list.sort_by_key(|a| a.as_hex());
         let mut expected = vec![cid1, cid2, cid3];
-        expected.sort_by(|a, b| a.as_hex().cmp(&b.as_hex()));
+        expected.sort_by_key(|a| a.as_hex());
         assert_eq!(list, expected);
     }
 

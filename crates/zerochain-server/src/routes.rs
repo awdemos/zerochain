@@ -1,6 +1,7 @@
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -10,6 +11,7 @@ use zerochain_broker::BrokerMessage;
 use zerochain_cas::Cid;
 use zerochain_core::stage::StageId;
 
+use crate::auth;
 use crate::jj;
 use crate::state::ServerState;
 
@@ -56,8 +58,7 @@ pub struct ArtifactResponse {
 }
 
 pub fn routes(state: ServerState) -> Router {
-    Router::new()
-        .route("/v1/health", get(health))
+    let protected = Router::new()
         .route("/v1/workflows", get(list_workflows).post(init_workflow))
         .route("/v1/workflows/{id}", get(get_workflow))
         .route("/v1/workflows/{id}/run", post(run_next))
@@ -82,6 +83,14 @@ pub fn routes(state: ServerState) -> Router {
             "/v1/workflows/{id}/stages/{stage}/poll",
             get(poll_prompts),
         )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_api_key,
+        ));
+
+    Router::new()
+        .route("/v1/health", get(health))
+        .merge(protected)
         .with_state(state)
 }
 

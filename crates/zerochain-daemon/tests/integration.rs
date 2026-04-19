@@ -471,7 +471,7 @@ impl LLM for MockLLM {
         let content = if user_input.contains("echo") {
             user_input
         } else if !user_input.is_empty() {
-            format!("MOCK RECEIVED: {}", user_input)
+            format!("MOCK RECEIVED: {user_input}")
         } else {
             self.response_content.clone()
         };

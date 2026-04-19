@@ -83,7 +83,6 @@ pub fn commit_state_change(workspace: &Path, key: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn commit_message_format() {
