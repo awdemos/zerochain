@@ -295,7 +295,7 @@ impl AppState {
             .snapshot(&stage.path, &snap_dir)
             .await
             .map_err(|e| DaemonError::CowSnapshot(format!(
-                "snapshot {} failed: {}", snap_name, e
+                "snapshot {snap_name} failed: {e}"
             )))?;
 
         tracing::info!(
@@ -329,7 +329,7 @@ impl AppState {
 
         let latest = find_latest_snapshot(&snapshots_dir, &stage.id.raw)
             .ok_or_else(|| DaemonError::CowRestore(format!(
-                "no snapshot found for stage {}", stage_id
+                "no snapshot found for stage {stage_id}"
             )))?;
 
         let snap_path = snapshots_dir.join(&latest);
@@ -348,7 +348,7 @@ impl AppState {
         self.cow_backend
             .snapshot(&snap_path, &stage.path)
             .await
-            .map_err(|e| DaemonError::CowRestore(format!("restore failed: {}", e)))?;
+            .map_err(|e| DaemonError::CowRestore(format!("restore failed: {e}")))?;
 
         tracing::info!(stage = %stage.id.raw, "stage restored from snapshot");
         Ok(())
@@ -710,7 +710,7 @@ impl AppState {
 
         tokio::fs::write(stage.output_path.join("result.md"), &result.stdout)
             .await
-            .map_err(|e| DaemonError::io(&stage.output_path.join("result.md"), e))?;
+            .map_err(|e| DaemonError::io(stage.output_path.join("result.md"), e))?;
 
         if !result.stderr.is_empty() {
             let stderr_path = stage.output_path.join("stderr.log");
@@ -825,6 +825,7 @@ fn find_latest_snapshot(snapshots_dir: &Path, stage_id: &str) -> Option<String> 
     candidates.into_iter().last()
 }
 
+#[allow(dead_code)]
 fn copy_tree_stage<'a>(
     src: &'a Path,
     dst: &'a Path,
