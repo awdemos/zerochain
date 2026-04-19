@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::DaemonError;
 
+#[non_exhaustive]
 pub struct ContainerConfig {
     pub image: String,
     pub stage_dir: PathBuf,
@@ -11,6 +12,7 @@ pub struct ContainerConfig {
     pub workspace_root: PathBuf,
 }
 
+#[non_exhaustive]
 pub struct ContainerResult {
     pub exit_code: i32,
     pub stdout: String,
