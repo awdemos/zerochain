@@ -100,7 +100,7 @@ impl StorageBackend for S3Backend {
         let key = Self::key_for(&cid);
 
         // Fast path: already stored
-        if self.exists(&cid).await {
+        if self.exists(&cid).await? {
             return Ok(cid);
         }
 
@@ -153,13 +153,13 @@ impl StorageBackend for S3Backend {
         Ok(Box::new(std::io::Cursor::new(data)))
     }
 
-    async fn exists(&self, cid: &Cid) -> bool {
+    async fn exists(&self, cid: &Cid) -> Result<bool> {
         let key = Self::key_for(cid);
         match self.bucket.head_object(&key).await {
-            Ok((_, code)) => code == 200,
+            Ok((_, code)) => Ok(code == 200),
             Err(e) => {
                 tracing::debug!(cid = %cid, key = %key, error = %e, "S3 head_object failed");
-                false
+                Ok(false)
             }
         }
     }

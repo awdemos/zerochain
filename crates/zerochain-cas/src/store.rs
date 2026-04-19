@@ -60,7 +60,7 @@ impl CasStore {
     }
 
     /// Check whether content exists in the store.
-    pub async fn exists(&self, cid: &Cid) -> bool {
+    pub async fn exists(&self, cid: &Cid) -> Result<bool> {
         self.backend.exists(cid).await
     }
 
@@ -221,9 +221,9 @@ mod tests {
     async fn exists_true_and_false() {
         let (_dir, store) = make_store().await;
         let cid = store.put(b"exists test").await.unwrap();
-        assert!(store.exists(&cid).await);
+        assert!(store.exists(&cid).await.unwrap());
         let fake_cid = Cid::from_bytes(b"nope");
-        assert!(!store.exists(&fake_cid).await);
+        assert!(!store.exists(&fake_cid).await.unwrap());
     }
 
     #[tokio::test]
@@ -250,9 +250,9 @@ mod tests {
     async fn delete_removes_content() {
         let (_dir, store) = make_store().await;
         let cid = store.put(b"to be deleted").await.unwrap();
-        assert!(store.exists(&cid).await);
+        assert!(store.exists(&cid).await.unwrap());
         store.delete(&cid).await.unwrap();
-        assert!(!store.exists(&cid).await);
+        assert!(!store.exists(&cid).await.unwrap());
     }
 
     #[tokio::test]

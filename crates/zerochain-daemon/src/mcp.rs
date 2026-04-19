@@ -79,6 +79,14 @@ fn err_result(msg: String) -> rmcp::model::CallToolResult {
     rmcp::model::CallToolResult::error(vec![Content::text(msg)])
 }
 
+fn is_valid_workflow_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 #[tool_router]
 impl ZerochainMcpServer {
     #[tool(
@@ -89,6 +97,9 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(InitParams { name, template }): rmcp::handler::server::wrapper::Parameters<InitParams>,
     ) -> rmcp::model::CallToolResult {
+        if !is_valid_workflow_name(&name) {
+            return err_result("invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into());
+        }
         let mut state = self.state.lock().await;
         match state.init_workflow(None, &name, template.as_deref()).await {
             Ok(_) => ok(format!("initialized workflow: {name}")),

@@ -633,7 +633,6 @@ async fn send_prompt(
         }
     };
 
-    // Publish broker message
     let subject = format!("zerochain.{id}.{}", body.to_stage);
     let msg = BrokerMessage::new(&id, &stage_raw, &body.to_stage, prompt_cid.clone());
 
