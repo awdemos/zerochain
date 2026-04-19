@@ -252,15 +252,17 @@ impl Workflow {
             if tokio::fs::try_exists(&task_path).await.unwrap_or(false) {
                 match Task::from_file(&task_path).await {
                     Ok(task) => return Ok(Some(task)),
-                    Err(_) => continue,
+                    Err(e) => {
+                        tracing::warn!(path = %task_path.display(), error = %e, "failed to parse task file");
+                    }
                 }
             }
         }
 
-        let mut entries = match tokio::fs::read_dir(path).await {
-            Ok(entries) => entries,
-            Err(_) => return Ok(None),
-        };
+        let mut entries = tokio::fs::read_dir(path).await.map_err(|e| crate::error::Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
         while let Ok(entry) = entries.next_entry().await {
             let Some(entry) = entry else { break };
