@@ -18,10 +18,11 @@ impl LLMFactory {
                 let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
                     LLMError::Config("OPENAI_API_KEY environment variable not set".into())
                 })?;
-                Ok(Box::new(OpenAICompatibleProvider::new(
+                OpenAICompatibleProvider::new(
                     "https://api.openai.com/v1".into(),
                     api_key,
-                )))
+                )
+                .map(|p| Box::new(p) as Box<dyn crate::trait_::LLM>)
             }
             crate::types::ProviderId::OpenAICompatible {
                 base_url,
@@ -30,10 +31,11 @@ impl LLMFactory {
                 let api_key = std::env::var(api_key_env).map_err(|_| {
                     LLMError::Config(format!("environment variable `{api_key_env}` not set"))
                 })?;
-                Ok(Box::new(OpenAICompatibleProvider::new(
+                OpenAICompatibleProvider::new(
                     base_url.clone(),
                     api_key,
-                )))
+                )
+                .map(|p| Box::new(p) as Box<dyn crate::trait_::LLM>)
             }
             crate::types::ProviderId::LocalGGUF { .. } => Err(LLMError::unsupported(
                 "LocalGGUF provider not yet implemented",
