@@ -16,6 +16,7 @@ pub struct ServerState {
     pub workspace: PathBuf,
     pub cas: Option<CasStore>,
     pub broker: Option<MemoryBroker>,
+    pub api_key: Option<String>,
 }
 
 impl ServerState {
@@ -26,6 +27,7 @@ impl ServerState {
             workspace: workspace.to_path_buf(),
             cas: None,
             broker: None,
+            api_key: None,
         }
     }
 
@@ -36,6 +38,12 @@ impl ServerState {
 
     pub fn with_broker(mut self, broker: MemoryBroker) -> Self {
         self.broker = Some(broker);
+        self
+    }
+
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.api_key = if key.is_empty() { None } else { Some(key) };
         self
     }
 

@@ -267,7 +267,7 @@ mod tests {
         let tpl = reg.get("code-review").unwrap();
         assert_eq!(tpl.stages.len(), 3);
         assert_eq!(tpl.stages[0].name, "00_spec");
-        assert_eq!(tpl.stages[2].human_gate, true);
+        assert!(tpl.stages[2].human_gate);
     }
 
     #[test]

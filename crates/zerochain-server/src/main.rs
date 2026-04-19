@@ -25,6 +25,9 @@ struct Cli {
 
     #[arg(long, env = "ZEROCHAIN_BROKER_ENABLED")]
     broker_enabled: bool,
+
+    #[arg(long, env = "ZEROCHAIN_API_KEY")]
+    api_key: Option<String>,
 }
 
 #[tokio::main]
@@ -43,10 +46,14 @@ async fn main() -> Result<()> {
         workspace = %cli.workspace.display(),
         cas_dir = %cli.cas_dir.display(),
         broker_enabled = cli.broker_enabled,
+        auth_enabled = cli.api_key.is_some(),
         "starting zerochaind"
     );
 
     let mut server_state = state::ServerState::new(&cli.workspace);
+    if let Some(key) = cli.api_key {
+        server_state = server_state.with_api_key(key);
+    }
 
     // Initialize CAS backend
     let cas = CasStore::new(cli.cas_dir).await?;

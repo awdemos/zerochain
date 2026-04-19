@@ -455,7 +455,7 @@ mod tests {
         let lock_path = tmp.path().join(".lock");
 
         // Write a lock file with a PID that doesn't exist
-        let stale_content = format!("PID:999999999\nTIMESTAMP:0\n");
+        let stale_content = "PID:999999999\nTIMESTAMP:0\n";
         tokio::fs::write(&lock_path, &stale_content)
             .await
             .unwrap();

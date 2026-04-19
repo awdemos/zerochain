@@ -19,6 +19,11 @@ fn app_from_state(state: &ServerState) -> axum::Router {
     routes::routes(state.clone())
 }
 
+fn app_with_key(workspace: &Path, key: &str) -> axum::Router {
+    let state = ServerState::new(workspace).with_api_key(key);
+    routes::routes(state)
+}
+
 async fn body_string(body: Body) -> String {
     let bytes = body
         .collect()
@@ -614,5 +619,72 @@ mod e2e {
         std::env::remove_var("OPENAI_API_KEY");
         std::env::remove_var("ZEROCHAIN_BASE_URL");
         std::env::remove_var("ZEROCHAIN_MODEL");
+    }
+}
+
+mod auth {
+    use super::*;
+
+    fn make_authed_request(method: &str, uri: &str, body: Option<&str>, key: &str) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {key}"));
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        builder
+            .body(body.map(|b| Body::from(b.to_string())).unwrap_or(Body::empty()))
+            .expect("build request")
+    }
+
+    #[tokio::test]
+    async fn health_always_public() {
+        let tmp = TempDir::new().expect("tempdir");
+        let app = app_with_key(tmp.path(), "secret");
+
+        let req = make_request("GET", "/v1/health", None);
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn missing_key_returns_401() {
+        let tmp = TempDir::new().expect("tempdir");
+        let app = app_with_key(tmp.path(), "secret");
+
+        let req = make_request("GET", "/v1/workflows", None);
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn wrong_key_returns_401() {
+        let tmp = TempDir::new().expect("tempdir");
+        let app = app_with_key(tmp.path(), "secret");
+
+        let req = make_authed_request("GET", "/v1/workflows", None, "wrong");
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn valid_key_allows_access() {
+        let tmp = TempDir::new().expect("tempdir");
+        let app = app_with_key(tmp.path(), "secret");
+
+        let req = make_authed_request("GET", "/v1/workflows", None, "secret");
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn no_key_configured_allows_all() {
+        let tmp = TempDir::new().expect("tempdir");
+        let app = make_app(tmp.path());
+
+        let req = make_request("GET", "/v1/workflows", None);
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
