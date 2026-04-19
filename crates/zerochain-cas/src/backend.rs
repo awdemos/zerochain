@@ -23,7 +23,7 @@ pub trait StorageBackend: Send + Sync {
     async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>>;
 
     /// Check whether content exists in the store.
-    async fn exists(&self, cid: &Cid) -> bool;
+    async fn exists(&self, cid: &Cid) -> Result<bool>;
 }
 
 /// Filesystem-backed content-addressed storage.
@@ -108,7 +108,7 @@ impl StorageBackend for LocalBackend {
         Ok(Box::new(tokio::io::BufReader::new(file)))
     }
 
-    async fn exists(&self, cid: &Cid) -> bool {
-        self.path_for(cid).exists()
+    async fn exists(&self, cid: &Cid) -> Result<bool> {
+        Ok(self.path_for(cid).exists())
     }
 }
