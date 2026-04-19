@@ -42,11 +42,16 @@ pub async fn require_api_key(
         Some(value) if value.starts_with("Bearer ") => {
             let token = &value[7..];
             if constant_time_eq(token, expected) {
+                tracing::debug!(path = %request.uri().path(), "auth succeeded");
                 Ok(next.run(request).await)
             } else {
+                tracing::warn!(path = %request.uri().path(), "auth failed: invalid token");
                 Err(StatusCode::UNAUTHORIZED)
             }
         }
-        _ => Err(StatusCode::UNAUTHORIZED),
+        _ => {
+            tracing::warn!(path = %request.uri().path(), "auth failed: missing or malformed authorization header");
+            Err(StatusCode::UNAUTHORIZED)
+        }
     }
 }
