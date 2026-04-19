@@ -149,19 +149,12 @@ impl AppState {
             (names, None)
         };
 
-        let task = Task::new(
-            name.to_string(),
-            name.to_string(),
-            "todo".into(),
-            None,
-            Some(zerochain_core::task::TaskExecution::new(
+        let task = Task::builder(name, name)
+            .execution(zerochain_core::task::TaskExecution::new(
                 stage_names,
                 Some("sequential".into()),
-            )),
-            vec![],
-            String::new(),
-            None,
-        );
+            ))
+            .build();
 
         let workflow = Workflow::init(&task, &wf_base).await?;
 

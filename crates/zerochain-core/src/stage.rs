@@ -16,32 +16,68 @@ pub struct StageId {
     pub raw: String,
 }
 
-static STAGE_ID_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-static PARALLEL_GROUP_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-
 impl StageId {
     pub fn parse(dir_name: &str) -> Result<Self> {
-        let re = STAGE_ID_RE.get_or_init(|| regex::Regex::new(r"^(\d+)([a-z]?)_(.+)$").unwrap());
-        let caps = re
-            .captures(dir_name)
-            .ok_or_else(|| Error::InvalidStageName {
-                name: dir_name.to_string(),
-            })?;
-
-        let sequence: u32 = caps[1].parse().map_err(|_| Error::InvalidStageName {
+        let underscore_pos = dir_name.find('_').ok_or_else(|| Error::InvalidStageName {
             name: dir_name.to_string(),
         })?;
 
+        let prefix = &dir_name[..underscore_pos];
+        let suffix = &dir_name[underscore_pos + 1..];
+
+        if suffix.is_empty() {
+            return Err(Error::InvalidStageName {
+                name: dir_name.to_string(),
+            });
+        }
+
+        let numeric_end = prefix
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+
+        if numeric_end == 0 {
+            return Err(Error::InvalidStageName {
+                name: dir_name.to_string(),
+            });
+        }
+
+        let sequence: u32 = prefix[..numeric_end]
+            .parse()
+            .map_err(|_| Error::InvalidStageName {
+                name: dir_name.to_string(),
+            })?;
+
+        let letter = &prefix[numeric_end..];
+        if !letter.is_empty()
+            && (letter.len() != 1 || !letter.chars().next().unwrap().is_ascii_lowercase())
+        {
+            return Err(Error::InvalidStageName {
+                name: dir_name.to_string(),
+            });
+        }
+
         Ok(StageId {
             sequence,
-            name: format!("{}{}", &caps[2], &caps[3]),
+            name: format!("{letter}{suffix}"),
             raw: dir_name.to_string(),
         })
     }
 
     pub fn parallel_group(&self) -> Option<String> {
-        let re = PARALLEL_GROUP_RE.get_or_init(|| regex::Regex::new(r"^\d+([a-z])").unwrap());
-        re.captures(&self.raw).map(|caps| caps[1].to_string())
+        let numeric_end = self
+            .raw
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        let rest = &self.raw[numeric_end..];
+        if rest.starts_with('_') {
+            return None;
+        }
+        rest.chars()
+            .next()
+            .filter(|c| c.is_ascii_lowercase())
+            .map(|c| c.to_string())
     }
 
     pub fn sort_key(&self) -> (u32, String) {
