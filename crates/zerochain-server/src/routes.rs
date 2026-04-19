@@ -237,7 +237,9 @@ async fn finalize_stage_execution(
             if let Err(e) = inner.mark_stage_complete(id, stage_raw).await {
                 tracing::warn!(error = %e, "failed to mark stage complete");
             }
-            let _ = inner.reload_workflow(id).await;
+            if let Err(e) = inner.reload_workflow(id).await {
+                tracing::warn!(error = %e, "failed to reload workflow after complete");
+            }
             drop(inner);
             jj::commit_stage_complete(&state.workspace, id, stage_raw);
             Json(SimpleMessage {
@@ -246,8 +248,12 @@ async fn finalize_stage_execution(
             .into_response()
         }
         Err(e) => {
-            let _ = inner.mark_stage_error(id, stage_raw, None).await;
-            let _ = inner.reload_workflow(id).await;
+            if let Err(e2) = inner.mark_stage_error(id, stage_raw, None).await {
+                tracing::warn!(error = %e2, "failed to mark stage error");
+            }
+            if let Err(e2) = inner.reload_workflow(id).await {
+                tracing::warn!(error = %e2, "failed to reload workflow after error");
+            }
             drop(inner);
             jj::commit_stage_error(&state.workspace, id, stage_raw);
             (
