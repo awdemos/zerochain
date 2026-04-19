@@ -139,7 +139,9 @@ impl ZerochainMcpServer {
 
         if let Err(e) = state.execute_stage(&workflow_id, &stage).await {
             let error_marker = stage.path.join(".error");
-            let _ = tokio::fs::write(&error_marker, format!("{e}")).await;
+            if let Err(e2) = tokio::fs::write(&error_marker, format!("{e}")).await {
+                tracing::warn!(path = %error_marker.display(), error = %e2, "failed to write error marker");
+            }
             return err_result(format!("stage execution failed: {e}"));
         }
 
