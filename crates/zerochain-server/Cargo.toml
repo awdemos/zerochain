@@ -13,6 +13,10 @@ path = "src/main.rs"
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+s3 = ["zerochain-cas/s3"]
+
 [dependencies]
 zerochain-core = { path = "../zerochain-core" }
 zerochain-daemon = { path = "../zerochain-daemon" }

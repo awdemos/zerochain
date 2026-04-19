@@ -87,7 +87,11 @@ async fn main() -> Result<()> {
             template,
         } => {
             state
-                .init_workflow(path.as_deref(), &name, template.as_deref())
+                .init_workflow(zerochain_daemon::state::InitWorkflowParams {
+                    name: &name,
+                    path: path.as_deref(),
+                    template: template.as_deref(),
+                })
                 .await?;
             println!("initialized workflow: {name}");
         }
