@@ -100,10 +100,28 @@ async fn list_workflows(State(state): State<ServerState>) -> impl IntoResponse {
         .collect::<Vec<_>>())
 }
 
+fn is_valid_workflow_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 async fn init_workflow(
     State(state): State<ServerState>,
     Json(body): Json<InitWorkflowRequest>,
 ) -> impl IntoResponse {
+    if !is_valid_workflow_name(&body.name) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: "invalid workflow name: must be 1-128 chars, alphanumeric plus -_."
+                    .into(),
+            }),
+        )
+            .into_response();
+    }
     let mut inner = state.inner.lock().await;
     match inner
         .init_workflow(None, &body.name, body.template.as_deref())
@@ -207,24 +225,35 @@ async fn run_next(
     };
 
     let stage_raw = stage.id.raw.clone();
-    match inner.execute_stage(&id, &stage).await {
+    let result = inner.execute_stage(&id, &stage).await;
+    finalize_stage_execution(&state, inner, &id, &stage_raw, result).await
+}
+
+async fn finalize_stage_execution(
+    state: &ServerState,
+    mut inner: tokio::sync::MutexGuard<'_, zerochain_daemon::state::AppState>,
+    id: &str,
+    stage_raw: &str,
+    result: Result<(), zerochain_daemon::error::DaemonError>,
+) -> axum::response::Response {
+    match result {
         Ok(()) => {
-            if let Err(e) = inner.mark_stage_complete(&id, &stage_raw).await {
+            if let Err(e) = inner.mark_stage_complete(id, stage_raw).await {
                 tracing::warn!(error = %e, "failed to mark stage complete");
             }
-            let _ = inner.reload_workflow(&id).await;
+            let _ = inner.reload_workflow(id).await;
             drop(inner);
-            jj::commit_stage_complete(&state.workspace, &id, &stage_raw);
+            jj::commit_stage_complete(&state.workspace, id, stage_raw);
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} complete"),
             })
             .into_response()
         }
         Err(e) => {
-            let _ = inner.mark_stage_error(&id, &stage_raw, None).await;
-            let _ = inner.reload_workflow(&id).await;
+            let _ = inner.mark_stage_error(id, stage_raw, None).await;
+            let _ = inner.reload_workflow(id).await;
             drop(inner);
-            jj::commit_stage_error(&state.workspace, &id, &stage_raw);
+            jj::commit_stage_error(&state.workspace, id, stage_raw);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(SimpleMessage {
@@ -267,39 +296,23 @@ async fn run_stage(
         }
     };
 
-    match inner.execute_stage(&id, &stage).await {
-        Ok(()) => {
-            if let Err(e) = inner.mark_stage_complete(&id, &stage_raw).await {
-                tracing::warn!(error = %e, "failed to mark stage complete");
-            }
-            let _ = inner.reload_workflow(&id).await;
-            drop(inner);
-            jj::commit_stage_complete(&state.workspace, &id, &stage_raw);
-            Json(SimpleMessage {
-                message: format!("stage {stage_raw} complete"),
-            })
-            .into_response()
-        }
-        Err(e) => {
-            let _ = inner.mark_stage_error(&id, &stage_raw, None).await;
-            let _ = inner.reload_workflow(&id).await;
-            drop(inner);
-            jj::commit_stage_error(&state.workspace, &id, &stage_raw);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SimpleMessage {
-                    message: format!("stage {stage_raw} failed: {e}"),
-                }),
-            )
-                .into_response()
-        }
-    }
+    let result = inner.execute_stage(&id, &stage).await;
+    finalize_stage_execution(&state, inner, &id, &stage_raw, result).await
 }
 
 async fn approve(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    if let Err(e) = StageId::parse(&stage_raw) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid stage id: {e}"),
+            }),
+        )
+            .into_response();
+    }
     let mut inner = state.inner.lock().await;
     match inner.mark_stage_complete(&id, &stage_raw).await {
         Ok(()) => {
@@ -328,6 +341,15 @@ async fn reject(
     Path((id, stage_raw)): Path<(String, String)>,
     Json(body): Json<RejectRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = StageId::parse(&stage_raw) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid stage id: {e}"),
+            }),
+        )
+            .into_response();
+    }
     let mut inner = state.inner.lock().await;
     match inner
         .mark_stage_error(&id, &stage_raw, body.feedback.as_deref())
@@ -354,12 +376,15 @@ async fn reject(
     }
 }
 
-async fn read_output(
-    State(state): State<ServerState>,
-    Path((id, stage_raw)): Path<(String, String)>,
-) -> impl IntoResponse {
+async fn read_stage_file(
+    state: &ServerState,
+    id: &str,
+    stage_raw: &str,
+    filename: &str,
+    not_found_msg: String,
+) -> axum::response::Response {
     let inner = state.inner.lock().await;
-    let sid = match StageId::parse(&stage_raw) {
+    let sid = match StageId::parse(stage_raw) {
         Ok(s) => s,
         Err(e) => {
             return (
@@ -373,17 +398,17 @@ async fn read_output(
     };
 
     match inner
-        .get_workflow(&id)
+        .get_workflow(id)
         .and_then(|wf| wf.stage_by_id(&sid))
     {
         Some(stage) => {
-            let result_path = stage.output_path.join("result.md");
+            let path = stage.output_path.join(filename);
             drop(inner);
-            match tokio::fs::read_to_string(&result_path).await {
+            match tokio::fs::read_to_string(&path).await {
                 Ok(content) => content.into_response(),
                 Err(_) => (
                     StatusCode::NOT_FOUND,
-                    "output not available",
+                    not_found_msg,
                 )
                     .into_response(),
             }
@@ -398,48 +423,18 @@ async fn read_output(
     }
 }
 
+async fn read_output(
+    State(state): State<ServerState>,
+    Path((id, stage_raw)): Path<(String, String)>,
+) -> impl IntoResponse {
+    read_stage_file(&state, &id, &stage_raw, "result.md", "output not available".into()).await
+}
+
 async fn read_reasoning(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let inner = state.inner.lock().await;
-    let sid = match StageId::parse(&stage_raw) {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(SimpleMessage {
-                    message: format!("invalid stage id: {e}"),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    match inner
-        .get_workflow(&id)
-        .and_then(|wf| wf.stage_by_id(&sid))
-    {
-        Some(stage) => {
-            let path = stage.output_path.join("reasoning.md");
-            drop(inner);
-            match tokio::fs::read_to_string(&path).await {
-                Ok(content) => content.into_response(),
-                Err(_) => (
-                    StatusCode::NOT_FOUND,
-                    "reasoning not available",
-                )
-                    .into_response(),
-            }
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(SimpleMessage {
-                message: format!("stage not found: {stage_raw}"),
-            }),
-        )
-            .into_response(),
-    }
+    read_stage_file(&state, &id, &stage_raw, "reasoning.md", "reasoning not available".into()).await
 }
 
 
@@ -557,6 +552,15 @@ async fn send_prompt(
     Path((id, stage_raw)): Path<(String, String)>,
     Json(body): Json<PromptRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = StageId::parse(&stage_raw) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid stage id: {e}"),
+            }),
+        )
+            .into_response();
+    }
     let broker = match state.broker {
         Some(b) => b,
         None => {
@@ -620,6 +624,15 @@ async fn poll_prompts(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    if let Err(e) = StageId::parse(&stage_raw) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid stage id: {e}"),
+            }),
+        )
+            .into_response();
+    }
     let broker = match state.broker {
         Some(b) => b,
         None => {

@@ -13,6 +13,9 @@ pub enum Error {
     #[error("invalid stage directory name: {name}")]
     InvalidStageName { name: String },
 
+    #[error("invalid workflow name: {name}")]
+    InvalidWorkflowName { name: String },
+
     #[error("YAML parse error in {path}: {source}")]
     YamlParse {
         path: PathBuf,

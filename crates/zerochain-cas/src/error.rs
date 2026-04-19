@@ -27,6 +27,10 @@ pub enum CasError {
         #[source]
         source: std::io::Error,
     },
+
+    /// The requested operation is not supported by the current backend.
+    #[error("unsupported operation: {0}")]
+    Unsupported(String),
 }
 
 pub type Result<T> = std::result::Result<T, CasError>;

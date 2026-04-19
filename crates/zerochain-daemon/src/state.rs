@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context as _;
+use crate::error::DaemonError;
 use zerochain_core::context::Context as StageContext;
 use zerochain_core::lua_engine::{
-    create_sandboxed_vm, execute_hook, load_shared_store, save_shared_store, LuaContext,
+    create_sandboxed_vm, run_hook, load_shared_store, save_shared_store, LuaContext,
 };
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
@@ -13,7 +13,7 @@ use zerochain_llm::{
     Content, ImageUrlContent, LLM, LLMConfig, LLMFactory, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, resolve_profile,
 };
-use zerochain_llm::openai::ProfiledCompleteParams;
+
 
 pub struct AppState {
     pub workspace_root: PathBuf,
@@ -80,7 +80,7 @@ impl AppState {
         }
     }
 
-    pub async fn load_workflows(&mut self) -> anyhow::Result<()> {
+    pub async fn load_workflows(&mut self) -> Result<(), DaemonError> {
         let dir = workflow_dir(&self.workspace_root);
         if !dir.exists() {
             return Ok(());
@@ -110,8 +110,8 @@ impl AppState {
         self.workflows.get_mut(id)
     }
 
-    pub async fn reload_workflow(&mut self, id: &str) -> anyhow::Result<()> {
-        let wf = self.workflows.get(id).context("workflow not found")?;
+    pub async fn reload_workflow(&mut self, id: &str) -> Result<(), DaemonError> {
+        let wf = self.workflows.get(id).ok_or_else(|| DaemonError::WorkflowNotFound(id.into()))?;
         let root = wf.root.clone();
         let reloaded = Workflow::from_dir(&root).await?;
         self.workflows.insert(id.to_string(), reloaded);
@@ -123,12 +123,12 @@ impl AppState {
         path: Option<&Path>,
         name: &str,
         template: Option<&str>,
-    ) -> anyhow::Result<Workflow> {
+    ) -> Result<Workflow, DaemonError> {
         let base = path.unwrap_or(&self.workspace_root);
         let wf_base = workflow_dir(base);
         tokio::fs::create_dir_all(&wf_base)
             .await
-            .with_context(|| format!("creating workflow dir: {}", wf_base.display()))?;
+            .map_err(|e| DaemonError::io(&wf_base, e))?;
 
         let registry = zerochain_core::template::TemplateRegistry::new();
         let named_template = template.and_then(|t| registry.get(t));
@@ -168,7 +168,7 @@ impl AppState {
                 let ctx_path = workflow.root.join(&def.name).join("CONTEXT.md");
                 tokio::fs::write(&ctx_path, def.to_context_md())
                     .await
-                    .with_context(|| format!("writing CONTEXT.md for stage {}", def.name))?;
+                    .map_err(|e| DaemonError::io(&ctx_path, e))?;
             }
         }
 
@@ -180,13 +180,13 @@ impl AppState {
         &mut self,
         workflow_id: &str,
         stage_id: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DaemonError> {
         let wf = self
             .workflows
             .get(workflow_id)
-            .context("workflow not found")?;
-        let sid = StageId::parse(stage_id).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let stage = wf.stage_by_id(&sid).context("stage not found")?;
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".complete");
         tokio::fs::write(&marker, "").await?;
@@ -202,13 +202,13 @@ impl AppState {
         workflow_id: &str,
         stage_id: &str,
         feedback: Option<&str>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DaemonError> {
         let wf = self
             .workflows
             .get(workflow_id)
-            .context("workflow not found")?;
-        let sid = StageId::parse(stage_id).map_err(|e| anyhow::anyhow!("{e}"))?;
-        let stage = wf.stage_by_id(&sid).context("stage not found")?;
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".error");
         tokio::fs::write(&marker, feedback.unwrap_or(""))
@@ -235,7 +235,7 @@ impl AppState {
         &mut self,
         workflow_id: &str,
         stage: &Stage,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DaemonError> {
         let llm = self.create_llm()?;
         self.execute_stage_with_llm(workflow_id, stage, llm.as_ref()).await
     }
@@ -245,7 +245,7 @@ impl AppState {
         workflow_id: &str,
         stage: &Stage,
         llm: &dyn LLM,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), DaemonError> {
         let ctx = if stage.context_path.exists() {
             Some(StageContext::from_file(&stage.context_path).await?)
         } else {
@@ -295,7 +295,7 @@ impl AppState {
         };
 
         profile.validate_config(&config, &stage_ctx).map_err(|e| {
-            anyhow::anyhow!("profile validation failed: {e}")
+            DaemonError::ProfileValidation(e.to_string())
         })?;
 
         let shared_store = match self.workflows.get(workflow_id) {
@@ -305,7 +305,7 @@ impl AppState {
 
         if let Some(ref script) = lua_script {
             let lua = create_sandboxed_vm()
-                .map_err(|e| anyhow::anyhow!("Lua VM init failed: {e}"))?;
+                .map_err(|e| DaemonError::Lua(format!("Lua VM init failed: {e}")))?;
             let mut lua_ctx = LuaContext::new(
                 &stage.id.raw,
                 &stage.path,
@@ -313,8 +313,8 @@ impl AppState {
                     .map(|wf| wf.root.clone())
                     .unwrap_or_else(|| stage.path.clone()),
             ).with_shared_store(shared_store.clone());
-            execute_hook(&lua, "on_validate", &mut lua_ctx, script)
-                .map_err(|e| anyhow::anyhow!("on_validate hook failed: {e}"))?;
+            run_hook(&lua, "on_validate", &mut lua_ctx, script)
+                .map_err(|e| DaemonError::Lua(format!("on_validate hook failed: {e}")))?;
             if lua_ctx.skip {
                 tracing::info!(stage = %stage.id.raw, "skipped by on_validate hook");
                 return Ok(());
@@ -397,28 +397,13 @@ impl AppState {
             "calling LLM"
         );
 
-        let response = if let Some(openai_provider) =
-            llm.as_any().downcast_ref::<zerochain_llm::OpenAICompatibleProvider>()
-        {
-            openai_provider
-                .complete_with_profile(ProfiledCompleteParams {
-                    config: &config,
-                    messages: &messages,
-                    tools: None,
-                    profile: profile.as_ref(),
-                    stage_ctx: &stage_ctx,
-                })
-                .await
-                .map_err(|e| {
-                    tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
-                    anyhow::anyhow!("LLM call failed: {e}")
-                })?
-        } else {
-            llm.complete(&config, &messages, None).await.map_err(|e| {
+        let response = llm
+            .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
+            .await
+            .map_err(|e| {
                 tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
-                anyhow::anyhow!("LLM call failed: {e}")
-            })?
-        };
+                DaemonError::Llm(format!("LLM call failed: {e}"))
+            })?;
 
         let content = response.content.unwrap_or_default();
 
@@ -449,7 +434,7 @@ impl AppState {
 
         if let Some(ref script) = lua_script {
             let lua = create_sandboxed_vm()
-                .map_err(|e| anyhow::anyhow!("Lua VM init failed: {e}"))?;
+                .map_err(|e| DaemonError::Lua(format!("Lua VM init failed: {e}")))?;
             let wf_root = self.workflows.get(workflow_id)
                 .map(|wf| wf.root.clone())
                 .unwrap_or_else(|| stage.path.clone());
@@ -460,7 +445,7 @@ impl AppState {
             )
             .with_output(&content, response.usage.completion_tokens as u64)
             .with_shared_store(shared_store.clone());
-            if let Err(e) = execute_hook(&lua, "on_complete", &mut lua_ctx, script) {
+            if let Err(e) = run_hook(&lua, "on_complete", &mut lua_ctx, script) {
                 tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
             } else {
                 if let Err(e) = save_shared_store(&wf_root, &shared_store) {
@@ -486,7 +471,7 @@ impl AppState {
         Ok(())
     }
 
-    fn create_llm(&self) -> anyhow::Result<Box<dyn LLM>> {
+    fn create_llm(&self) -> Result<Box<dyn LLM>, DaemonError> {
         let provider_name =
             std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
         let custom_base_url =
@@ -495,7 +480,7 @@ impl AppState {
             .unwrap_or("https://api.openai.com/v1");
 
         let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-            anyhow::anyhow!("OPENAI_API_KEY environment variable is required")
+            DaemonError::MissingEnv("OPENAI_API_KEY".into())
         })?;
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
 
@@ -517,10 +502,10 @@ impl AppState {
         let config = LLMConfig::new(provider, &model);
         std::env::set_var("OPENAI_API_KEY", &api_key);
         LLMFactory::create(&config)
-            .map_err(|e| anyhow::anyhow!("failed to create LLM provider: {e}"))
+            .map_err(|e| DaemonError::Llm(format!("failed to create LLM provider: {e}")))
     }
 
-    async fn read_input_files(&self, input_path: &Path) -> anyhow::Result<String> {
+    async fn read_input_files(&self, input_path: &Path) -> Result<String, DaemonError> {
         if !input_path.exists() {
             return Ok(String::new());
         }

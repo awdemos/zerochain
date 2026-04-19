@@ -81,7 +81,7 @@ pub struct OpenAICompatibleProvider {
 }
 
 impl OpenAICompatibleProvider {
-    pub fn new(base_url: String, api_key: String, _model: String) -> Self {
+    pub fn new(base_url: String, api_key: String) -> Self {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()
@@ -178,7 +178,7 @@ pub struct ProfiledCompleteParams<'a> {
 }
 
 impl OpenAICompatibleProvider {
-    pub async fn complete_with_profile(
+    async fn complete_with_profile_impl(
         &self,
         params: ProfiledCompleteParams<'_>,
     ) -> Result<CompleteResponse, LLMError> {
@@ -341,12 +341,30 @@ impl LLM for OpenAICompatibleProvider {
     ) -> Result<CompleteResponse, LLMError> {
         let profile = crate::profiles::resolve_profile("generic");
         let stage_ctx = StageContext::default();
-        self.complete_with_profile(ProfiledCompleteParams {
+        self.complete_with_profile_impl(ProfiledCompleteParams {
             config,
             messages,
             tools,
             profile: profile.as_ref(),
             stage_ctx: &stage_ctx,
+        })
+        .await
+    }
+
+    async fn complete_with_profile(
+        &self,
+        config: &LLMConfig,
+        messages: &[Message],
+        tools: Option<&[Tool]>,
+        profile: &dyn crate::profiles::ProviderProfile,
+        stage_ctx: &crate::profiles::StageContext,
+    ) -> Result<CompleteResponse, LLMError> {
+        self.complete_with_profile_impl(ProfiledCompleteParams {
+            config,
+            messages,
+            tools,
+            profile,
+            stage_ctx,
         })
         .await
     }
