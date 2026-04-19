@@ -3456,7 +3456,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "mlua",
- "regex",
  "serde",
  "serde_json",
  "serde_yaml",
