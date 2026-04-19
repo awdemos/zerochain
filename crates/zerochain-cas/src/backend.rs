@@ -24,6 +24,15 @@ pub trait StorageBackend: Send + Sync {
 
     /// Check whether content exists in the store.
     async fn exists(&self, cid: &Cid) -> Result<bool>;
+
+    /// List all stored content identifiers.
+    async fn list(&self) -> Result<Vec<Cid>>;
+
+    /// Remove content by its CID.
+    async fn delete(&self, cid: &Cid) -> Result<()>;
+
+    /// Return a human-readable location for this backend (e.g. directory path or bucket name).
+    fn location(&self) -> String;
 }
 
 /// Filesystem-backed content-addressed storage.
@@ -110,5 +119,64 @@ impl StorageBackend for LocalBackend {
 
     async fn exists(&self, cid: &Cid) -> Result<bool> {
         Ok(self.path_for(cid).exists())
+    }
+
+    async fn list(&self) -> Result<Vec<Cid>> {
+        let mut cids = Vec::new();
+        let mut entries = match fs::read_dir(&self.base_dir).await {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(cids),
+            Err(e) => return Err(e.into()),
+        };
+
+        while let Some(entry) = entries.next_entry().await? {
+            let metadata = entry.metadata().await?;
+            if !metadata.is_dir() {
+                continue;
+            }
+            let dir_name = entry.file_name();
+            let dir_name = dir_name.to_string_lossy();
+
+            if dir_name.len() != 2 {
+                continue;
+            }
+
+            let mut sub_entries = fs::read_dir(entry.path()).await?;
+            while let Some(sub_entry) = sub_entries.next_entry().await? {
+                let meta = sub_entry.metadata().await?;
+                if !meta.is_file() {
+                    continue;
+                }
+                let file_name = sub_entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if file_name.ends_with(".tmp") {
+                    continue;
+                }
+                if let Ok(cid) = file_name.parse::<Cid>() {
+                    cids.push(cid);
+                }
+            }
+        }
+
+        cids.sort_by_key(|a| a.as_hex());
+        Ok(cids)
+    }
+
+    async fn delete(&self, cid: &Cid) -> Result<()> {
+        let path = self.path_for(cid);
+        match fs::remove_file(&path).await {
+            Ok(()) => {
+                tracing::debug!(cid = %cid, "deleted content");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(CasError::NotFound(cid.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn location(&self) -> String {
+        self.base_dir.display().to_string()
     }
 }
