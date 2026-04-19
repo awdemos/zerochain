@@ -31,19 +31,6 @@ pub enum ThinkingMode {
 }
 
 // ---------------------------------------------------------------------------
-// Multimodal Input
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct MultimodalInput {
-    #[serde(rename = "type")]
-    pub input_type: String,
-    pub path: String,
-    #[serde(default)]
-    pub detail: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
 
