@@ -3521,6 +3521,7 @@ dependencies = [
  "tokio",
  "tracing",
  "zerochain-cas",
+ "zerochain-core",
 ]
 
 [[package]]

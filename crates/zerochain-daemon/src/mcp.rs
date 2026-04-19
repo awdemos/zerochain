@@ -90,7 +90,11 @@ impl ZerochainMcpServer {
         rmcp::handler::server::wrapper::Parameters(InitParams { name, template }): rmcp::handler::server::wrapper::Parameters<InitParams>,
     ) -> rmcp::model::CallToolResult {
         let mut state = self.state.lock().await;
-        match state.init_workflow(None, &name, template.as_deref()).await {
+        match state.init_workflow(crate::state::InitWorkflowParams {
+            name: &name,
+            path: None,
+            template: template.as_deref(),
+        }).await {
             Ok(_) => ok(format!("initialized workflow: {name}")),
             Err(e) => err_result(format!("init failed: {e}")),
         }
@@ -261,6 +265,36 @@ impl ZerochainMcpServer {
         match state.mark_stage_error(&workflow_id, &stage_id, feedback.as_deref()).await {
             Ok(_) => ok(format!("rejected: {workflow_id} / {stage_id}")),
             Err(e) => err_result(format!("reject failed: {e}")),
+        }
+    }
+
+    #[tool(
+        name = "zerochain_snapshot",
+        description = "Create a CoW snapshot of a stage's current state for rollback."
+    )]
+    async fn snapshot_stage(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+    ) -> rmcp::model::CallToolResult {
+        let state = self.state.lock().await;
+        match state.snapshot_stage(&workflow_id, &stage_id).await {
+            Ok(path) => ok(format!("snapshot created: {}", path.display())),
+            Err(e) => err_result(format!("snapshot failed: {e}")),
+        }
+    }
+
+    #[tool(
+        name = "zerochain_restore",
+        description = "Restore a stage from its latest CoW snapshot."
+    )]
+    async fn restore_stage(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+    ) -> rmcp::model::CallToolResult {
+        let state = self.state.lock().await;
+        match state.restore_stage(&workflow_id, &stage_id).await {
+            Ok(()) => ok(format!("restored: {workflow_id} / {stage_id}")),
+            Err(e) => err_result(format!("restore failed: {e}")),
         }
     }
 }
