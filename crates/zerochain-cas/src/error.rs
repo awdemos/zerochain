@@ -16,6 +16,14 @@ pub enum CasError {
     #[error("invalid CID: {0}")]
     InvalidCid(String),
 
+    /// An S3 backend error.
+    #[error("S3 error: {0}")]
+    S3(String),
+
+    /// A backend configuration error.
+    #[error("configuration error: {0}")]
+    Configuration(String),
+
     /// A serialization or deserialization error.
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
