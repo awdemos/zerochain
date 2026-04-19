@@ -163,4 +163,48 @@ impl StorageBackend for S3Backend {
             }
         }
     }
+
+    async fn list(&self) -> Result<Vec<Cid>> {
+        let mut cids = Vec::new();
+        let result = self.bucket.list(String::new(), None).await
+            .map_err(|e| CasError::Io(std::io::Error::other(
+                format!("s3 list failed: {e}"),
+            )))?;
+
+        for object in result {
+            for item in object.contents {
+                if let Ok(cid) = item.key.parse::<Cid>() {
+                    cids.push(cid);
+                }
+            }
+        }
+
+        cids.sort_by_key(|a| a.as_hex());
+        Ok(cids)
+    }
+
+    async fn delete(&self, cid: &Cid) -> Result<()> {
+        let key = Self::key_for(cid);
+        let response = self.bucket.delete_object(&key).await
+            .map_err(|e| CasError::Io(std::io::Error::other(
+                format!("s3 delete failed: {e}"),
+            )))?;
+
+        if response.status_code() == 404 {
+            return Err(CasError::NotFound(cid.to_string()));
+        }
+
+        if response.status_code() >= 400 {
+            return Err(CasError::Io(std::io::Error::other(
+                format!("s3 delete failed with status: {}", response.status_code()),
+            )));
+        }
+
+        tracing::debug!(cid = %cid, "deleted content from s3");
+        Ok(())
+    }
+
+    fn location(&self) -> String {
+        format!("s3://{}", self.bucket.name())
+    }
 }

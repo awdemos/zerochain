@@ -1,11 +1,10 @@
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::io::AsyncRead;
 
-use crate::backend::{LocalBackend, StorageBackend};
+use crate::backend::StorageBackend;
 use crate::cid::Cid;
-use crate::error::{CasError, Result};
+use crate::error::Result;
 
 /// Content-addressed store backed by a pluggable [`StorageBackend`].
 ///
@@ -30,8 +29,8 @@ impl std::fmt::Debug for CasStore {
 
 impl CasStore {
     /// Create a new CAS store with the local filesystem backend.
-    pub async fn new(base_dir: PathBuf) -> Result<Self> {
-        let backend = LocalBackend::new(base_dir).await?;
+    pub async fn new(base_dir: std::path::PathBuf) -> Result<Self> {
+        let backend = crate::backend::LocalBackend::new(base_dir).await?;
         Ok(Self {
             backend: Arc::new(backend),
         })
@@ -65,95 +64,19 @@ impl CasStore {
     }
 
     /// List all content identifiers currently stored.
-    ///
-    /// **Note:** This operation is only supported by the local filesystem
-    /// backend.
     pub async fn list(&self) -> Result<Vec<Cid>> {
-        let local = self
-            .backend
-            .as_any()
-            .downcast_ref::<LocalBackend>();
-
-        if let Some(local) = local {
-            list_local(local).await
-        } else {
-            Err(CasError::Unsupported(
-                "list not supported for non-local backend".into(),
-            ))
-        }
+        self.backend.list().await
     }
 
     /// Remove content by its CID.
     pub async fn delete(&self, cid: &Cid) -> Result<()> {
-        if let Some(local) = self.backend.as_any().downcast_ref::<LocalBackend>() {
-            let path = local.path_for(cid);
-            match tokio::fs::remove_file(&path).await {
-                Ok(()) => {
-                    tracing::debug!(cid = %cid, "deleted content");
-                    Ok(())
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Err(CasError::NotFound(cid.to_string()))
-                }
-                Err(e) => Err(e.into()),
-            }
-        } else {
-            Err(CasError::Unsupported(
-                "delete not supported for non-local backend".into(),
-            ))
-        }
+        self.backend.delete(cid).await
     }
 
-    /// Return the base directory of this store, if backed by local filesystem.
-    pub fn base_dir(&self) -> Result<&Path> {
-        self.backend
-            .as_any()
-            .downcast_ref::<LocalBackend>()
-            .map(|l| l.base_dir())
-            .ok_or_else(|| CasError::Unsupported("base_dir not supported for non-local backend".into()))
+    /// Return the backend location (filesystem path, bucket name, etc.).
+    pub fn location(&self) -> String {
+        self.backend.location()
     }
-}
-
-async fn list_local(local: &LocalBackend) -> Result<Vec<Cid>> {
-    let base_dir = local.base_dir();
-    let mut cids = Vec::new();
-    let mut entries = match tokio::fs::read_dir(base_dir).await {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(cids),
-        Err(e) => return Err(e.into()),
-    };
-
-    while let Some(entry) = entries.next_entry().await? {
-        let metadata = entry.metadata().await?;
-        if !metadata.is_dir() {
-            continue;
-        }
-        let dir_name = entry.file_name();
-        let dir_name = dir_name.to_string_lossy();
-
-        if dir_name.len() != 2 {
-            continue;
-        }
-
-        let mut sub_entries = tokio::fs::read_dir(entry.path()).await?;
-        while let Some(sub_entry) = sub_entries.next_entry().await? {
-            let meta = sub_entry.metadata().await?;
-            if !meta.is_file() {
-                continue;
-            }
-            let file_name = sub_entry.file_name();
-            let file_name = file_name.to_string_lossy();
-            if file_name.ends_with(".tmp") {
-                continue;
-            }
-            if let Ok(cid) = file_name.parse::<Cid>() {
-                cids.push(cid);
-            }
-        }
-    }
-
-    cids.sort_by_key(|a| a.as_hex());
-    Ok(cids)
 }
 
 #[cfg(test)]
@@ -212,7 +135,7 @@ mod tests {
         let result = store.get(&cid).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            CasError::NotFound(s) => assert_eq!(s, cid.to_string()),
+            crate::error::CasError::NotFound(s) => assert_eq!(s, cid.to_string()),
             other => panic!("expected NotFound, got {other:?}"),
         }
     }
@@ -262,7 +185,7 @@ mod tests {
         let result = store.delete(&cid).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            CasError::NotFound(s) => assert_eq!(s, cid.to_string()),
+            crate::error::CasError::NotFound(s) => assert_eq!(s, cid.to_string()),
             other => panic!("expected NotFound, got {other:?}"),
         }
     }
@@ -293,18 +216,19 @@ mod tests {
         let (_dir, store) = make_store().await;
         let cid = store.put(b"layout check").await.unwrap();
         let hex = cid.as_hex();
-        let expected_dir = store.base_dir().unwrap().join(&hex[..2]);
+        let base = std::path::PathBuf::from(store.location());
+        let expected_dir = base.join(&hex[..2]);
         let expected_file = expected_dir.join(&hex);
         assert!(expected_dir.is_dir());
         assert!(expected_file.is_file());
     }
 
     #[tokio::test]
-    async fn base_dir_accessor() {
+    async fn location_returns_base_dir() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().to_path_buf();
         let store = CasStore::new(path.clone()).await.unwrap();
-        assert_eq!(store.base_dir().ok(), Some(path.as_path()));
+        assert_eq!(store.location(), path.display().to_string());
     }
 
     #[tokio::test]
