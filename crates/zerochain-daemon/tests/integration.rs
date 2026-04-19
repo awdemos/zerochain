@@ -21,19 +21,12 @@ use zerochain_llm::{
 };
 
 fn make_task(id: &str, stages: Vec<&str>) -> Task {
-    Task::new(
-        id.to_string(),
-        id.to_string(),
-        "todo".to_string(),
-        None,
-        Some(TaskExecution::new(
+    Task::builder(id, id)
+        .execution(TaskExecution::new(
             stages.into_iter().map(|s| s.to_string()).collect(),
             Some("sequential".to_string()),
-        )),
-        vec![],
-        String::new(),
-        None,
-    )
+        ))
+        .build()
 }
 
 fn workflow_dir(workspace: &Path) -> std::path::PathBuf {

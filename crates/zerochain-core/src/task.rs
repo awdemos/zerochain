@@ -131,6 +131,86 @@ impl Task {
             source_path,
         }
     }
+
+    pub fn builder(id: impl Into<String>, title: impl Into<String>) -> TaskBuilder {
+        TaskBuilder::new(id, title)
+    }
+}
+
+/// Builder for [`Task`].
+#[derive(Debug, Clone)]
+pub struct TaskBuilder {
+    id: String,
+    title: String,
+    status: String,
+    priority: Option<String>,
+    execution: Option<TaskExecution>,
+    acceptance_criteria: Vec<String>,
+    description: String,
+    source_path: Option<std::path::PathBuf>,
+}
+
+impl TaskBuilder {
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            status: "todo".into(),
+            priority: None,
+            execution: None,
+            acceptance_criteria: Vec::new(),
+            description: String::new(),
+            source_path: None,
+        }
+    }
+
+    pub fn status(mut self, status: impl Into<String>) -> Self {
+        self.status = status.into();
+        self
+    }
+
+    pub fn priority(mut self, priority: impl Into<String>) -> Self {
+        self.priority = Some(priority.into());
+        self
+    }
+
+    pub fn execution(mut self, execution: TaskExecution) -> Self {
+        self.execution = Some(execution);
+        self
+    }
+
+    pub fn stages(mut self, stages: Vec<String>) -> Self {
+        self.execution = Some(TaskExecution::new(stages, Some("sequential".into())));
+        self
+    }
+
+    pub fn acceptance_criteria(mut self, criteria: Vec<String>) -> Self {
+        self.acceptance_criteria = criteria;
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
+    }
+
+    pub fn source_path(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.source_path = Some(path.into());
+        self
+    }
+
+    pub fn build(self) -> Task {
+        Task {
+            id: self.id,
+            title: self.title,
+            status: self.status,
+            priority: self.priority,
+            execution: self.execution,
+            acceptance_criteria: self.acceptance_criteria,
+            description: self.description,
+            source_path: self.source_path,
+        }
+    }
 }
 
 #[cfg(test)]
