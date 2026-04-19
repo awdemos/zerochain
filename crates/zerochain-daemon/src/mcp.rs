@@ -18,6 +18,7 @@ pub struct ZerochainMcpServer {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct InitParams {
     pub name: String,
     #[serde(default)]
