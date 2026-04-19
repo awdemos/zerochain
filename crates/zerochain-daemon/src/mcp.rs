@@ -38,12 +38,16 @@ pub struct StatusParams {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(deny_unknown_fields)]
 pub struct StageParams {
     pub workflow_id: String,
     pub stage_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
+#[serde(deny_unknown_fields)]
 pub struct RejectParams {
     pub workflow_id: String,
     pub stage_id: String,
