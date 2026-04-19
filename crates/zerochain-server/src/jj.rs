@@ -17,14 +17,20 @@ pub fn init_repo(workspace: &Path) -> bool {
 
     match result {
         Ok(output) if output.status.success() => {
-            let _ = Command::new("jj")
+            if let Err(e) = Command::new("jj")
                 .args(["config", "set", "user.name", "zerochain"])
                 .current_dir(workspace)
-                .output();
-            let _ = Command::new("jj")
+                .output()
+            {
+                warn!(error = %e, "failed to set jj user.name");
+            }
+            if let Err(e) = Command::new("jj")
                 .args(["config", "set", "user.email", "zerochain@daemon"])
                 .current_dir(workspace)
-                .output();
+                .output()
+            {
+                warn!(error = %e, "failed to set jj user.email");
+            }
             debug!("jj repo initialized");
             true
         }
