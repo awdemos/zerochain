@@ -1,0 +1,2 @@
+name = "test-gen"
+description = "Generate tests for existing code with coverage analysis"

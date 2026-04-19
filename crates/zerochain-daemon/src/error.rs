@@ -45,11 +45,4 @@ impl DaemonError {
     }
 }
 
-impl From<std::io::Error> for DaemonError {
-    fn from(source: std::io::Error) -> Self {
-        Self::Io {
-            path: PathBuf::from("<unknown>"),
-            source,
-        }
-    }
-}
+

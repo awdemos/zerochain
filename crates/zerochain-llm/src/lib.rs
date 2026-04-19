@@ -14,5 +14,7 @@ pub use profiles::{ProviderProfile, StageContext, resolve_profile};
 pub use trait_::LLM;
 pub use types::{
     CompleteResponse, Content, FinishReason, ImageUrlContent, LLMConfig, Message,
-    MultimodalInput, ProviderId, Role, ThinkingMode, Tool, ToolCall, Usage,
+    ProviderId, Role, ThinkingMode, Tool, ToolCall, Usage,
 };
+
+pub use zerochain_core::context::MultimodalInput;

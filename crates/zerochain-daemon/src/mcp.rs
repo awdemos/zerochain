@@ -95,7 +95,11 @@ impl ZerochainMcpServer {
             return err_result("invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into());
         }
         let mut state = self.state.lock().await;
-        match state.init_workflow(None, &name, template.as_deref()).await {
+        match state.init_workflow(crate::state::InitWorkflowParams {
+            name: &name,
+            path: None,
+            template: template.as_deref(),
+        }).await {
             Ok(_) => ok(format!("initialized workflow: {name}")),
             Err(e) => err_result(format!("init failed: {e}")),
         }
