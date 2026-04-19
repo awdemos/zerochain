@@ -2,6 +2,16 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+fn map_jj_spawn_error(e: std::io::Error) -> Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        Error::JjNotInstalled
+    } else {
+        Error::JjError {
+            message: format!("failed to spawn jj: {e}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CommitEntry {
@@ -23,7 +33,7 @@ impl JjManager {
             .arg(path)
             .output()
             .await
-            .map_err(|_| Error::JjNotInstalled)?;
+            .map_err(map_jj_spawn_error)?;
 
         if !output.status.success() {
             return Err(Error::JjError {
@@ -42,7 +52,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(|_| Error::JjNotInstalled)?;
+            .map_err(map_jj_spawn_error)?;
 
         if !describe_output.status.success() {
             return Err(Error::JjError {
@@ -58,7 +68,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(|_| Error::JjNotInstalled)?;
+            .map_err(map_jj_spawn_error)?;
 
         if !new_output.status.success() {
             return Err(Error::JjError {
@@ -89,7 +99,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(|_| Error::JjNotInstalled)?;
+            .map_err(map_jj_spawn_error)?;
 
         if !output.status.success() {
             return Err(Error::JjError {
