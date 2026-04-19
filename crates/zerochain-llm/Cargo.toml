@@ -2,6 +2,7 @@
 name = "zerochain-llm"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 description = "LLM provider trait with OpenAI-compatible implementation"
 
 [dependencies]
