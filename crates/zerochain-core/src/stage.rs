@@ -84,7 +84,7 @@ pub struct Stage {
 }
 
 impl Stage {
-    pub async fn from_dir(dir: &PathBuf) -> Result<Self> {
+    pub async fn from_dir(dir: &std::path::Path) -> Result<Self> {
         let dir_name = dir
             .file_name()
             .ok_or_else(|| Error::InvalidStageName {
@@ -120,7 +120,7 @@ impl Stage {
 
         Ok(Stage {
             id,
-            path: dir.clone(),
+            path: dir.to_path_buf(),
             context_path,
             input_path,
             output_path,

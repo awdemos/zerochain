@@ -16,7 +16,8 @@ anyhow.workspace = true
 
 # Optional NATS backend
 async-nats = { version = "0.40", optional = true }
+futures = { version = "0.3", optional = true }
 
 [features]
 default = []
-nats = ["dep:async-nats"]
+nats = ["dep:async-nats", "dep:futures"]

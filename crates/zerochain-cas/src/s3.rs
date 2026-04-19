@@ -108,14 +108,12 @@ impl StorageBackend for S3Backend {
             .bucket
             .put_object(&key, data)
             .await
-            .map_err(|e| CasError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|e| CasError::Io(std::io::Error::other(
                 format!("s3 put failed: {e}"),
             )))?;
 
         if response.status_code() != 200 {
-            return Err(CasError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(CasError::Io(std::io::Error::other(
                 format!("s3 put failed with status: {}", response.status_code()),
             )));
         }
@@ -130,8 +128,7 @@ impl StorageBackend for S3Backend {
             .bucket
             .get_object(&key)
             .await
-            .map_err(|e| CasError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|e| CasError::Io(std::io::Error::other(
                 format!("s3 get failed: {e}"),
             )))?;
 
@@ -140,8 +137,7 @@ impl StorageBackend for S3Backend {
         }
 
         if response.status_code() != 200 {
-            return Err(CasError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            return Err(CasError::Io(std::io::Error::other(
                 format!("s3 get failed with status: {}", response.status_code()),
             )));
         }

@@ -131,15 +131,13 @@ fn lua_value_to_json(val: &mlua::Value) -> serde_json::Value {
         }
         Value::Table(t) => {
             let mut map = serde_json::Map::new();
-            for pair in t.pairs::<mlua::Value, mlua::Value>() {
-                if let Ok((k, v)) = pair {
-                    let key_str = match &k {
-                        Value::String(s) => s.to_str().map(|v| v.to_string()).unwrap_or_default(),
-                        Value::Integer(n) => n.to_string(),
-                        _ => continue,
-                    };
-                    map.insert(key_str, lua_value_to_json(&v));
-                }
+            for (k, v) in t.pairs::<mlua::Value, mlua::Value>().flatten() {
+                let key_str = match &k {
+                    Value::String(s) => s.to_str().map(|v| v.to_string()).unwrap_or_default(),
+                    Value::Integer(n) => n.to_string(),
+                    _ => continue,
+                };
+                map.insert(key_str, lua_value_to_json(&v));
             }
             serde_json::Value::Object(map)
         }
@@ -249,7 +247,7 @@ pub fn save_shared_store(
     let state_dir = workflow_root.join(".state");
     std::fs::create_dir_all(&state_dir).map_err(|e| Error::Io {
         path: state_dir.clone(),
-        source: e.into(),
+        source: e,
     })?;
     let store_path = state_dir.join("lua_store.json");
     let map = store.lock().map_err(|_| Error::Lua {
@@ -260,7 +258,7 @@ pub fn save_shared_store(
     })?;
     std::fs::write(&store_path, json).map_err(|e| Error::Io {
         path: store_path,
-        source: e.into(),
+        source: e,
     })?;
     Ok(())
 }
