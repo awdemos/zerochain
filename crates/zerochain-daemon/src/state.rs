@@ -475,17 +475,21 @@ impl AppState {
             .unwrap_or("https://api.openai.com/v1");
         let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
 
+        let api_key_env = std::env::var("ZEROCHAIN_API_KEY_ENV")
+            .unwrap_or_else(|_| "OPENAI_API_KEY".into());
+
         let provider = if custom_base_url.is_some() {
             ProviderId::OpenAICompatible {
                 base_url: base_url.to_owned(),
-                api_key_env: "OPENAI_API_KEY".into(),
+                api_key_env,
             }
         } else {
             match provider_name.as_str() {
                 "openai" => ProviderId::OpenAI,
                 _ => ProviderId::OpenAICompatible {
                     base_url: base_url.to_owned(),
-                    api_key_env: "OPENAI_API_KEY".into(),
+                    api_key_env: std::env::var("ZEROCHAIN_API_KEY_ENV")
+                        .unwrap_or_else(|_| "OPENAI_API_KEY".into()),
                 },
             }
         };

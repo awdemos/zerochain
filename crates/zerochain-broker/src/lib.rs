@@ -9,6 +9,7 @@ pub mod nats;
 
 /// A message exchanged between agents via the broker.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BrokerMessage {
     /// Workflow this message belongs to.
     pub workflow_id: String,

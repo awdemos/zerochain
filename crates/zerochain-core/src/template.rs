@@ -21,6 +21,7 @@ impl StageDef {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Template {
     pub name: String,
     pub description: String,
