@@ -33,6 +33,7 @@ pub struct ContextFrontmatter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct MultimodalInput {
     #[serde(rename = "type")]
     pub input_type: String,

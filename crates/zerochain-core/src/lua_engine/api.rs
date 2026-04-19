@@ -20,6 +20,7 @@ pub struct HookResults {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LuaContext {
     pub stage_raw: String,
     pub stage_path: PathBuf,
