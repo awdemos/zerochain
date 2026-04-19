@@ -13,6 +13,7 @@ fn lua_err(e: mlua::Error) -> Error {
 }
 
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct HookResults {
     pub skip: bool,
     pub insert_after: Vec<String>,
