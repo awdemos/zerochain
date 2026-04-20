@@ -46,4 +46,11 @@ impl CasError {
     }
 }
 
+impl CasError {
+    /// Returns true if this error indicates the requested content was not found.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, CasError::NotFound(_))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CasError>;
