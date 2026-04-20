@@ -74,7 +74,7 @@ impl Task {
         let yaml_str = &after_first[..end_marker];
         let description = after_first[end_marker + 4..].trim_start().to_string();
 
-        let fm: TaskFrontmatter = serde_yaml::from_str(yaml_str).map_err(|e| Error::TaskParse {
+        let fm: TaskFrontmatter = serde_yml::from_str(yaml_str).map_err(|e| Error::TaskParse {
             path: std::path::PathBuf::from("<inline>"),
             reason: format!("YAML parse error: {e}"),
         })?;
