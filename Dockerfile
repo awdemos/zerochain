@@ -21,13 +21,18 @@ COPY crates/zerochain-cas/Cargo.toml crates/zerochain-cas/Cargo.toml
 COPY crates/zerochain-fs/Cargo.toml crates/zerochain-fs/Cargo.toml
 COPY crates/zerochain-llm/Cargo.toml crates/zerochain-llm/Cargo.toml
 COPY crates/zerochain-core/Cargo.toml crates/zerochain-core/Cargo.toml
+COPY crates/zerochain-engine/Cargo.toml crates/zerochain-engine/Cargo.toml
+COPY crates/zerochain-broker/Cargo.toml crates/zerochain-broker/Cargo.toml
 COPY crates/zerochain-daemon/Cargo.toml crates/zerochain-daemon/Cargo.toml
 COPY crates/zerochain-server/Cargo.toml crates/zerochain-server/Cargo.toml
 RUN mkdir -p crates/zerochain-cas/src crates/zerochain-fs/src crates/zerochain-llm/src \
-    && mkdir -p crates/zerochain-core/src crates/zerochain-daemon/src crates/zerochain-server/src \
+    && mkdir -p crates/zerochain-core/src crates/zerochain-engine/src crates/zerochain-broker/src \
+    && mkdir -p crates/zerochain-daemon/src crates/zerochain-server/src \
     && echo "pub fn main(){}" > crates/zerochain-daemon/src/main.rs \
+    && echo "fn main(){}" > crates/zerochain-server/src/main.rs \
     && touch crates/zerochain-cas/src/lib.rs crates/zerochain-fs/src/lib.rs \
     && touch crates/zerochain-llm/src/lib.rs crates/zerochain-core/src/lib.rs \
+    && touch crates/zerochain-engine/src/lib.rs crates/zerochain-broker/src/lib.rs \
     && touch crates/zerochain-server/src/lib.rs \
     && cargo build --release --bin zerochaind 2>/dev/null || true
 
