@@ -123,6 +123,7 @@ async fn init_workflow(
     State(state): State<ServerState>,
     Json(body): Json<InitWorkflowRequest>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "init_workflow", name = %body.name, "mutation");
     if !is_valid_workflow_name(&body.name) {
         return (
             StatusCode::BAD_REQUEST,
@@ -278,6 +279,7 @@ async fn run_stage_by_id(
     id: &str,
     stage_raw: &str,
 ) -> axum::response::Response {
+    tracing::info!(action = "run_stage", workflow = %id, stage = %stage_raw, "mutation");
     let sid = match StageId::parse(stage_raw) {
         Ok(s) => s,
         Err(e) => {
@@ -340,6 +342,7 @@ async fn approve(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "approve", workflow = %id, stage = %stage_raw, "mutation");
     if let Err(e) = StageId::parse(&stage_raw) {
         return (
             StatusCode::BAD_REQUEST,
@@ -377,6 +380,7 @@ async fn reject(
     Path((id, stage_raw)): Path<(String, String)>,
     Json(body): Json<RejectRequest>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "reject", workflow = %id, stage = %stage_raw, "mutation");
     if let Err(e) = StageId::parse(&stage_raw) {
         return (
             StatusCode::BAD_REQUEST,

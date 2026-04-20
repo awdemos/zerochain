@@ -16,7 +16,6 @@ tokio.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-anyhow.workspace = true
 blake3.workspace = true
 
 
