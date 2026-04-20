@@ -50,7 +50,7 @@ impl StageId {
 
         let letter = &prefix[numeric_end..];
         if !letter.is_empty()
-            && (letter.len() != 1 || !letter.chars().next().map_or(false, |c| c.is_ascii_lowercase()))
+            && (letter.len() != 1 || !letter.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
         {
             return Err(Error::InvalidStageName {
                 name: dir_name.to_string(),
@@ -140,14 +140,17 @@ impl Stage {
 
         let is_complete = tokio::fs::try_exists(dir.join(".complete"))
             .await
-            .unwrap_or(false);
+            .map_err(|e| crate::error::io_err(dir, e))?;
         let is_error = tokio::fs::try_exists(dir.join(".error"))
             .await
-            .unwrap_or(false);
+            .map_err(|e| crate::error::io_err(dir, e))?;
 
+        let has_context = tokio::fs::try_exists(&context_path)
+            .await
+            .map_err(|e| crate::error::io_err(&context_path, e))?;
         let (human_gate, container_image, command) =
-            if tokio::fs::try_exists(&context_path).await.unwrap_or(false) {
-                let ctx = Context::from_file(&context_path).await?;
+            if has_context {
+                let ctx = Context::from_md_file(&context_path).await?;
                 (
                     ctx.frontmatter.human_gate,
                     ctx.frontmatter.container,

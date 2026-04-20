@@ -6,6 +6,7 @@ members = [
     "crates/zerochain-core",
     "crates/zerochain-fs",
     "crates/zerochain-llm",
+    "crates/zerochain-engine",
     "crates/zerochain-daemon",
     "crates/zerochain-server",
 ]

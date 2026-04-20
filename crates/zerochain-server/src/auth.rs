@@ -18,7 +18,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Bearer token middleware. Skips auth when:
 /// - The request path is `/v1/health`
-/// - No API key is configured on the server state
+/// - Auth is explicitly disabled via `--no-auth`
 ///
 /// # Errors
 ///
@@ -32,9 +32,16 @@ pub async fn require_api_key(
         return Ok(next.run(request).await);
     }
 
+    if state.auth_disabled {
+        return Ok(next.run(request).await);
+    }
+
     let expected = match &state.api_key {
         Some(key) => key,
-        None => return Ok(next.run(request).await),
+        None => {
+            tracing::warn!(path = %request.uri().path(), "auth failed: no API key configured");
+            return Err(StatusCode::UNAUTHORIZED);
+        }
     };
 
     let header = request

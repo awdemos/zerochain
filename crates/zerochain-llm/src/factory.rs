@@ -23,6 +23,7 @@ impl LLMFactory {
                     LLMError::Config("OPENAI_API_KEY environment variable not set".into())
                 })?;
                 OpenAICompatibleProvider::new(
+                    crate::types::ProviderId::OpenAI,
                     "https://api.openai.com/v1".into(),
                     api_key,
                 )
@@ -36,6 +37,10 @@ impl LLMFactory {
                     LLMError::Config(format!("environment variable `{api_key_env}` not set"))
                 })?;
                 OpenAICompatibleProvider::new(
+                    crate::types::ProviderId::OpenAICompatible {
+                        base_url: base_url.clone(),
+                        api_key_env: api_key_env.clone(),
+                    },
                     base_url.clone(),
                     api_key,
                 )
@@ -48,9 +53,6 @@ impl LLMFactory {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

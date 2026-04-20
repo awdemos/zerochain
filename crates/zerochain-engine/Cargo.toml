@@ -1,5 +1,5 @@
 [package]
-name = "zerochain-daemon"
+name = "zerochain-engine"
 version.workspace = true
 edition.workspace = true
 readme = "../../README.md"
@@ -7,33 +7,26 @@ keywords = ["zerochain", "ai", "workflow"]
 categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
-description = "MCP server daemon for zerochain workflow execution"
-
-[[bin]]
-name = "zerochain"
-path = "src/main.rs"
+description = "Core workflow engine for zerochain"
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-zerochain-engine = { path = "../zerochain-engine" }
+zerochain-cas = { path = "../zerochain-cas" }
 zerochain-core = { path = "../zerochain-core" }
+zerochain-fs = { path = "../zerochain-fs" }
 zerochain-llm = { path = "../zerochain-llm" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-anyhow.workspace = true
-clap = { version = "4.0", features = ["derive", "env"] }
-rmcp.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+base64 = "0.22"
 schemars.workspace = true
 
 [dev-dependencies]
-async-trait.workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros", "fs"] }
-zerochain-cas = { path = "../zerochain-cas" }
-zerochain-fs = { path = "../zerochain-fs" }
-zerochain-llm = { path = "../zerochain-llm" }

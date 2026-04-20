@@ -49,6 +49,9 @@ pub enum Error {
 
     #[error("Lua error: {message}")]
     Lua { message: String },
+
+    #[error("shared store load error at {path}: {reason}")]
+    SharedStoreLoad { path: PathBuf, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

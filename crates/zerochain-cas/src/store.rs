@@ -1,10 +1,43 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::io::AsyncRead;
 
 use crate::backend::StorageBackend;
 use crate::cid::Cid;
 use crate::error::Result;
+
+/// Operation metrics tracked by [`CasStore`].
+#[derive(Debug, Default)]
+pub struct Metrics {
+    pub puts: AtomicU64,
+    pub gets: AtomicU64,
+    pub deletes: AtomicU64,
+    pub exists: AtomicU64,
+    pub lists: AtomicU64,
+}
+
+impl Metrics {
+    #[must_use] pub fn snapshot(&self) -> MetricsSnapshot {
+        MetricsSnapshot {
+            puts: self.puts.load(Ordering::Relaxed),
+            gets: self.gets.load(Ordering::Relaxed),
+            deletes: self.deletes.load(Ordering::Relaxed),
+            exists: self.exists.load(Ordering::Relaxed),
+            lists: self.lists.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// A point-in-time snapshot of [`Metrics`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetricsSnapshot {
+    pub puts: u64,
+    pub gets: u64,
+    pub deletes: u64,
+    pub exists: u64,
+    pub lists: u64,
+}
 
 /// Content-addressed store backed by a pluggable [`StorageBackend`].
 ///
@@ -14,54 +47,76 @@ use crate::error::Result;
 /// partial reads.
 ///
 /// The backend can be swapped for S3/MinIO via [`CasStore::with_backend`].
+///
+/// `CasStore` adds operation metrics and validation on top of the raw backend.
 #[derive(Clone)]
 pub struct CasStore {
     backend: Arc<dyn StorageBackend>,
+    metrics: Arc<Metrics>,
 }
 
 impl std::fmt::Debug for CasStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CasStore")
             .field("backend", &"<dyn StorageBackend>")
+            .field("metrics", &self.metrics.snapshot())
             .finish()
     }
 }
 
 impl CasStore {
+    /// Create a new `CasStore` backed by a local filesystem backend at `base_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the store directory cannot be created or accessed.
     pub async fn new(base_dir: std::path::PathBuf) -> Result<Self> {
         let backend = crate::backend::LocalBackend::new(base_dir).await?;
         Ok(Self {
             backend: Arc::new(backend),
+            metrics: Arc::new(Metrics::default()),
         })
     }
 
     pub fn with_backend<B: StorageBackend + 'static>(backend: B) -> Self {
         Self {
             backend: Arc::new(backend),
+            metrics: Arc::new(Metrics::default()),
         }
     }
 
+    /// Return a snapshot of the current operation metrics.
+    #[must_use] pub fn metrics(&self) -> MetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
     pub async fn put(&self, data: &[u8]) -> Result<Cid> {
+        self.metrics.puts.fetch_add(1, Ordering::Relaxed);
         self.backend.put(data).await
     }
 
     pub async fn get(&self, cid: &Cid) -> Result<Vec<u8>> {
+        self.metrics.gets.fetch_add(1, Ordering::Relaxed);
         self.backend.get(cid).await
     }
 
     pub async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
+        self.metrics.gets.fetch_add(1, Ordering::Relaxed);
         self.backend.get_reader(cid).await
     }
 
     pub async fn exists(&self, cid: &Cid) -> Result<bool> {
+        self.metrics.exists.fetch_add(1, Ordering::Relaxed);
         self.backend.exists(cid).await
     }
 
     pub async fn list(&self) -> Result<Vec<Cid>> {
+        self.metrics.lists.fetch_add(1, Ordering::Relaxed);
         self.backend.list().await
     }
 
     pub async fn delete(&self, cid: &Cid) -> Result<()> {
+        self.metrics.deletes.fetch_add(1, Ordering::Relaxed);
         self.backend.delete(cid).await
     }
 

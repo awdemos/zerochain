@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::error::DaemonError;
 use zerochain_fs::{CowPlatform, acquire_lock, clean_output};
@@ -15,6 +16,15 @@ use zerochain_llm::{
     StageContext as LlmStageContext, ThinkingMode, resolve_profile,
 };
 
+
+/// Shared request type for HTTP and MCP entrypoints.
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[non_exhaustive]
+pub struct InitWorkflowRequest {
+    pub name: String,
+    #[serde(default)]
+    pub template: Option<String>,
+}
 
 pub struct InitWorkflowParams<'a> {
     pub name: &'a str,
@@ -118,14 +128,24 @@ impl AppState {
         }
     }
 
+    /// Load all workflows from the workspace workflows directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workflow directory cannot be read or if any
+    /// workflow definition fails to parse. Partial failures are reported via
+    /// [`DaemonError::PartialWorkflowLoad`].
     pub async fn load_workflows(&mut self) -> Result<(), DaemonError> {
         let dir = workflow_dir(&self.workspace_root);
-        if !dir.exists() {
-            return Ok(());
+        match tokio::fs::metadata(&dir).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(DaemonError::io(&dir, e)),
         }
 
         let mut entries = tokio::fs::read_dir(&dir).await
             .map_err(|e| DaemonError::io(&dir, e))?;
+        let mut failures = Vec::new();
         while let Some(entry) = entries.next_entry().await
             .map_err(|e| DaemonError::io(&dir, e))? {
             let path = entry.path();
@@ -137,11 +157,17 @@ impl AppState {
                     self.workflows.insert(wf.id.clone(), wf);
                 }
                 Err(e) => {
+                    let msg = format!("{}: {}", path.display(), e);
                     tracing::warn!(path = %path.display(), error = %e, "failed to load workflow");
+                    failures.push(msg);
                 }
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(DaemonError::WorkflowLoadPartial(failures.join("; ")))
+        }
     }
 
     #[must_use] pub fn get_workflow(&self, id: &str) -> Option<&Workflow> {
@@ -284,9 +310,13 @@ impl AppState {
         tokio::fs::write(&marker, "").await
             .map_err(|e| DaemonError::io(&marker, e))?;
         let err_marker = stage.path.join(".error");
-        if err_marker.exists() {
-            tokio::fs::remove_file(&err_marker).await
-                .map_err(|e| DaemonError::io(&err_marker, e))?;
+        match tokio::fs::metadata(&err_marker).await {
+            Ok(_) => {
+                tokio::fs::remove_file(&err_marker).await
+                    .map_err(|e| DaemonError::io(&err_marker, e))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DaemonError::io(&err_marker, e)),
         }
         Ok(())
     }
@@ -378,17 +408,22 @@ impl AppState {
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let snapshots_dir = wf.root.join(".snapshots");
-        if !snapshots_dir.exists() {
-            return Err(DaemonError::CowRestore {
-                stage: stage_id.into(),
-                source: zerochain_fs::error::FsError::MarkerFailed {
-                    dir: snapshots_dir.clone(),
-                    reason: "no snapshots directory".into(),
-                },
-            });
+        match tokio::fs::metadata(&snapshots_dir).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(DaemonError::CowRestore {
+                    stage: stage_id.into(),
+                    source: zerochain_fs::error::FsError::MarkerFailed {
+                        dir: snapshots_dir.clone(),
+                        reason: "no snapshots directory".into(),
+                    },
+                });
+            }
+            Err(e) => return Err(DaemonError::io(&snapshots_dir, e)),
         }
 
         let latest = find_latest_snapshot(&snapshots_dir, &stage.id.raw)
+            .map_err(|e| DaemonError::io(&snapshots_dir, e))?
             .ok_or_else(|| DaemonError::CowRestore {
                 stage: stage_id.into(),
                 source: zerochain_fs::error::FsError::MarkerFailed {
@@ -404,10 +439,14 @@ impl AppState {
             "restoring stage from snapshot"
         );
 
-        if stage.path.exists() {
-            tokio::fs::remove_dir_all(&stage.path)
-                .await
-                .map_err(|e| DaemonError::io(&stage.path, e))?;
+        match tokio::fs::metadata(&stage.path).await {
+            Ok(_) => {
+                tokio::fs::remove_dir_all(&stage.path)
+                    .await
+                    .map_err(|e| DaemonError::io(&stage.path, e))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DaemonError::io(&stage.path, e)),
         }
 
         self.cow_backend
@@ -424,8 +463,10 @@ impl AppState {
 
     async fn cleanup_old_snapshots(&self, workflow_root: &Path) -> Result<(), DaemonError> {
         let snapshots_dir = workflow_root.join(".snapshots");
-        if !snapshots_dir.exists() {
-            return Ok(());
+        match tokio::fs::metadata(&snapshots_dir).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(DaemonError::io(&snapshots_dir, e)),
         }
 
         let mut rd = tokio::fs::read_dir(&snapshots_dir)
@@ -497,82 +538,12 @@ impl AppState {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    pub async fn execute_stage_with_llm(
-        &mut self,
-        workflow_id: &str,
+    /// Assemble the message list for an LLM call from stage context and input.
+    async fn assemble_messages(
+        ctx: &Option<StageContext>,
+        input_content: &str,
         stage: &Stage,
-        llm: &dyn LLM,
-    ) -> Result<(), DaemonError> {
-        let ctx = if stage.context_path.exists() {
-            Some(StageContext::from_file(&stage.context_path).await?)
-        } else {
-            None
-        };
-
-        let lua_script = {
-            let lua_path = stage.path.join("CONTEXT.lua");
-            if lua_path.exists() {
-                Some(tokio::fs::read_to_string(&lua_path).await
-                    .map_err(|e| DaemonError::io(&lua_path, e))?)
-            } else {
-                None
-            }
-        };
-
-        let input_content = self.read_input_files(&stage.input_path).await?;
-
-        let profile_name = ctx
-            .as_ref().map_or_else(|| "generic".to_string(), resolve_profile_name);
-
-        let thinking_mode = ctx
-            .as_ref()
-            .map(resolve_thinking_mode)
-            .unwrap_or_default();
-
-        let capture_reasoning = ctx
-            .as_ref()
-            .is_some_and(resolve_capture_reasoning);
-
-        let profile = resolve_profile(&profile_name);
-
-        let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
-        let mut config = LLMConfig::new(ProviderId::OpenAI, &model);
-
-        if profile_name == "kimi-k2"
-            || matches!(&thinking_mode, ThinkingMode::Disabled | ThinkingMode::Extended { .. })
-        {
-            config = config.with_temperature(1.0);
-        }
-
-        let stage_ctx = LlmStageContext {
-            thinking_mode,
-            capture_reasoning,
-        };
-
-        profile.validate_config(&config, &stage_ctx).map_err(DaemonError::ProfileValidation)?;
-
-        let shared_store = match self.workflows.get(workflow_id) {
-            Some(wf) => load_shared_store(&wf.root),
-            None => load_shared_store(Path::new(".")),
-        };
-
-        if let Some(ref script) = lua_script {
-            let lua = create_sandboxed_vm()
-                .map_err(DaemonError::Workflow)?;
-            let mut lua_ctx = LuaContext::new(
-                &stage.id.raw,
-                &stage.path,
-                &self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone()),
-            ).with_shared_store(shared_store.clone());
-            run_hook(&lua, "on_validate", &mut lua_ctx, script)
-                .map_err(DaemonError::Workflow)?;
-            if lua_ctx.skip {
-                tracing::info!(stage = %stage.id.raw, "skipped by on_validate hook");
-                return Ok(());
-            }
-        }
-
+    ) -> Vec<Message> {
         let mut messages = Vec::new();
 
         let mut system_prompt = String::new();
@@ -635,37 +606,21 @@ impl AppState {
         }
 
         if !input_content.is_empty() {
-            messages.push(Message::new(Role::User, input_content));
+            messages.push(Message::new(Role::User, input_content.to_string()));
         } else if !messages.is_empty() {
             messages.push(Message::new(Role::User, "Execute the task described above."));
         }
 
-        tracing::info!(
-            workflow_id = workflow_id,
-            stage = %stage.id.raw,
-            model = %model,
-            profile = %profile_name,
-            messages = messages.len(),
-            "calling LLM"
-        );
+        messages
+    }
 
-        let snapshot_taken = self.snapshot_stage(workflow_id, &stage.id.raw).await.ok();
-
-        let response = llm
-            .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
-            .await
-            .map_err(|e| {
-                tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
-                if snapshot_taken.is_some() {
-                    tracing::info!(
-                        stage = %stage.id.raw,
-                        "snapshot available for restore via restore_stage()"
-                    );
-                }
-                DaemonError::Llm(e)
-            })?;
-
-        let content = response.content.unwrap_or_default();
+    /// Write LLM response output files (result.md and optional reasoning.md).
+    async fn write_stage_output(
+        stage: &Stage,
+        response: &zerochain_llm::CompleteResponse,
+        stage_ctx: &LlmStageContext,
+    ) -> Result<PathBuf, DaemonError> {
+        let content = response.content.clone().unwrap_or_default();
 
         tokio::fs::create_dir_all(&stage.output_path).await
             .map_err(|e| DaemonError::io(&stage.output_path, e))?;
@@ -695,38 +650,165 @@ impl AppState {
             "wrote LLM output"
         );
 
-        if let Some(ref script) = lua_script {
-            let lua = create_sandboxed_vm()
-                .map_err(DaemonError::Workflow)?;
-            let wf_root = self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
-            let mut lua_ctx = LuaContext::new(
-                &stage.id.raw,
-                &stage.path,
-                &wf_root,
-            )
-            .with_output(&content, response.usage.completion_tokens as u64)
-            .with_shared_store(shared_store.clone());
-            if let Err(e) = run_hook(&lua, "on_complete", &mut lua_ctx, script) {
-                tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
-            } else {
-                if let Err(e) = save_shared_store(&wf_root, &shared_store) {
-                    tracing::warn!(error = %e, "failed to save shared store");
-                }
-                for new_stage in &lua_ctx.hooks.insert_after {
-                    if let Some(wf) = self.workflows.get_mut(workflow_id) {
-                        if let Err(e) = wf.insert_stage_after(&stage.id.raw, new_stage).await {
-                            tracing::warn!(stage = new_stage, error = %e, "failed to insert stage");
-                        }
-                    }
-                }
-                for remove_raw in &lua_ctx.hooks.remove_stages {
-                    if let Some(wf) = self.workflows.get_mut(workflow_id) {
-                        if let Err(e) = wf.remove_stage(remove_raw).await {
-                            tracing::warn!(stage = remove_raw, error = %e, "failed to remove stage");
-                        }
+        Ok(result_path)
+    }
+
+    /// Run the Lua `on_complete` hook and apply any stage mutations.
+    async fn run_post_completion_hooks(
+        &mut self,
+        workflow_id: &str,
+        stage: &Stage,
+        script: &str,
+        content: &str,
+        completion_tokens: u64,
+        shared_store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    ) -> Result<(), DaemonError> {
+        let lua = create_sandboxed_vm()
+            .map_err(DaemonError::Workflow)?;
+        let wf_root = self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
+        let mut lua_ctx = LuaContext::new(
+            &stage.id.raw,
+            &stage.path,
+            &wf_root,
+        )
+        .with_output(content, completion_tokens)
+        .with_shared_store(shared_store.clone());
+        if let Err(e) = run_hook(&lua, "on_complete", &mut lua_ctx, script) {
+            tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
+        } else {
+            if let Err(e) = save_shared_store(&wf_root, shared_store) {
+                tracing::warn!(error = %e, "failed to save shared store");
+            }
+            for new_stage in &lua_ctx.hooks.insert_after {
+                if let Some(wf) = self.workflows.get_mut(workflow_id) {
+                    if let Err(e) = wf.insert_stage_after(&stage.id.raw, new_stage).await {
+                        tracing::warn!(stage = new_stage, error = %e, "failed to insert stage");
                     }
                 }
             }
+            for remove_raw in &lua_ctx.hooks.remove_stages {
+                if let Some(wf) = self.workflows.get_mut(workflow_id) {
+                    if let Err(e) = wf.remove_stage(remove_raw).await {
+                        tracing::warn!(stage = remove_raw, error = %e, "failed to remove stage");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn execute_stage_with_llm(
+        &mut self,
+        workflow_id: &str,
+        stage: &Stage,
+        llm: &dyn LLM,
+    ) -> Result<(), DaemonError> {
+        let has_context = tokio::fs::metadata(&stage.context_path).await.is_ok();
+        let ctx = if has_context {
+            Some(StageContext::from_md_file(&stage.context_path).await?)
+        } else {
+            None
+        };
+
+        let lua_path = stage.path.join("CONTEXT.lua");
+        let lua_script = match tokio::fs::metadata(&lua_path).await {
+            Ok(_) => Some(tokio::fs::read_to_string(&lua_path).await
+                .map_err(|e| DaemonError::io(&lua_path, e))?),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(DaemonError::io(&lua_path, e)),
+        };
+
+        let input_content = self.read_input_files(&stage.input_path).await?;
+
+        let profile_name = ctx
+            .as_ref().map_or_else(|| "generic".to_string(), resolve_profile_name);
+
+        let thinking_mode = ctx
+            .as_ref()
+            .map(resolve_thinking_mode)
+            .unwrap_or_default();
+
+        let capture_reasoning = ctx
+            .as_ref()
+            .is_some_and(resolve_capture_reasoning);
+
+        let profile = resolve_profile(&profile_name);
+
+        let model = std::env::var("ZEROCHAIN_MODEL").unwrap_or_else(|_| "gpt-4o".into());
+        let mut config = LLMConfig::new(ProviderId::OpenAI, &model);
+
+        if profile_name == "kimi-k2"
+            || matches!(&thinking_mode, ThinkingMode::Disabled | ThinkingMode::Extended { .. })
+        {
+            config = config.with_temperature(1.0);
+        }
+
+        let stage_ctx = LlmStageContext {
+            thinking_mode,
+            capture_reasoning,
+        };
+
+        profile.validate_config(&config, &stage_ctx).map_err(DaemonError::ProfileValidation)?;
+
+        let shared_store = match self.workflows.get(workflow_id) {
+            Some(wf) => load_shared_store(&wf.root).map_err(DaemonError::Workflow)?,
+            None => load_shared_store(Path::new(".")).map_err(DaemonError::Workflow)?,
+        };
+
+        if let Some(ref script) = lua_script {
+            let lua = create_sandboxed_vm()
+                .map_err(DaemonError::Workflow)?;
+            let mut lua_ctx = LuaContext::new(
+                &stage.id.raw,
+                &stage.path,
+                &self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone()),
+            ).with_shared_store(shared_store.clone());
+            run_hook(&lua, "on_validate", &mut lua_ctx, script)
+                .map_err(DaemonError::Workflow)?;
+            if lua_ctx.skip {
+                tracing::info!(stage = %stage.id.raw, "skipped by on_validate hook");
+                return Ok(());
+            }
+        }
+
+        let messages = Self::assemble_messages(&ctx, &input_content, stage).await;
+
+        tracing::info!(
+            workflow_id = workflow_id,
+            stage = %stage.id.raw,
+            model = %model,
+            profile = %profile_name,
+            messages = messages.len(),
+            "calling LLM"
+        );
+
+        let snapshot_taken = self.snapshot_stage(workflow_id, &stage.id.raw).await.ok();
+
+        let response = llm
+            .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
+            .await
+            .map_err(|e| {
+                tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
+                if snapshot_taken.is_some() {
+                    tracing::info!(
+                        stage = %stage.id.raw,
+                        "snapshot available for restore via restore_stage()"
+                    );
+                }
+                DaemonError::Llm(e)
+            })?;
+
+        Self::write_stage_output(stage, &response, &stage_ctx).await?;
+
+        if let Some(ref script) = lua_script {
+            self.run_post_completion_hooks(
+                workflow_id,
+                stage,
+                script,
+                &response.content.clone().unwrap_or_default(),
+                response.usage.completion_tokens as u64,
+                &shared_store,
+            ).await?;
         }
 
         Ok(())
@@ -837,8 +919,10 @@ impl AppState {
     }
 
     async fn read_input_files(&self, input_path: &Path) -> Result<String, DaemonError> {
-        if !input_path.exists() {
-            return Ok(String::new());
+        match tokio::fs::metadata(input_path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+            Err(e) => return Err(DaemonError::io(input_path, e)),
         }
 
         let mut entries = tokio::fs::read_dir(input_path).await
@@ -874,19 +958,25 @@ impl AppState {
     }
 }
 
-fn find_latest_snapshot(snapshots_dir: &Path, stage_id: &str) -> Option<String> {
+fn find_latest_snapshot(
+    snapshots_dir: &Path,
+    stage_id: &str,
+) -> Result<Option<String>, std::io::Error> {
     let prefix = format!("{stage_id}.");
-    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
-        return None;
-    };
-    let mut candidates: Vec<String> = entries
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().to_str().map(String::from))
-        .filter(|name| name.starts_with(&prefix))
-        .collect();
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(snapshots_dir)? {
+        let entry = entry?;
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(name) = file_name.to_str() else { continue; };
+        if name.starts_with(&prefix) {
+            candidates.push(name.to_string());
+        }
+    }
     candidates.sort();
-    candidates.into_iter().last()
+    Ok(candidates.into_iter().last())
 }
 
 #[cfg(test)]
@@ -1105,7 +1195,7 @@ mod tests {
     #[test]
     fn find_latest_snapshot_returns_none_on_empty() {
         let tmp = TempDir::new().unwrap();
-        assert!(find_latest_snapshot(tmp.path(), "00_spec").is_none());
+        assert!(find_latest_snapshot(tmp.path(), "00_spec").unwrap().is_none());
     }
 
     #[test]
@@ -1116,7 +1206,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("00_spec.20250201T000000Z")).unwrap();
         std::fs::create_dir_all(dir.join("00_spec.20250301T000000Z")).unwrap();
 
-        let latest = find_latest_snapshot(dir, "00_spec").unwrap();
+        let latest = find_latest_snapshot(dir, "00_spec").unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250301T000000Z");
     }
 
@@ -1127,7 +1217,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("01_impl.20250101T000000Z")).unwrap();
         std::fs::create_dir_all(dir.join("00_spec.20250101T000000Z")).unwrap();
 
-        let latest = find_latest_snapshot(dir, "00_spec").unwrap();
+        let latest = find_latest_snapshot(dir, "00_spec").unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250101T000000Z");
     }
 }

@@ -31,6 +31,9 @@ struct Cli {
 
     #[arg(long, env = "ZEROCHAIN_API_KEY")]
     api_key: Option<String>,
+
+    #[arg(long, env = "ZEROCHAIN_NO_AUTH", help = "Explicitly disable API key authentication")]
+    no_auth: bool,
 }
 
 #[tokio::main]
@@ -50,11 +53,14 @@ async fn main() -> Result<()> {
         cas_dir = %cli.cas_dir.display(),
         cas_backend = %cli.cas_backend,
         broker_enabled = cli.broker_enabled,
-        auth_enabled = cli.api_key.is_some(),
+        auth_enabled = cli.api_key.is_some() && !cli.no_auth,
         "starting zerochaind"
     );
 
     let mut server_state = state::ServerState::new(&cli.workspace);
+    if cli.no_auth {
+        server_state = server_state.with_auth_disabled();
+    }
     if let Some(key) = cli.api_key {
         server_state = server_state.with_api_key(key);
     }

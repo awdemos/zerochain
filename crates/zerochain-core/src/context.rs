@@ -14,18 +14,23 @@ pub struct Context {
 }
 
 impl Context {
-    pub async fn from_file(path: &Path) -> Result<Self> {
-        let lua_path = path.with_extension("lua");
-        if tokio::fs::try_exists(&lua_path).await.unwrap_or(false) {
-            return Self::from_lua_file(&lua_path).await;
-        }
-
+    /// Load a context from a Markdown file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if the Markdown frontmatter is invalid.
+    pub async fn from_md_file(path: &Path) -> Result<Self> {
         let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
         Ok(ctx)
     }
 
+    /// Load a context from a Lua script at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if the Lua script evaluation fails.
     pub async fn from_lua_file(path: &Path) -> Result<Self> {
         let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
         let frontmatter = crate::lua_engine::eval_context_lua(&content)?;
