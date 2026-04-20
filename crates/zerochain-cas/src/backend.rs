@@ -87,11 +87,14 @@ impl StorageBackend for LocalBackend {
         let parent = path
             .parent()
             .expect("CID path always has a parent directory");
-        fs::create_dir_all(parent).await?;
+        fs::create_dir_all(parent).await
+            .map_err(|e| CasError::io(parent, e))?;
 
         let temp_path = path.with_extension("tmp");
-        fs::write(&temp_path, data).await?;
-        fs::rename(&temp_path, &path).await?;
+        fs::write(&temp_path, data).await
+            .map_err(|e| CasError::io(&temp_path, e))?;
+        fs::rename(&temp_path, &path).await
+            .map_err(|e| CasError::io(&path, e))?;
 
         tracing::debug!(cid = %cid, "stored content");
         Ok(cid)
@@ -104,7 +107,7 @@ impl StorageBackend for LocalBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(CasError::NotFound(cid.to_string()))
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(CasError::io(&path, e)),
         }
     }
 
@@ -113,7 +116,8 @@ impl StorageBackend for LocalBackend {
         if !path.exists() {
             return Err(CasError::NotFound(cid.to_string()));
         }
-        let file = fs::File::open(&path).await?;
+        let file = fs::File::open(&path).await
+            .map_err(|e| CasError::io(&path, e))?;
         Ok(Box::new(tokio::io::BufReader::new(file)))
     }
 
@@ -126,11 +130,17 @@ impl StorageBackend for LocalBackend {
         let mut entries = match fs::read_dir(&self.base_dir).await {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(cids),
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(CasError::io(&self.base_dir, e)),
         };
 
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata = entry.metadata().await?;
+        loop {
+            let entry = match entries.next_entry().await {
+                Ok(Some(e)) => e,
+                Ok(None) => break,
+                Err(e) => return Err(CasError::io(&self.base_dir, e)),
+            };
+            let metadata = entry.metadata().await
+                .map_err(|e| CasError::io(entry.path(), e))?;
             if !metadata.is_dir() {
                 continue;
             }
@@ -141,9 +151,17 @@ impl StorageBackend for LocalBackend {
                 continue;
             }
 
-            let mut sub_entries = fs::read_dir(entry.path()).await?;
-            while let Some(sub_entry) = sub_entries.next_entry().await? {
-                let meta = sub_entry.metadata().await?;
+            let subdir = entry.path();
+            let mut sub_entries = fs::read_dir(&subdir).await
+                .map_err(|e| CasError::io(&subdir, e))?;
+            loop {
+                let sub_entry = match sub_entries.next_entry().await {
+                    Ok(Some(e)) => e,
+                    Ok(None) => break,
+                    Err(e) => return Err(CasError::io(&subdir, e)),
+                };
+                let meta = sub_entry.metadata().await
+                    .map_err(|e| CasError::io(sub_entry.path(), e))?;
                 if !meta.is_file() {
                     continue;
                 }
@@ -172,7 +190,7 @@ impl StorageBackend for LocalBackend {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Err(CasError::NotFound(cid.to_string()))
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(CasError::io(&path, e)),
         }
     }
 

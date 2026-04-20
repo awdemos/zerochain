@@ -14,7 +14,6 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-anyhow.workspace = true
 
 # Optional NATS backend
 async-nats = { version = "0.40", optional = true }
