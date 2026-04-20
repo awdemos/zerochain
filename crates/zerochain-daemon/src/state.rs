@@ -231,14 +231,15 @@ impl AppState {
         let (stage_names, stage_defs): (Vec<String>, Option<&Vec<zerochain_core::template::StageDef>>) = if let Some(tpl) = named_template {
             (tpl.stage_names(), Some(&tpl.stages))
         } else {
-            let names: Vec<String> = template
-                .map(|t| {
+            let names: Vec<String> = template.map_or_else(
+                || vec!["00_spec".into(), "01_implement".into(), "02_verify".into()],
+                |t| {
                     t.split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect()
-                })
-                .unwrap_or_else(|| vec!["00_spec".into(), "01_implement".into(), "02_verify".into()]);
+                },
+            );
             (names, None)
         };
 
@@ -491,11 +492,12 @@ impl AppState {
             }
             result
         } else {
-            let llm = self.create_llm()?;
+            let llm = Self::create_llm()?;
             self.execute_stage_with_llm(workflow_id, stage, llm.as_ref()).await
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn execute_stage_with_llm(
         &mut self,
         workflow_id: &str,
@@ -741,7 +743,7 @@ impl AppState {
         let image = std::env::var("ZEROCHAIN_STAGE_IMAGE")
             .unwrap_or_else(|_| "cgr.dev/chainguard/wolfi-base:latest".into());
 
-        let env_vars = self.container_env_vars();
+        let env_vars = Self::container_env_vars();
         let wf = self.workflows.get(workflow_id)
             .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
 
@@ -782,7 +784,7 @@ impl AppState {
         Ok(())
     }
 
-    fn container_env_vars(&self) -> Vec<(String, String)> {
+    fn container_env_vars() -> Vec<(String, String)> {
         let mut vars = Vec::new();
         for key in &[
             "OPENAI_API_KEY",
@@ -801,7 +803,7 @@ impl AppState {
         vars
     }
 
-    fn create_llm(&self) -> Result<Box<dyn LLM>, DaemonError> {
+    fn create_llm() -> Result<Box<dyn LLM>, DaemonError> {
         let provider_name =
             std::env::var("ZEROCHAIN_LLM_PROVIDER").unwrap_or_else(|_| "openai".into());
         let custom_base_url = std::env::var("ZEROCHAIN_BASE_URL").ok();

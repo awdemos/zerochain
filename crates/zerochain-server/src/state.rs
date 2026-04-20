@@ -47,6 +47,9 @@ impl ServerState {
         self
     }
 
+    /// # Errors
+    ///
+    /// Returns `DaemonError` if workflow loading fails.
     pub async fn refresh(&self) -> Result<(), DaemonError> {
         let mut state = self.inner.lock().await;
         state.load_workflows().await?;

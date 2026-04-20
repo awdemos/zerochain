@@ -13,6 +13,9 @@ pub struct StageContext {
 pub trait ProviderProfile: Send + Sync {
     fn name(&self) -> &str;
 
+    /// # Errors
+    ///
+    /// Returns `LLMError` when the configuration is invalid for this profile.
     fn validate_config(
         &self,
         _config: &LLMConfig,

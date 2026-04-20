@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 //! MCP server daemon for zerochain workflow execution.
 
 pub mod container;

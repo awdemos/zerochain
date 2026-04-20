@@ -6,7 +6,7 @@ use mlua::{Lua, UserData, UserDataMethods, Value};
 
 use crate::error::{io_err, Error, Result};
 
-fn lua_err(e: mlua::Error) -> Error {
+fn lua_err(e: &mlua::Error) -> Error {
     Error::Lua {
         message: e.to_string(),
     }
@@ -121,6 +121,7 @@ impl UserData for LuaContext {
     }
 }
 
+#[allow(clippy::match_same_arms)]
 fn lua_value_to_json(val: &mlua::Value) -> serde_json::Value {
     match val {
         Value::Nil => serde_json::Value::Null,
@@ -209,7 +210,7 @@ impl LuaContext {
         self
     }
 
-    pub fn with_shared_store(
+    #[must_use] pub fn with_shared_store(
         mut self,
         store: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     ) -> Self {
@@ -228,14 +229,14 @@ pub fn run_hook(
 
     lua.globals()
         .set("ctx", ctx.clone())
-        .map_err(lua_err)?;
+        .map_err(|e| lua_err(&e))?;
 
     let hook_call = format!(
         "{script}\nlocal __zc_hook = {hook_name}\nif type(__zc_hook) == 'function' then return __zc_hook(ctx) end"
     );
 
     let chunk = lua.load(&hook_call).set_name("CONTEXT.lua");
-    chunk.exec().map_err(lua_err)?;
+    chunk.exec().map_err(|e| lua_err(&e))?;
 
     Ok(())
 }
@@ -264,6 +265,7 @@ pub fn load_shared_store(
     Arc::new(Mutex::new(map))
 }
 
+#[allow(clippy::implicit_hasher)]
 pub fn save_shared_store(
     workflow_root: &Path,
     store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,

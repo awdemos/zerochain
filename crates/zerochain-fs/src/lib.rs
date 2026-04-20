@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 //! Copy-on-write filesystem abstraction (Btrfs, APFS, directory fallback).
 
 pub mod atomic;

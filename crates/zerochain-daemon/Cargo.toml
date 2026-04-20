@@ -2,6 +2,9 @@
 name = "zerochain-daemon"
 version.workspace = true
 edition.workspace = true
+readme = "../../README.md"
+keywords = ["zerochain", "ai", "workflow"]
+categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
 description = "MCP server daemon for zerochain workflow execution"

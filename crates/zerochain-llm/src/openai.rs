@@ -81,6 +81,9 @@ pub struct OpenAICompatibleProvider {
 }
 
 impl OpenAICompatibleProvider {
+    /// # Errors
+    ///
+    /// Returns `LLMError` if the HTTP client cannot be built.
     pub fn new(base_url: String, api_key: String) -> Result<Self, crate::error::LLMError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))

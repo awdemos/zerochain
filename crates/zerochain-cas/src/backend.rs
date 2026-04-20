@@ -86,7 +86,7 @@ impl StorageBackend for LocalBackend {
         // Atomic write: temp file in same directory, then rename
         let parent = path
             .parent()
-            .expect("CID path always has a parent directory");
+            .ok_or_else(|| CasError::InvalidCid("CID path has no parent directory".into()))?;
         fs::create_dir_all(parent).await
             .map_err(|e| CasError::io(parent, e))?;
 

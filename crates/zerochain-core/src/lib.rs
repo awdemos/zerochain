@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 //! Core workflow model: stages, CONTEXT.md parsing, execution DAG.
 
 pub mod context;

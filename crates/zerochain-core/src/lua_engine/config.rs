@@ -3,35 +3,35 @@ use mlua::{Lua, Table, Value};
 use crate::frontmatter::{ContextFrontmatter, MultimodalInput};
 use crate::error::{Error, Result};
 
-fn lua_err(e: mlua::Error) -> Error {
+fn lua_err(e: &mlua::Error) -> Error {
     Error::Lua {
         message: e.to_string(),
     }
 }
 
 fn get_string(table: &Table, key: &str) -> Result<Option<String>> {
-    match table.get::<Value>(key).map_err(lua_err)? {
-        Value::String(s) => Ok(Some(s.to_str().map_err(lua_err)?.to_string())),
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
+        Value::String(s) => Ok(Some(s.to_str().map_err(|e| lua_err(&e))?.to_string())),
         _ => Ok(None),
     }
 }
 
 fn get_bool(table: &Table, key: &str) -> Result<bool> {
-    match table.get::<Value>(key).map_err(lua_err)? {
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
         Value::Boolean(b) => Ok(b),
         _ => Ok(false),
     }
 }
 
 fn get_u64(table: &Table, key: &str) -> Result<Option<u64>> {
-    match table.get::<Value>(key).map_err(lua_err)? {
-        Value::Integer(n) => Ok(Some(n as u64)),
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
+        Value::Integer(n) => Ok(Some(n.try_into().unwrap_or(0))),
         _ => Ok(None),
     }
 }
 
 fn parse_multimodal(table: &Table, key: &str) -> Result<Vec<MultimodalInput>> {
-    match table.get::<Value>(key).map_err(lua_err)? {
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
         Value::Table(arr) => {
             let mut result = Vec::new();
             for pair in arr.sequence_values::<Table>() {
@@ -40,13 +40,13 @@ fn parse_multimodal(table: &Table, key: &str) -> Result<Vec<MultimodalInput>> {
                 })?;
                 let input_type = t
                     .get::<Option<String>>("type")
-                    .map_err(lua_err)?
+                    .map_err(|e| lua_err(&e))?
                     .unwrap_or_else(|| "image".to_string());
                 let path = t
                     .get::<Option<String>>("path")
-                    .map_err(lua_err)?
+                    .map_err(|e| lua_err(&e))?
                     .unwrap_or_default();
-                let detail = t.get::<Option<String>>("detail").map_err(lua_err)?;
+                let detail = t.get::<Option<String>>("detail").map_err(|e| lua_err(&e))?;
                 result.push(MultimodalInput {
                     input_type,
                     path,
@@ -79,7 +79,7 @@ pub fn eval_config_script(lua: &Lua, script: &str) -> Result<ContextFrontmatter>
     super::vm::reset_instruction_counter(lua)?;
 
     let chunk = lua.load(script).set_name("CONTEXT.lua");
-    let value: Value = chunk.eval().map_err(lua_err)?;
+    let value: Value = chunk.eval().map_err(|e| lua_err(&e))?;
 
     match value {
         Value::Table(table) => table_to_frontmatter(&table),

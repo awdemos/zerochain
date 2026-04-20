@@ -2,6 +2,9 @@
 name = "zerochain-fs"
 version.workspace = true
 edition.workspace = true
+readme = "../../README.md"
+keywords = ["zerochain", "ai", "workflow"]
+categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
 description = "Copy-on-write filesystem abstraction (Btrfs, APFS, directory fallback)"

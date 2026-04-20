@@ -58,7 +58,7 @@ impl Cid {
 fn hex_encode(bytes: &[u8; 32]) -> String {
     let mut s = String::with_capacity(64);
     for &b in bytes {
-        s.push_str(&format!("{b:02x}"));
+        let _ = std::fmt::write(&mut s, format_args!("{b:02x}"));
     }
     s
 }
