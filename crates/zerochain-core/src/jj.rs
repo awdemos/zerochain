@@ -144,8 +144,18 @@ impl JjManager {
     }
 
     pub fn require_jj() -> Result<()> {
+        if !is_jj_installed_sync() {
+            return Err(Error::JjNotInstalled);
+        }
         Ok(())
     }
+}
+
+fn is_jj_installed_sync() -> bool {
+    std::process::Command::new("jj")
+        .arg("--version")
+        .output()
+        .is_ok()
 }
 
 pub async fn is_jj_installed() -> bool {
