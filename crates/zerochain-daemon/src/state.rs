@@ -237,7 +237,10 @@ impl AppState {
             .workflows
             .get(workflow_id)
             .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
-        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId {
+            stage_id: stage_id.into(),
+            source: e,
+        })?;
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".complete");
@@ -261,7 +264,10 @@ impl AppState {
             .workflows
             .get(workflow_id)
             .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
-        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId {
+            stage_id: stage_id.into(),
+            source: e,
+        })?;
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let marker = stage.path.join(".error");
@@ -280,7 +286,10 @@ impl AppState {
             .workflows
             .get(workflow_id)
             .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
-        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId {
+            stage_id: stage_id.into(),
+            source: e,
+        })?;
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -324,7 +333,10 @@ impl AppState {
             .workflows
             .get(workflow_id)
             .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
-        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId {
+            stage_id: stage_id.into(),
+            source: e,
+        })?;
         let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
         let snapshots_dir = wf.root.join(".snapshots");
@@ -489,9 +501,7 @@ impl AppState {
             capture_reasoning,
         };
 
-        profile.validate_config(&config, &stage_ctx).map_err(|e| {
-            DaemonError::ProfileValidation(e.to_string())
-        })?;
+        profile.validate_config(&config, &stage_ctx).map_err(|e| DaemonError::ProfileValidation(e))?;
 
         let shared_store = match self.workflows.get(workflow_id) {
             Some(wf) => load_shared_store(&wf.root),
@@ -605,7 +615,7 @@ impl AppState {
                         "snapshot available for restore via restore_stage()"
                     );
                 }
-                DaemonError::Llm(format!("LLM call failed: {e}"))
+                DaemonError::Llm(e)
             })?;
 
         let content = response.content.unwrap_or_default();
@@ -780,7 +790,7 @@ impl AppState {
 
         let config = LLMConfig::new(provider, &model);
         LLMFactory::create(&config)
-            .map_err(|e| DaemonError::Llm(format!("failed to create LLM provider: {e}")))
+            .map_err(DaemonError::Llm)
     }
 
     async fn read_input_files(&self, input_path: &Path) -> Result<String, DaemonError> {
