@@ -64,7 +64,7 @@ fn make_request(method: &str, uri: &str, body: Option<&str>) -> Request<Body> {
         builder = builder.header("content-type", "application/json");
     }
     builder
-        .body(body.map(|b| Body::from(b.to_string())).unwrap_or(Body::empty()))
+        .body(body.map_or(Body::empty(), |b| Body::from(b.to_string())))
         .expect("build request")
 }
 
@@ -355,7 +355,7 @@ async fn reject_without_feedback() {
     let req = make_request(
         "POST",
         "/v1/workflows/reject-nofb/reject/00_spec",
-        Some(r#"{}"#),
+        Some(r"{}"),
     );
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::OK);
@@ -657,7 +657,7 @@ mod auth {
             builder = builder.header("content-type", "application/json");
         }
         builder
-            .body(body.map(|b| Body::from(b.to_string())).unwrap_or(Body::empty()))
+            .body(body.map_or(Body::empty(), |b| Body::from(b.to_string())))
             .expect("build request")
     }
 

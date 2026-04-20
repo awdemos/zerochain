@@ -5,7 +5,7 @@ use crate::types::{CompleteResponse, LLMConfig};
 pub struct GenericProfile;
 
 impl ProviderProfile for GenericProfile {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "generic"
     }
 

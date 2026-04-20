@@ -69,7 +69,7 @@ impl Context {
         })
     }
 
-    pub fn flatten(&self, parent: Option<&Context>) -> Context {
+    #[must_use] pub fn flatten(&self, parent: Option<&Context>) -> Context {
         let base = match parent {
             Some(p) => p.frontmatter.clone(),
             None => ContextFrontmatter::default(),
@@ -162,14 +162,14 @@ Do the analysis here.
 
     #[test]
     fn parse_kimi_k2_profile_frontmatter() {
-        let input = r#"---
+        let input = r"---
 provider_profile: kimi-k2
 role: senior code reviewer
 thinking_mode: disabled
 capture_reasoning: true
 ---
 Review the code.
-"#;
+";
         let ctx = Context::parse(input).unwrap();
         assert_eq!(ctx.frontmatter.provider_profile.as_deref(), Some("kimi-k2"));
         assert_eq!(ctx.frontmatter.role.as_deref(), Some("senior code reviewer"));
@@ -243,19 +243,19 @@ Check the wireframe.
 
     #[test]
     fn flatten_multimodal_input_child_takes_precedence() {
-        let parent = Context::parse(r#"---
+        let parent = Context::parse(r"---
 multimodal_input:
   - type: image
     path: parent.png
 ---
-"#).unwrap();
-        let child = Context::parse(r#"---
+").unwrap();
+        let child = Context::parse(r"---
 multimodal_input:
   - type: image
     path: child.png
     detail: low
 ---
-"#).unwrap();
+").unwrap();
         let merged = child.flatten(Some(&parent));
         assert_eq!(merged.frontmatter.multimodal_input.len(), 1);
         assert_eq!(merged.frontmatter.multimodal_input[0].path, "child.png");
@@ -263,12 +263,12 @@ multimodal_input:
 
     #[test]
     fn flatten_multimodal_input_inherits_when_child_empty() {
-        let parent = Context::parse(r#"---
+        let parent = Context::parse(r"---
 multimodal_input:
   - type: image
     path: parent.png
 ---
-"#).unwrap();
+").unwrap();
         let child = Context::parse("---\n---\n").unwrap();
         let merged = child.flatten(Some(&parent));
         assert_eq!(merged.frontmatter.multimodal_input.len(), 1);

@@ -33,7 +33,7 @@ impl StageId {
 
         let numeric_end = prefix
             .chars()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .count();
 
         if numeric_end == 0 {
@@ -64,11 +64,11 @@ impl StageId {
         })
     }
 
-    pub fn parallel_group(&self) -> Option<String> {
+    #[must_use] pub fn parallel_group(&self) -> Option<String> {
         let numeric_end = self
             .raw
             .chars()
-            .take_while(|c| c.is_ascii_digit())
+            .take_while(char::is_ascii_digit)
             .count();
         let rest = &self.raw[numeric_end..];
         if rest.starts_with('_') {
@@ -76,11 +76,11 @@ impl StageId {
         }
         rest.chars()
             .next()
-            .filter(|c| c.is_ascii_lowercase())
+            .filter(char::is_ascii_lowercase)
             .map(|c| c.to_string())
     }
 
-    pub fn sort_key(&self) -> (u32, String) {
+    #[must_use] pub fn sort_key(&self) -> (u32, String) {
         (
             self.sequence,
             self.raw.split('_').next().unwrap_or(&self.raw).to_string(),

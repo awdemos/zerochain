@@ -18,7 +18,7 @@ pub struct StageDef {
 }
 
 impl StageDef {
-    pub fn to_context_md(&self) -> String {
+    #[must_use] pub fn to_context_md(&self) -> String {
         let mut frontmatter = format!("---\nrole: {}", self.role);
         if self.human_gate {
             frontmatter.push_str("\nhuman_gate: true");
@@ -40,13 +40,13 @@ pub struct Template {
 }
 
 impl Template {
-    pub fn stage_names(&self) -> Vec<String> {
+    #[must_use] pub fn stage_names(&self) -> Vec<String> {
         self.stages.iter().map(|s| s.name.clone()).collect()
     }
 
     /// Returns the source directory for a given stage name, if this is a
     /// filesystem-tree template.
-    pub fn stage_source_dir(&self, stage_name: &str) -> Option<&Path> {
+    #[must_use] pub fn stage_source_dir(&self, stage_name: &str) -> Option<&Path> {
         self.stages.iter().find(|s| s.name == stage_name).and_then(|s| {
             s.source_dir.as_deref()
         })
@@ -77,17 +77,17 @@ struct StageToml {
 }
 
 impl TemplateRegistry {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         let mut registry = Self::default();
         registry.register_builtins();
         registry
     }
 
-    pub fn get(&self, name: &str) -> Option<&Template> {
+    #[must_use] pub fn get(&self, name: &str) -> Option<&Template> {
         self.templates.get(name)
     }
 
-    pub fn list(&self) -> Vec<&Template> {
+    #[must_use] pub fn list(&self) -> Vec<&Template> {
         let mut list: Vec<_> = self.templates.values().collect();
         list.sort_by(|a, b| a.name.cmp(&b.name));
         list
@@ -224,10 +224,10 @@ impl TemplateRegistry {
 
             let has_tree_stages = std::fs::read_dir(&path)
                 .map_err(LoadFromDirError::Io)?
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .any(|e| {
                     e.path().is_dir() &&
-                    e.file_name().to_str().map(|n| StageId::parse(n).is_ok()).unwrap_or(false)
+                    e.file_name().to_str().is_some_and(|n| StageId::parse(n).is_ok())
                 });
 
             if has_tree_stages {
