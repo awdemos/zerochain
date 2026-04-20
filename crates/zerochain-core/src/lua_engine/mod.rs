@@ -17,10 +17,7 @@ pub fn eval_context_lua(script: &str) -> Result<ContextFrontmatter> {
 }
 
 pub fn eval_context_lua_file(path: &Path) -> Result<ContextFrontmatter> {
-    let script = std::fs::read_to_string(path).map_err(|e| crate::error::Error::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    let script = std::fs::read_to_string(path).map_err(|e| crate::error::io_err(path.to_path_buf(), e))?;
     eval_context_lua(&script)
 }
 
