@@ -33,7 +33,7 @@ Directories are stages. Files are state. Symlinks are data flow.
 | **🎯 Deterministic LLM** | Config derived from content hash. Same input, same execution. |
 | **🔌 Provider-agnostic** | Any OpenAI-compatible API — OpenAI, Ollama, Moonshot, and more. |
 | **🦀 Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
-| **🏛️ Auditable** | Because state is files, every mutation is a file operation. Layer a VCS (jj) underneath and you get an immutable, queryable audit trail for free — no extra database or infrastructure. |
+| **🏛️ Auditable** | Because state is files, every mutation is a file operation. Layer jj underneath and you get an immutable, queryable audit trail for free — with `jj op log`, `jj undo`, and zero extra infrastructure. |
 | **🧬 Self-modifying workflows** | Optional Lua config engine. Stages can insert/remove subsequent stages at runtime. |
 
 ---
@@ -42,8 +42,14 @@ Directories are stages. Files are state. Symlinks are data flow.
 
 ```bash
 # Install (requires Rust nightly 1.90+)
-git clone --depth 1 https://github.com/awdemos/zerochain.git
+# Recommended: clone with jj to see the audit-trail philosophy in action
+jj git clone https://github.com/awdemos/zerochain.git
 cd zerochain
+
+# Or clone with git (jj works on top of Git — you can add it later)
+# git clone --depth 1 https://github.com/awdemos/zerochain.git
+# cd zerochain
+
 cargo build --release --workspace
 
 # Configure
@@ -108,7 +114,7 @@ dagger call publish --registry ttl.sh/$USER-zerochaind:1h
 
 ### 🔍 Audit Trails
 
-Because zerochaind is filesystem-native, every workflow mutation is a file operation. `jj op log` gives you a complete, immutable timeline of every operation — no audit database, no extra infrastructure. The VCS *is* the audit log.
+Because zerochaind is filesystem-native, every workflow mutation is a file operation. `jj op log` gives you a complete, immutable timeline of every operation — no audit database, no extra infrastructure. The VCS *is* the audit log. We use the same jj workflow to develop ZeroChain itself; see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 
@@ -130,6 +136,26 @@ Because zerochaind is filesystem-native, every workflow mutation is a file opera
 | `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing |
 | `zerochain-daemon` | CLI binary |
 | `zerochain-server` | HTTP daemon (zerochaind) |
+
+---
+
+## 🔀 Developed with jj
+
+ZeroChain is developed with [jj](https://github.com/martinvonz/jj) — a version-control system that treats the working copy as a commit and gives you an immutable operation log. We dogfood the same workflow we recommend for audit trails:
+
+```bash
+# See what changed
+jj diff
+
+# Create a commit
+jj describe -m "feat: add stage isolation"
+jj new
+
+# Review the operation log
+jj op log
+```
+
+We use Git as the wire protocol (GitHub for issues, PRs, and CI), but jj as the local workflow. You don't need to give up GitHub to get the benefits of jj — they are fully compatible. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full workflow.
 
 ---
 

@@ -3,3 +3,4 @@
 .DS_Store
 .desloppify/
 node_modules/
+.jj/
