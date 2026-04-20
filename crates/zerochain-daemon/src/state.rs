@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::DaemonError;
-use zerochain_fs::CowPlatform;
+use zerochain_fs::{CowPlatform, acquire_lock, clean_output};
 use zerochain_core::context::Context as StageContext;
 use zerochain_core::lua_engine::{
     create_sandboxed_vm, run_hook, load_shared_store, save_shared_store, LuaContext,
@@ -176,6 +176,59 @@ impl AppState {
         let reloaded = Workflow::from_dir(&root).await?;
         self.workflows.insert(id.to_string(), reloaded);
         Ok(())
+    }
+
+    /// Run a single stage through its full lifecycle: acquire lock, clean output,
+    /// execute, mark complete or error, and reload the workflow.
+    pub async fn run_stage(
+        &mut self,
+        workflow_id: &str,
+        stage_raw: &str,
+    ) -> Result<(), DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let sid = StageId::parse(stage_raw).map_err(|e| DaemonError::InvalidStageId {
+            stage_id: stage_raw.into(),
+            source: e,
+        })?;
+        let stage = wf
+            .stage_by_id(&sid)
+            .ok_or_else(|| DaemonError::StageNotFound(stage_raw.into()))?
+            .clone();
+
+        let _lock = acquire_lock(&stage.path).await?;
+
+        if let Err(e) = clean_output(&stage.path).await {
+            tracing::warn!(
+                error = %e,
+                path = %stage.path.display(),
+                "failed to clean stage output"
+            );
+        }
+
+        let result = self.execute_stage(workflow_id, &stage).await;
+
+        match &result {
+            Ok(()) => {
+                if let Err(e) = self.mark_stage_complete(workflow_id, stage_raw).await {
+                    tracing::warn!(error = %e, "failed to mark stage complete");
+                }
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                if let Err(e2) = self.mark_stage_error(workflow_id, stage_raw, Some(&msg)).await {
+                    tracing::warn!(error = %e2, "failed to mark stage error");
+                }
+            }
+        }
+
+        if let Err(e) = self.reload_workflow(workflow_id).await {
+            tracing::warn!(error = %e, "failed to reload workflow");
+        }
+
+        result
     }
 
     pub async fn init_workflow(

@@ -10,7 +10,7 @@ use zerochain_broker::Broker;
 use zerochain_broker::BrokerMessage;
 use zerochain_cas::Cid;
 use zerochain_core::stage::StageId;
-use zerochain_fs::{acquire_lock, clean_output};
+
 
 use zerochain_core::jj;
 use zerochain_core::workflow::is_valid_workflow_name;
@@ -226,48 +226,6 @@ async fn run_next(
     run_stage_by_id(&state, &id, &next_stage.raw).await
 }
 
-async fn finalize_stage_execution(
-    state: &ServerState,
-    mut inner: tokio::sync::MutexGuard<'_, zerochain_daemon::AppState>,
-    id: &str,
-    stage_raw: &str,
-    result: Result<(), zerochain_daemon::DaemonError>,
-) -> axum::response::Response {
-    match result {
-        Ok(()) => {
-            if let Err(e) = inner.mark_stage_complete(id, stage_raw).await {
-                tracing::warn!(error = %e, "failed to mark stage complete");
-            }
-            if let Err(e) = inner.reload_workflow(id).await {
-                tracing::warn!(error = %e, "failed to reload workflow after complete");
-            }
-            drop(inner);
-            jj::commit_stage_complete(&state.workspace, id, stage_raw);
-            Json(SimpleMessage {
-                message: format!("stage {stage_raw} complete"),
-            })
-            .into_response()
-        }
-        Err(e) => {
-            if let Err(e2) = inner.mark_stage_error(id, stage_raw, None).await {
-                tracing::warn!(error = %e2, "failed to mark stage error");
-            }
-            if let Err(e2) = inner.reload_workflow(id).await {
-                tracing::warn!(error = %e2, "failed to reload workflow after error");
-            }
-            drop(inner);
-            jj::commit_stage_error(&state.workspace, id, stage_raw);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SimpleMessage {
-                    message: format!("stage {stage_raw} failed: {e}"),
-                }),
-            )
-                .into_response()
-        }
-    }
-}
-
 async fn run_stage_by_id(
     state: &ServerState,
     id: &str,
@@ -287,7 +245,7 @@ async fn run_stage_by_id(
         }
     };
 
-    let inner = state.inner.lock().await;
+    let mut inner = state.inner.lock().await;
     let stage = match inner.get_workflow(id).and_then(|wf| wf.stage_by_id(&sid)) {
         Some(s) => s.clone(),
         None => {
@@ -302,26 +260,27 @@ async fn run_stage_by_id(
     };
 
     let stage_raw = stage.id.raw.clone();
-
-    // Drop the AppState mutex before acquiring the file lock to reduce contention
+    let result = inner.run_stage(id, &stage_raw).await;
     drop(inner);
 
-    match acquire_lock(&stage.path).await {
-        Ok(_guard) => {
-            if let Err(e) = clean_output(&stage.path).await {
-                tracing::warn!(error = %e, path = %stage.path.display(), "failed to clean stage output");
-            }
-            let mut inner = state.inner.lock().await;
-            let result = inner.execute_stage(id, &stage).await;
-            finalize_stage_execution(state, inner, id, &stage_raw, result).await
-        }
-        Err(e) => (
-            StatusCode::CONFLICT,
+    match result {
+        Ok(()) => {
+            jj::commit_stage_complete(&state.workspace, id, &stage_raw);
             Json(SimpleMessage {
-                message: format!("stage locked: {e}"),
-            }),
-        )
-            .into_response(),
+                message: format!("stage {stage_raw} complete"),
+            })
+            .into_response()
+        }
+        Err(e) => {
+            jj::commit_stage_error(&state.workspace, id, &stage_raw);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SimpleMessage {
+                    message: format!("stage {stage_raw} failed: {e}"),
+                }),
+            )
+                .into_response()
+        }
     }
 }
 

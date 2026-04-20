@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use zerochain_daemon::state::AppState;
 use std::path::PathBuf;
-use zerochain_fs::{acquire_lock, clean_output, mark_complete};
 use zerochain_core::stage::StageId;
 use zerochain_core::template::TemplateRegistry;
 
@@ -124,21 +123,12 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("stage not found: {}", stage_id.raw))?
                 .clone();
 
-            let _lock = acquire_lock(&stage.path).await?;
-            clean_output(&stage.path).await?;
             println!("executing stage {} in {}", stage_id.raw, workflow_id);
             println!("  input:  {}", stage.input_path.display());
             println!("  output: {}", stage.output_path.display());
 
-            if let Err(e) = state.execute_stage(&workflow_id, &stage).await {
-                let error_marker = stage.path.join(".error");
-                tokio::fs::write(&error_marker, format!("{e}"))
-                    .await
-                    .map_err(|io_err| anyhow::anyhow!("failed to write error marker: {io_err}"))?;
-                anyhow::bail!("stage execution failed: {e}");
-            }
+            state.run_stage(&workflow_id, &stage_id.raw).await?;
 
-            mark_complete(&stage.path, None).await?;
             println!("stage complete: {}", stage_id.raw);
         }
         Commands::Status { workflow_id: None } => {
