@@ -50,7 +50,7 @@ impl StageId {
 
         let letter = &prefix[numeric_end..];
         if !letter.is_empty()
-            && (letter.len() != 1 || !letter.chars().next().unwrap().is_ascii_lowercase())
+            && (letter.len() != 1 || !letter.chars().next().map_or(false, |c| c.is_ascii_lowercase()))
         {
             return Err(Error::InvalidStageName {
                 name: dir_name.to_string(),

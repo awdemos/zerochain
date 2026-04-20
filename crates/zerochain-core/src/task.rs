@@ -161,12 +161,12 @@ impl TaskBuilder {
         }
     }
 
-    pub fn status(mut self, status: impl Into<String>) -> Self {
+    #[must_use] pub fn status(mut self, status: impl Into<String>) -> Self {
         self.status = status.into();
         self
     }
 
-    pub fn priority(mut self, priority: impl Into<String>) -> Self {
+    #[must_use] pub fn priority(mut self, priority: impl Into<String>) -> Self {
         self.priority = Some(priority.into());
         self
     }
@@ -186,7 +186,7 @@ impl TaskBuilder {
         self
     }
 
-    pub fn description(mut self, description: impl Into<String>) -> Self {
+    #[must_use] pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }

@@ -151,8 +151,7 @@ pub async fn clean_output(dir: &Path) -> Result<()> {
 fn epoch_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs()
+        .map_or(0, |d| d.as_secs())
 }
 
 fn is_pid_alive(pid: u32) -> bool {

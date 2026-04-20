@@ -2,6 +2,9 @@
 name = "zerochain-llm"
 version.workspace = true
 edition.workspace = true
+readme = "../../README.md"
+keywords = ["zerochain", "ai", "workflow"]
+categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
 description = "LLM provider trait with OpenAI-compatible implementation"

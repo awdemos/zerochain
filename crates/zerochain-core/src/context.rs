@@ -50,6 +50,7 @@ impl Context {
 
         let end_marker = after_first.find("\n---").ok_or_else(|| Error::YamlParse {
             path: std::path::PathBuf::from("<inline>"),
+            #[allow(clippy::unwrap_used)]
             source: serde_yml::from_str::<serde_yml::Value>("---").unwrap_err(),
         })?;
 

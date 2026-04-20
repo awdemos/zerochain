@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{io_err, Error, Result};
 
-fn map_jj_spawn_error(e: std::io::Error) -> Error {
+fn map_jj_spawn_error(e: &std::io::Error) -> Error {
     if e.kind() == std::io::ErrorKind::NotFound {
         Error::JjNotInstalled
     } else {
@@ -33,7 +33,7 @@ impl JjManager {
             .arg(path)
             .output()
             .await
-            .map_err(map_jj_spawn_error)?;
+            .map_err(|e| map_jj_spawn_error(&e))?;
 
         if !output.status.success() {
             return Err(Error::JjError {
@@ -52,7 +52,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(map_jj_spawn_error)?;
+            .map_err(|e| map_jj_spawn_error(&e))?;
 
         if !describe_output.status.success() {
             return Err(Error::JjError {
@@ -68,7 +68,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(map_jj_spawn_error)?;
+            .map_err(|e| map_jj_spawn_error(&e))?;
 
         if !new_output.status.success() {
             return Err(Error::JjError {
@@ -99,7 +99,7 @@ impl JjManager {
             .current_dir(path)
             .output()
             .await
-            .map_err(map_jj_spawn_error)?;
+            .map_err(|e| map_jj_spawn_error(&e))?;
 
         if !output.status.success() {
             return Err(Error::JjError {

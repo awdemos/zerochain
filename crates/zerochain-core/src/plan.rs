@@ -41,15 +41,14 @@ impl ExecutionPlan {
         let mut stage_map = BTreeMap::new();
 
         for stage in stages {
-            let group_key = stage
-                .id
-                .parallel_group()
-                .map(|_| {
+            let group_key = stage.id.parallel_group().map_or_else(
+                || stage.id.raw.clone(),
+                |_| {
                     let raw = &stage.id.raw;
                     let prefix: String = raw.chars().take_while(char::is_ascii_digit).collect();
                     format!("{prefix}_parallel")
-                })
-                .unwrap_or_else(|| stage.id.raw.clone());
+                },
+            );
 
             let state = if stage.is_error {
                 StageState::Error
@@ -135,7 +134,7 @@ impl ExecutionPlan {
         for group in &self.groups {
             match group.state {
                 StageState::Error => return None,
-                StageState::Complete => continue,
+                StageState::Complete => {},
                 _ => {
                     for stage_id in &group.stages {
                         let node = &self.stage_map[&stage_id.raw];

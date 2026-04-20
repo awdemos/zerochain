@@ -19,6 +19,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 /// Bearer token middleware. Skips auth when:
 /// - The request path is `/v1/health`
 /// - No API key is configured on the server state
+///
+/// # Errors
+///
+/// Returns `StatusCode::UNAUTHORIZED` when the bearer token is missing or invalid.
 pub async fn require_api_key(
     State(state): State<ServerState>,
     request: Request,

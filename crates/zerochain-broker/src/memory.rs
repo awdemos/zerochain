@@ -60,7 +60,7 @@ impl Broker for MemoryBroker {
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {},
                 }
             }
         });
