@@ -2,6 +2,7 @@
 
 pub mod context;
 pub mod error;
+pub mod frontmatter;
 pub mod jj;
 pub mod lua_engine;
 pub mod plan;

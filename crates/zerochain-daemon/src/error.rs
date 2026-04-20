@@ -29,8 +29,7 @@ pub enum DaemonError {
     #[error("LLM error: {0}")]
     Llm(#[from] zerochain_llm::error::LLMError),
 
-    #[error("Lua error: {0}")]
-    Lua(String),
+
 
     #[error("profile validation failed: {0}")]
     ProfileValidation(zerochain_llm::error::LLMError),
@@ -38,17 +37,23 @@ pub enum DaemonError {
     #[error("missing environment variable: {0}")]
     MissingEnv(String),
 
-    #[error("CoW snapshot error: {0}")]
-    CowSnapshot(String),
+    #[error("CoW snapshot error for stage {stage}: {source}")]
+    CowSnapshot { stage: String, #[source] source: zerochain_fs::error::FsError },
 
-    #[error("CoW restore error: {0}")]
-    CowRestore(String),
+    #[error("CoW restore error for stage {stage}: {source}")]
+    CowRestore { stage: String, #[source] source: zerochain_fs::error::FsError },
 
     #[error("container spawn error: {0}")]
-    ContainerSpawn(String),
+    ContainerSpawn(#[source] std::io::Error),
 
     #[error("container execution error: {0}")]
     ContainerExec(String),
+
+    #[error("container image operation failed for {image}: {stderr}")]
+    ContainerImage { image: String, stderr: String },
+
+    #[error("no container runtime found (need docker or podman)")]
+    ContainerRuntimeNotFound,
 
     #[error("filesystem error: {0}")]
     Fs(#[from] zerochain_fs::error::FsError),
