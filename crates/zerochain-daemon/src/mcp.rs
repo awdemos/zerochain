@@ -59,8 +59,8 @@ pub struct RejectParams {
 }
 
 impl ZerochainMcpServer {
-    #[must_use] pub fn new(workspace: PathBuf) -> Self {
-        let state = AppState::new(&workspace);
+    #[must_use] pub fn new(workspace: impl AsRef<std::path::Path>) -> Self {
+        let state = AppState::new(workspace.as_ref());
         Self {
             tool_router: Self::tool_router(),
             state: Arc::new(Mutex::new(state)),
@@ -118,9 +118,8 @@ impl ZerochainMcpServer {
 
 
         let mut state = self.state.lock().await;
-        let workflow = match state.get_workflow(&workflow_id).cloned() {
-            Some(w) => w,
-            None => return err_result(format!("workflow not found: {workflow_id}")),
+        let Some(workflow) = state.get_workflow(&workflow_id).cloned() else {
+            return err_result(format!("workflow not found: {workflow_id}"));
         };
 
         let plan = workflow.execution_plan();
@@ -139,9 +138,8 @@ impl ZerochainMcpServer {
             },
         };
 
-        let _stage = match workflow.stage_by_id(&stage_id).cloned() {
-            Some(s) => s,
-            None => return err_result(format!("stage not found: {}", stage_id.raw)),
+        let Some(_stage) = workflow.stage_by_id(&stage_id).cloned() else {
+            return err_result(format!("stage not found: {}", stage_id.raw));
         };
 
         match state.run_stage(&workflow_id, &stage_id.raw).await {
@@ -161,9 +159,8 @@ impl ZerochainMcpServer {
         let state = self.state.lock().await;
 
         if let Some(wid) = workflow_id {
-            let workflow = match state.get_workflow(&wid) {
-                Some(w) => w,
-                None => return err_result(format!("workflow not found: {wid}")),
+            let Some(workflow) = state.get_workflow(&wid) else {
+                return err_result(format!("workflow not found: {wid}"));
             };
             let plan = workflow.execution_plan();
             let mut lines = vec![

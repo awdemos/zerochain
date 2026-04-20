@@ -12,6 +12,10 @@ pub struct NatsBroker {
 
 impl NatsBroker {
     /// Connect to a NATS server.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokerError::Connection` if the NATS connection fails.
     pub async fn connect(url: &str) -> Result<Self> {
         let client = async_nats::connect(url)
             .await
@@ -20,6 +24,10 @@ impl NatsBroker {
     }
 
     /// Create from the `ZEROCHAIN_BROKER_URL` environment variable.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokerError::Connection` if the NATS connection fails.
     pub async fn from_env() -> Result<Self> {
         let url = std::env::var("ZEROCHAIN_BROKER_URL")
             .unwrap_or_else(|_| "nats://localhost:4222".into());

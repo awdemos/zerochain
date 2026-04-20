@@ -12,6 +12,10 @@ impl LLMFactory {
     /// For `ProviderId::OpenAI` and `ProviderId::OpenAICompatible`, the API key
     /// is read from the environment at call time. For `LocalGGUF`, this returns
     /// an error (not yet implemented).
+    ///
+    /// # Errors
+    ///
+    /// Returns `LLMError::Config` when a required environment variable is missing.
     pub fn create(config: &LLMConfig) -> Result<Box<dyn LLM>, LLMError> {
         match &config.provider {
             crate::types::ProviderId::OpenAI => {
