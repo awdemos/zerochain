@@ -36,7 +36,7 @@ impl Drop for ScopedEnv {
 }
 
 fn make_app(workspace: &Path) -> axum::Router {
-    let state = ServerState::new(workspace);
+    let state = ServerState::new(workspace).with_auth_disabled();
     routes::routes(state)
 }
 
@@ -103,7 +103,7 @@ async fn list_workflows_empty() {
 #[tokio::test]
 async fn init_workflow_creates_and_lists() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -128,7 +128,7 @@ async fn init_workflow_creates_and_lists() {
 #[tokio::test]
 async fn get_workflow_returns_stages() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -162,7 +162,7 @@ async fn get_nonexistent_workflow_404s() {
 #[tokio::test]
 async fn approve_marks_stage_complete() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -191,7 +191,7 @@ async fn approve_marks_stage_complete() {
 #[tokio::test]
 async fn reject_marks_stage_error() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -220,7 +220,7 @@ async fn reject_marks_stage_error() {
 #[tokio::test]
 async fn read_output_missing_returns_404() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -238,7 +238,7 @@ async fn read_output_missing_returns_404() {
 #[tokio::test]
 async fn read_output_returns_content() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -268,7 +268,7 @@ async fn read_output_returns_content() {
 #[tokio::test]
 async fn init_workflow_with_custom_template() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -291,7 +291,7 @@ async fn init_workflow_with_custom_template() {
 #[tokio::test]
 async fn read_reasoning_missing_returns_404() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -309,7 +309,7 @@ async fn read_reasoning_missing_returns_404() {
 #[tokio::test]
 async fn read_reasoning_returns_content() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -342,7 +342,7 @@ async fn read_reasoning_returns_content() {
 #[tokio::test]
 async fn reject_without_feedback() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -374,7 +374,7 @@ async fn reject_without_feedback() {
 #[tokio::test]
 async fn approve_nonexistent_stage_returns_error() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -396,7 +396,7 @@ async fn approve_nonexistent_stage_returns_error() {
 #[tokio::test]
 async fn reject_nonexistent_stage_returns_error() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -418,7 +418,7 @@ async fn reject_nonexistent_stage_returns_error() {
 #[tokio::test]
 async fn read_output_for_nonexistent_stage_404s() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -440,7 +440,7 @@ async fn read_output_for_nonexistent_stage_404s() {
 #[tokio::test]
 async fn run_next_returns_no_pending_when_complete() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -494,7 +494,7 @@ async fn run_specific_stage_nonexistent_workflow_404s() {
 #[tokio::test]
 async fn run_specific_stage_invalid_id_returns_400() {
     let tmp = TempDir::new().expect("tempdir");
-    let state = ServerState::new(tmp.path());
+    let state = ServerState::new(tmp.path()).with_auth_disabled();
 
     let req = make_request(
         "POST",
@@ -580,7 +580,7 @@ mod e2e {
         let _base_url = ScopedEnv::set("ZEROCHAIN_BASE_URL", &base_url);
         let _model = ScopedEnv::set("ZEROCHAIN_MODEL", "mock-model");
 
-        let state = ServerState::new(tmp.path());
+        let state = ServerState::new(tmp.path()).with_auth_disabled();
 
         let req = make_request(
             "POST",
@@ -702,7 +702,18 @@ mod auth {
     }
 
     #[tokio::test]
-    async fn no_key_configured_allows_all() {
+    async fn no_key_configured_returns_401() {
+        let tmp = TempDir::new().expect("tempdir");
+        let state = ServerState::new(tmp.path());
+        let app = routes::routes(state);
+
+        let req = make_request("GET", "/v1/workflows", None);
+        let resp = send!(app, req);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn no_auth_flag_allows_all() {
         let tmp = TempDir::new().expect("tempdir");
         let app = make_app(tmp.path());
 

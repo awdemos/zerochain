@@ -1,4 +1,3 @@
-#![allow(clippy::missing_errors_doc)]
 //! Content-addressed storage using Blake3 hashing.
 
 mod backend;

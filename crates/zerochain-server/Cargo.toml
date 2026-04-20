@@ -22,8 +22,7 @@ s3 = ["zerochain-cas/s3"]
 
 [dependencies]
 zerochain-core = { path = "../zerochain-core" }
-zerochain-daemon = { path = "../zerochain-daemon" }
-zerochain-fs = { path = "../zerochain-fs" }
+zerochain-engine = { path = "../zerochain-engine" }
 zerochain-llm = { path = "../zerochain-llm" }
 zerochain-cas = { path = "../zerochain-cas" }
 zerochain-broker = { path = "../zerochain-broker" }

@@ -27,16 +27,21 @@ impl ProviderProfile for KimiK2Profile {
         &self,
         extra_body: &mut serde_json::Value,
         ctx: &StageContext,
-    ) {
+    ) -> Result<(), LLMError> {
+        let obj = extra_body.as_object_mut().ok_or_else(|| {
+            LLMError::Config(
+                "Kimi K2 augment_request requires extra_body to be a JSON object".into(),
+            )
+        })?;
         match &ctx.thinking_mode {
             ThinkingMode::Disabled => {
-                extra_body.as_object_mut().unwrap().insert(
+                obj.insert(
                     "thinking".to_string(),
                     serde_json::json!({"type": "disabled"}),
                 );
             }
             ThinkingMode::Extended { budget_tokens } => {
-                extra_body.as_object_mut().unwrap().insert(
+                obj.insert(
                     "thinking".to_string(),
                     serde_json::json!({
                         "type": "enabled",
@@ -46,6 +51,7 @@ impl ProviderProfile for KimiK2Profile {
             }
             ThinkingMode::Default => {}
         }
+        Ok(())
     }
 
     fn parse_response(
@@ -144,7 +150,7 @@ mod tests {
             thinking_mode: ThinkingMode::Disabled,
             capture_reasoning: false,
         };
-        profile().augment_request(&mut extra, &ctx);
+        profile().augment_request(&mut extra, &ctx).unwrap();
         assert_eq!(extra["thinking"]["type"].as_str(), Some("disabled"));
     }
 
@@ -155,7 +161,7 @@ mod tests {
             thinking_mode: ThinkingMode::Extended { budget_tokens: 4096 },
             capture_reasoning: false,
         };
-        profile().augment_request(&mut extra, &ctx);
+        profile().augment_request(&mut extra, &ctx).unwrap();
         assert_eq!(extra["thinking"]["type"].as_str(), Some("enabled"));
         assert_eq!(extra["thinking"]["budget_tokens"].as_u64(), Some(4096));
     }
@@ -167,7 +173,7 @@ mod tests {
             thinking_mode: ThinkingMode::Default,
             capture_reasoning: false,
         };
-        profile().augment_request(&mut extra, &ctx);
+        profile().augment_request(&mut extra, &ctx).unwrap();
         assert!(extra.as_object().unwrap().is_empty());
     }
 

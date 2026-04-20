@@ -135,55 +135,7 @@ impl TemplateRegistry {
                     source: e,
                 })?;
 
-            let mut stages = Vec::new();
-            let stage_entries = std::fs::read_dir(&path).map_err(LoadFromDirError::Io)?;
-            for stage_entry in stage_entries {
-                let stage_entry = stage_entry.map_err(LoadFromDirError::Io)?;
-                let stage_path = stage_entry.path();
-                if !stage_path.is_dir() {
-                    continue;
-                }
-                let dir_name = match stage_entry.file_name().to_str() {
-                    Some(n) => n.to_string(),
-                    None => continue,
-                };
-                let sid = match StageId::parse(&dir_name) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(dir = %dir_name, error = %e, "skipping invalid stage directory");
-                        continue;
-                    }
-                };
-
-                let context_path = stage_path.join("CONTEXT.md");
-                let (role, body, human_gate) = if context_path.exists() {
-                    let content = std::fs::read_to_string(&context_path)
-                        .map_err(LoadFromDirError::Io)?;
-                    match Context::parse(&content) {
-                        Ok(ctx) => (
-                            ctx.frontmatter.role.unwrap_or_default(),
-                            ctx.body,
-                            ctx.frontmatter.human_gate,
-                        ),
-                        Err(e) => {
-                            tracing::warn!(path = %context_path.display(), error = %e, "failed to parse CONTEXT.md");
-                            (String::new(), String::new(), false)
-                        }
-                    }
-                } else {
-                    (String::new(), String::new(), false)
-                };
-
-                stages.push(StageDef {
-                    name: sid.raw,
-                    role,
-                    body,
-                    human_gate,
-                    source_dir: Some(stage_path),
-                });
-            }
-
-            stages.sort_by(|a, b| a.name.cmp(&b.name));
+            let stages = Self::load_stages_from_dir(&path)?;
 
             self.register(Template {
                 name: parsed.name,
@@ -193,6 +145,59 @@ impl TemplateRegistry {
             });
         }
         Ok(())
+    }
+
+    fn load_stages_from_dir(path: &std::path::Path) -> Result<Vec<StageDef>, LoadFromDirError> {
+        let mut stages = Vec::new();
+        let stage_entries = std::fs::read_dir(path).map_err(LoadFromDirError::Io)?;
+        for stage_entry in stage_entries {
+            let stage_entry = stage_entry.map_err(LoadFromDirError::Io)?;
+            let stage_path = stage_entry.path();
+            if !stage_path.is_dir() {
+                continue;
+            }
+            let dir_name = match stage_entry.file_name().to_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let sid = match StageId::parse(&dir_name) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(dir = %dir_name, error = %e, "skipping invalid stage directory");
+                    continue;
+                }
+            };
+
+            let context_path = stage_path.join("CONTEXT.md");
+            let (role, body, human_gate) = if context_path.exists() {
+                let content = std::fs::read_to_string(&context_path)
+                    .map_err(LoadFromDirError::Io)?;
+                match Context::parse(&content) {
+                    Ok(ctx) => (
+                        ctx.frontmatter.role.unwrap_or_default(),
+                        ctx.body,
+                        ctx.frontmatter.human_gate,
+                    ),
+                    Err(e) => {
+                        tracing::warn!(path = %context_path.display(), error = %e, "failed to parse CONTEXT.md");
+                        (String::new(), String::new(), false)
+                    }
+                }
+            } else {
+                (String::new(), String::new(), false)
+            };
+
+            stages.push(StageDef {
+                name: sid.raw,
+                role,
+                body,
+                human_gate,
+                source_dir: Some(stage_path),
+            });
+        }
+
+        stages.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(stages)
     }
 
     /// Load templates from a directory, auto-detecting tree vs legacy layout.
@@ -222,73 +227,24 @@ impl TemplateRegistry {
                     source: e,
                 })?;
 
-            let has_tree_stages = std::fs::read_dir(&path)
-                .map_err(LoadFromDirError::Io)?
-                .filter_map(std::result::Result::ok)
-                .any(|e| {
-                    e.path().is_dir() &&
-                    e.file_name().to_str().is_some_and(|n| StageId::parse(n).is_ok())
-                });
+            let mut has_tree_stages = false;
+            for entry in std::fs::read_dir(&path).map_err(LoadFromDirError::Io)? {
+                let entry = entry.map_err(LoadFromDirError::Io)?;
+                if entry.path().is_dir() &&
+                    entry.file_name().to_str().is_some_and(|n| StageId::parse(n).is_ok())
+                {
+                    has_tree_stages = true;
+                    break;
+                }
+            }
 
             if has_tree_stages {
-                let template_dir = path.clone();
-                let name = parsed.name.clone();
-                let description = parsed.description.clone();
-
-                let mut stages = Vec::new();
-                let stage_entries = std::fs::read_dir(&template_dir).map_err(LoadFromDirError::Io)?;
-                for stage_entry in stage_entries {
-                    let stage_entry = stage_entry.map_err(LoadFromDirError::Io)?;
-                    let stage_path = stage_entry.path();
-                    if !stage_path.is_dir() {
-                        continue;
-                    }
-                    let dir_name = match stage_entry.file_name().to_str() {
-                        Some(n) => n.to_string(),
-                        None => continue,
-                    };
-                    let sid = match StageId::parse(&dir_name) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::warn!(dir = %dir_name, error = %e, "skipping invalid stage directory");
-                            continue;
-                        }
-                    };
-
-                    let context_path = stage_path.join("CONTEXT.md");
-                    let (role, body, human_gate) = if context_path.exists() {
-                        let content = std::fs::read_to_string(&context_path)
-                            .map_err(LoadFromDirError::Io)?;
-                        match Context::parse(&content) {
-                            Ok(ctx) => (
-                                ctx.frontmatter.role.unwrap_or_default(),
-                                ctx.body,
-                                ctx.frontmatter.human_gate,
-                            ),
-                            Err(e) => {
-                                tracing::warn!(path = %context_path.display(), error = %e, "failed to parse CONTEXT.md");
-                                (String::new(), String::new(), false)
-                            }
-                        }
-                    } else {
-                        (String::new(), String::new(), false)
-                    };
-
-                    stages.push(StageDef {
-                        name: sid.raw,
-                        role,
-                        body,
-                        human_gate,
-                        source_dir: Some(stage_path),
-                    });
-                }
-
-                stages.sort_by(|a, b| a.name.cmp(&b.name));
+                let stages = Self::load_stages_from_dir(&path)?;
                 self.register(Template {
-                    name,
-                    description,
+                    name: parsed.name,
+                    description: parsed.description,
                     stages,
-                    source_root: Some(template_dir),
+                    source_root: Some(path),
                 });
             } else {
                 let mut stages: Vec<StageDef> = parsed

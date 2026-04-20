@@ -21,7 +21,8 @@ impl ProviderProfile for GenericProfile {
         &self,
         _extra_body: &mut serde_json::Value,
         _ctx: &StageContext,
-    ) {
+    ) -> Result<(), LLMError> {
+        Ok(())
     }
 
     fn parse_response(
@@ -55,7 +56,7 @@ mod tests {
         let p = GenericProfile;
         let mut extra = serde_json::Value::Object(serde_json::Map::new());
         let ctx = StageContext::default();
-        p.augment_request(&mut extra, &ctx);
+        p.augment_request(&mut extra, &ctx).unwrap();
         assert!(extra.as_object().unwrap().is_empty());
     }
 

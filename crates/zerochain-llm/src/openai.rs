@@ -11,9 +11,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, instrument, warn};
 
-// ---------------------------------------------------------------------------
-// Wire types (OpenAI /v1/chat/completions)
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -70,11 +67,9 @@ struct ApiErrorDetail {
     message: String,
 }
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
 
 pub struct OpenAICompatibleProvider {
+    provider_id: crate::types::ProviderId,
     base_url: String,
     api_key: String,
     client: Client,
@@ -84,11 +79,16 @@ impl OpenAICompatibleProvider {
     /// # Errors
     ///
     /// Returns `LLMError` if the HTTP client cannot be built.
-    pub fn new(base_url: String, api_key: String) -> Result<Self, crate::error::LLMError> {
+    pub fn new(
+        provider_id: crate::types::ProviderId,
+        base_url: String,
+        api_key: String,
+    ) -> Result<Self, crate::error::LLMError> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .build()?;
         Ok(Self {
+            provider_id,
             base_url,
             api_key,
             client,
@@ -208,7 +208,7 @@ impl OpenAICompatibleProvider {
         });
 
         let mut extra_body = serde_json::Value::Object(serde_json::Map::new());
-        params.profile.augment_request(&mut extra_body, params.stage_ctx);
+        params.profile.augment_request(&mut extra_body, params.stage_ctx)?;
 
         let request = ChatRequest {
             model: params.config.model.clone(),
@@ -330,8 +330,7 @@ struct ChatFunctionCall {
 #[async_trait]
 impl LLM for OpenAICompatibleProvider {
     fn provider_id(&self) -> &ProviderId {
-        static OPENAI: std::sync::OnceLock<ProviderId> = std::sync::OnceLock::new();
-        OPENAI.get_or_init(|| ProviderId::OpenAI)
+        &self.provider_id
     }
 
     #[instrument(skip(self, messages, tools), fields(model = %config.model))]
@@ -372,7 +371,7 @@ impl LLM for OpenAICompatibleProvider {
     }
 
     fn supports_multimodal(&self) -> bool {
-        false
+        true
     }
 
     fn context_window(&self) -> usize {
@@ -402,9 +401,6 @@ impl LLM for OpenAICompatibleProvider {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {

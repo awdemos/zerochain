@@ -122,7 +122,9 @@ impl StorageBackend for LocalBackend {
     }
 
     async fn exists(&self, cid: &Cid) -> Result<bool> {
-        Ok(self.path_for(cid).exists())
+        tokio::fs::try_exists(self.path_for(cid))
+            .await
+            .map_err(|e| CasError::io(self.path_for(cid), e))
     }
 
     async fn list(&self) -> Result<Vec<Cid>> {

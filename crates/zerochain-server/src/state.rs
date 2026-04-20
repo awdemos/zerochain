@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use zerochain_broker::memory::MemoryBroker;
 use zerochain_cas::CasStore;
-use zerochain_daemon::{AppState, DaemonError};
+use zerochain_engine::{AppState, DaemonError};
 
 /// Shared server state, Clone-able for axum's State extractor.
 ///
@@ -17,6 +17,7 @@ pub struct ServerState {
     pub cas: Option<CasStore>,
     pub broker: Option<MemoryBroker>,
     pub api_key: Option<String>,
+    pub auth_disabled: bool,
 }
 
 impl ServerState {
@@ -28,6 +29,7 @@ impl ServerState {
             cas: None,
             broker: None,
             api_key: None,
+            auth_disabled: false,
         }
     }
 
@@ -44,6 +46,12 @@ impl ServerState {
     pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
         let key = key.into();
         self.api_key = if key.is_empty() { None } else { Some(key) };
+        self
+    }
+
+    #[must_use]
+    pub fn with_auth_disabled(mut self) -> Self {
+        self.auth_disabled = true;
         self
     }
 

@@ -10,8 +10,6 @@ repository.workspace = true
 description = "Core workflow model: stages, CONTEXT.md parsing, execution DAG"
 
 [dependencies]
-zerochain-cas = { path = "../zerochain-cas" }
-zerochain-fs = { path = "../zerochain-fs" }
 serde.workspace = true
 serde_json.workspace = true
 serde_yml.workspace = true

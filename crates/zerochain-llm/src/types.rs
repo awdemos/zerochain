@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProviderId {
@@ -17,9 +14,6 @@ pub enum ProviderId {
     },
 }
 
-// ---------------------------------------------------------------------------
-// Thinking Mode
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,9 +24,6 @@ pub enum ThinkingMode {
     Extended { budget_tokens: usize },
 }
 
-// ---------------------------------------------------------------------------
-// Messages
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -105,9 +96,6 @@ impl From<&str> for Content {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tools
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -125,9 +113,6 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
-// ---------------------------------------------------------------------------
-// Response
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -154,9 +139,6 @@ pub struct Usage {
     pub completion_tokens: usize,
 }
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -226,9 +208,6 @@ impl LLMConfig {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
