@@ -115,7 +115,7 @@ impl ZerochainMcpServer {
         rmcp::handler::server::wrapper::Parameters(RunParams { workflow_id, stage }): rmcp::handler::server::wrapper::Parameters<RunParams>,
     ) -> rmcp::model::CallToolResult {
         use zerochain_core::stage::StageId;
-        use zerochain_fs::{acquire_lock, clean_output, mark_complete};
+
 
         let mut state = self.state.lock().await;
         let workflow = match state.get_workflow(&workflow_id).cloned() {
@@ -139,35 +139,15 @@ impl ZerochainMcpServer {
             },
         };
 
-        let stage = match workflow.stage_by_id(&stage_id).cloned() {
+        let _stage = match workflow.stage_by_id(&stage_id).cloned() {
             Some(s) => s,
             None => return err_result(format!("stage not found: {}", stage_id.raw)),
         };
 
-        if let Err(e) = acquire_lock(&stage.path).await {
-            return err_result(format!("lock failed: {e}"));
+        match state.run_stage(&workflow_id, &stage_id.raw).await {
+            Ok(()) => ok(format!("stage {} complete in {}", stage_id.raw, workflow_id)),
+            Err(e) => err_result(format!("stage execution failed: {e}")),
         }
-        if let Err(e) = clean_output(&stage.path).await {
-            return err_result(format!("clean failed: {e}"));
-        }
-
-        if let Err(e) = state.execute_stage(&workflow_id, &stage).await {
-            let error_marker = stage.path.join(".error");
-            if let Err(e2) = tokio::fs::write(&error_marker, format!("{e}")).await {
-                tracing::warn!(path = %error_marker.display(), error = %e2, "failed to write error marker");
-            }
-            return err_result(format!("stage execution failed: {e}"));
-        }
-
-        if let Err(e) = mark_complete(&stage.path, None).await {
-            return err_result(format!("mark complete failed: {e}"));
-        }
-
-        if let Err(e) = state.reload_workflow(&workflow_id).await {
-            return err_result(format!("reload failed: {e}"));
-        }
-
-        ok(format!("stage {} complete in {}", stage_id.raw, workflow_id))
     }
 
     #[tool(
