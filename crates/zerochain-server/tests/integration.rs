@@ -10,6 +10,31 @@ use tower::ServiceExt;
 use zerochain_server::routes;
 use zerochain_server::state::ServerState;
 
+struct ScopedEnv {
+    key: String,
+    old: Option<String>,
+}
+
+impl ScopedEnv {
+    fn set(key: &str, value: &str) -> Self {
+        let old = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self {
+            key: key.to_string(),
+            old,
+        }
+    }
+}
+
+impl Drop for ScopedEnv {
+    fn drop(&mut self) {
+        match &self.old {
+            Some(v) => std::env::set_var(&self.key, v),
+            None => std::env::remove_var(&self.key),
+        }
+    }
+}
+
 fn make_app(workspace: &Path) -> axum::Router {
     let state = ServerState::new(workspace);
     routes::routes(state)
@@ -551,9 +576,9 @@ mod e2e {
         let tmp = TempDir::new().expect("tempdir");
         let (base_url, call_count) = start_mock_openai().await;
 
-        std::env::set_var("OPENAI_API_KEY", "sk-test-mock-key");
-        std::env::set_var("ZEROCHAIN_BASE_URL", &base_url);
-        std::env::set_var("ZEROCHAIN_MODEL", "mock-model");
+        let _api_key = ScopedEnv::set("OPENAI_API_KEY", "sk-test-mock-key");
+        let _base_url = ScopedEnv::set("ZEROCHAIN_BASE_URL", &base_url);
+        let _model = ScopedEnv::set("ZEROCHAIN_MODEL", "mock-model");
 
         let state = ServerState::new(tmp.path());
 
@@ -616,9 +641,7 @@ mod e2e {
             serde_json::from_str(&body_string(resp.into_body()).await).expect("json");
         assert!(body["message"].as_str().unwrap().contains("no pending stages"));
 
-        std::env::remove_var("OPENAI_API_KEY");
-        std::env::remove_var("ZEROCHAIN_BASE_URL");
-        std::env::remove_var("ZEROCHAIN_MODEL");
+
     }
 }
 
