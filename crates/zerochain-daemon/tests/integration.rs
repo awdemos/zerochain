@@ -23,7 +23,7 @@ use zerochain_llm::{
 fn make_task(id: &str, stages: Vec<&str>) -> Task {
     Task::builder(id, id)
         .execution(TaskExecution::new(
-            stages.into_iter().map(|s| s.to_string()).collect(),
+            stages.into_iter().map(std::string::ToString::to_string).collect(),
             Some("sequential".to_string()),
         ))
         .build()

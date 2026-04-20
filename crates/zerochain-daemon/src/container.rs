@@ -45,7 +45,7 @@ impl ContainerExecutor {
         }
     }
 
-    pub fn runtime_name(&self) -> &str {
+    #[must_use] pub fn runtime_name(&self) -> &str {
         match self.runtime {
             ContainerRuntime::Docker => "docker",
             ContainerRuntime::Podman => "podman",
@@ -58,9 +58,7 @@ impl ContainerExecutor {
             "zerochain-stage-{}",
             config
                 .stage_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".into())
+                .file_name().map_or_else(|| "unknown".into(), |n| n.to_string_lossy().to_string())
         );
 
         let mut args = vec![
@@ -219,12 +217,12 @@ fn which_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn default_stage_image() -> String {
+#[must_use] pub fn default_stage_image() -> String {
     std::env::var("ZEROCHAIN_STAGE_IMAGE")
         .unwrap_or_else(|_| "cgr.dev/chainguard/wolfi-base:latest".into())
 }
 
-pub fn generate_stage_dockerfile(base_image: &str) -> String {
+#[must_use] pub fn generate_stage_dockerfile(base_image: &str) -> String {
     format!(
         r#"FROM {base_image}
 RUN apk add --no-cache ca-certificates curl

@@ -65,7 +65,7 @@ impl CasStore {
         self.backend.delete(cid).await
     }
 
-    pub fn location(&self) -> String {
+    #[must_use] pub fn location(&self) -> String {
         self.backend.location()
     }
 }
@@ -154,9 +154,9 @@ mod tests {
         let cid2 = store.put(b"bbb").await.unwrap();
         let cid3 = store.put(b"ccc").await.unwrap();
         let mut list = store.list().await.unwrap();
-        list.sort_by_key(|a| a.as_hex());
+        list.sort_by_key(super::super::cid::Cid::as_hex);
         let mut expected = vec![cid1, cid2, cid3];
-        expected.sort_by_key(|a| a.as_hex());
+        expected.sort_by_key(super::super::cid::Cid::as_hex);
         assert_eq!(list, expected);
     }
 

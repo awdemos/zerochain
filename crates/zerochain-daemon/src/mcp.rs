@@ -59,7 +59,7 @@ pub struct RejectParams {
 }
 
 impl ZerochainMcpServer {
-    pub fn new(workspace: PathBuf) -> Self {
+    #[must_use] pub fn new(workspace: PathBuf) -> Self {
         let state = AppState::new(&workspace);
         Self {
             tool_router: Self::tool_router(),
@@ -160,50 +160,46 @@ impl ZerochainMcpServer {
     ) -> rmcp::model::CallToolResult {
         let state = self.state.lock().await;
 
-        match workflow_id {
-            Some(wid) => {
-                let workflow = match state.get_workflow(&wid) {
-                    Some(w) => w,
-                    None => return err_result(format!("workflow not found: {wid}")),
+        if let Some(wid) = workflow_id {
+            let workflow = match state.get_workflow(&wid) {
+                Some(w) => w,
+                None => return err_result(format!("workflow not found: {wid}")),
+            };
+            let plan = workflow.execution_plan();
+            let mut lines = vec![
+                format!("id:       {}", workflow.id),
+                format!("root:     {}", workflow.root.display()),
+                format!("stages:   {}", workflow.stages.len()),
+                format!("complete: {}", plan.is_complete()),
+                format!(
+                    "next:     {}",
+                    plan.next_stage()
+                        .map_or("none", |s| s.raw.as_str())
+                ),
+            ];
+            for stage in &workflow.stages {
+                let marker = if stage.is_complete {
+                    "done"
+                } else if stage.is_error {
+                    "error"
+                } else if stage.human_gate {
+                    "gate"
+                } else {
+                    "pending"
                 };
-                let plan = workflow.execution_plan();
-                let mut lines = vec![
-                    format!("id:       {}", workflow.id),
-                    format!("root:     {}", workflow.root.display()),
-                    format!("stages:   {}", workflow.stages.len()),
-                    format!("complete: {}", plan.is_complete()),
-                    format!(
-                        "next:     {}",
-                        plan.next_stage()
-                            .map(|s| s.raw.as_str())
-                            .unwrap_or("none")
-                    ),
-                ];
-                for stage in &workflow.stages {
-                    let marker = if stage.is_complete {
-                        "done"
-                    } else if stage.is_error {
-                        "error"
-                    } else if stage.human_gate {
-                        "gate"
-                    } else {
-                        "pending"
-                    };
-                    lines.push(format!("  {} [{}]", stage.id.raw, marker));
-                }
-                ok(lines.join("\n"))
+                lines.push(format!("  {} [{}]", stage.id.raw, marker));
             }
-            None => {
-                let workflows = state.list_workflows();
-                if workflows.is_empty() {
-                    return ok("no workflows".into());
-                }
-                let lines: Vec<String> = workflows
-                    .iter()
-                    .map(|(id, status)| format!("{id}\t{status}"))
-                    .collect();
-                ok(lines.join("\n"))
+            ok(lines.join("\n"))
+        } else {
+            let workflows = state.list_workflows();
+            if workflows.is_empty() {
+                return ok("no workflows".into());
             }
+            let lines: Vec<String> = workflows
+                .iter()
+                .map(|(id, status)| format!("{id}\t{status}"))
+                .collect();
+            ok(lines.join("\n"))
         }
     }
 
@@ -234,7 +230,7 @@ impl ZerochainMcpServer {
     ) -> rmcp::model::CallToolResult {
         let mut state = self.state.lock().await;
         match state.mark_stage_complete(&workflow_id, &stage_id).await {
-            Ok(_) => ok(format!("approved: {workflow_id} / {stage_id}")),
+            Ok(()) => ok(format!("approved: {workflow_id} / {stage_id}")),
             Err(e) => err_result(format!("approve failed: {e}")),
         }
     }
@@ -249,7 +245,7 @@ impl ZerochainMcpServer {
     ) -> rmcp::model::CallToolResult {
         let mut state = self.state.lock().await;
         match state.mark_stage_error(&workflow_id, &stage_id, feedback.as_deref()).await {
-            Ok(_) => ok(format!("rejected: {workflow_id} / {stage_id}")),
+            Ok(()) => ok(format!("rejected: {workflow_id} / {stage_id}")),
             Err(e) => err_result(format!("reject failed: {e}")),
         }
     }

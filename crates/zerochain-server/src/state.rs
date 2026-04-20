@@ -8,7 +8,7 @@ use zerochain_daemon::{AppState, DaemonError};
 
 /// Shared server state, Clone-able for axum's State extractor.
 ///
-/// Inner AppState is behind `Arc<Mutex<...>>` because `execute_stage`
+/// Inner `AppState` is behind `Arc<Mutex<...>>` because `execute_stage`
 /// requires `&mut self`.
 #[derive(Clone)]
 pub struct ServerState {
@@ -20,7 +20,7 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    pub fn new(workspace: &std::path::Path) -> Self {
+    #[must_use] pub fn new(workspace: &std::path::Path) -> Self {
         let app_state = AppState::new(workspace);
         Self {
             inner: Arc::new(Mutex::new(app_state)),
@@ -31,12 +31,12 @@ impl ServerState {
         }
     }
 
-    pub fn with_cas(mut self, cas: CasStore) -> Self {
+    #[must_use] pub fn with_cas(mut self, cas: CasStore) -> Self {
         self.cas = Some(cas);
         self
     }
 
-    pub fn with_broker(mut self, broker: MemoryBroker) -> Self {
+    #[must_use] pub fn with_broker(mut self, broker: MemoryBroker) -> Self {
         self.broker = Some(broker);
         self
     }
@@ -53,11 +53,11 @@ impl ServerState {
         Ok(())
     }
 
-    pub fn cas(&self) -> Option<&CasStore> {
+    #[must_use] pub fn cas(&self) -> Option<&CasStore> {
         self.cas.as_ref()
     }
 
-    pub fn broker(&self) -> Option<&MemoryBroker> {
+    #[must_use] pub fn broker(&self) -> Option<&MemoryBroker> {
         self.broker.as_ref()
     }
 }

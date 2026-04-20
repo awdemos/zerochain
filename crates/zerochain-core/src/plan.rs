@@ -36,7 +36,7 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
-    pub fn from_stages(stages: &[Stage]) -> Self {
+    #[must_use] pub fn from_stages(stages: &[Stage]) -> Self {
         let mut groups: BTreeMap<String, Vec<StageId>> = BTreeMap::new();
         let mut stage_map = BTreeMap::new();
 
@@ -46,7 +46,7 @@ impl ExecutionPlan {
                 .parallel_group()
                 .map(|_| {
                     let raw = &stage.id.raw;
-                    let prefix: String = raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    let prefix: String = raw.chars().take_while(char::is_ascii_digit).collect();
                     format!("{prefix}_parallel")
                 })
                 .unwrap_or_else(|| stage.id.raw.clone());
@@ -76,7 +76,7 @@ impl ExecutionPlan {
             let mut keys: Vec<String> = groups.keys().cloned().collect();
             keys.sort_by(|a, b| {
                 let get_sort_key = |k: &str| -> (u32, String) {
-                    let digits: String = k.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    let digits: String = k.chars().take_while(char::is_ascii_digit).collect();
                     let seq: u32 = digits.parse().unwrap_or(0);
                     (seq, k.to_string())
                 };
@@ -131,7 +131,7 @@ impl ExecutionPlan {
         }
     }
 
-    pub fn next_stage(&self) -> Option<&StageId> {
+    #[must_use] pub fn next_stage(&self) -> Option<&StageId> {
         for group in &self.groups {
             match group.state {
                 StageState::Error => return None,
@@ -154,7 +154,7 @@ impl ExecutionPlan {
         None
     }
 
-    pub fn is_complete(&self) -> bool {
+    #[must_use] pub fn is_complete(&self) -> bool {
         self.groups
             .iter()
             .all(|g| matches!(g.state, StageState::Complete))

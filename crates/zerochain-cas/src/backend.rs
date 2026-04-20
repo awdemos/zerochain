@@ -58,12 +58,12 @@ impl LocalBackend {
     }
 
     /// Full filesystem path for a given CID.
-    pub fn path_for(&self, cid: &Cid) -> PathBuf {
+    #[must_use] pub fn path_for(&self, cid: &Cid) -> PathBuf {
         self.base_dir.join(cid.relative_path())
     }
 
     /// Return the base directory.
-    pub fn base_dir(&self) -> &Path {
+    #[must_use] pub fn base_dir(&self) -> &Path {
         &self.base_dir
     }
 }
@@ -176,7 +176,7 @@ impl StorageBackend for LocalBackend {
             }
         }
 
-        cids.sort_by_key(|a| a.as_hex());
+        cids.sort_by_key(super::cid::Cid::as_hex);
         Ok(cids)
     }
 

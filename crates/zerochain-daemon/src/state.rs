@@ -76,8 +76,7 @@ fn resolve_capture_reasoning(ctx: &StageContext) -> bool {
     std::env::var("ZEROCHAIN_CAPTURE_REASONING")
         .ok()
         .filter(|s| !s.is_empty())
-        .map(|s| s == "true" || s == "1")
-        .unwrap_or(false)
+        .is_some_and(|s| s == "true" || s == "1")
 }
 
 fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::CowPlatform> {
@@ -110,7 +109,7 @@ fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::CowPlatfo
 const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
 
 impl AppState {
-    pub fn new(workspace_root: &Path) -> AppState {
+    #[must_use] pub fn new(workspace_root: &Path) -> AppState {
         let cow_backend = resolve_cow_backend(workspace_root);
         AppState {
             workspace_root: workspace_root.to_path_buf(),
@@ -145,7 +144,7 @@ impl AppState {
         Ok(())
     }
 
-    pub fn get_workflow(&self, id: &str) -> Option<&Workflow> {
+    #[must_use] pub fn get_workflow(&self, id: &str) -> Option<&Workflow> {
         self.workflows.get(id)
     }
 
@@ -444,7 +443,7 @@ impl AppState {
             return Ok(());
         }
 
-        entries.sort_by_key(|e| e.file_name());
+        entries.sort_by_key(tokio::fs::DirEntry::file_name);
         let to_remove = entries.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
 
         for entry in entries.iter().take(to_remove) {
@@ -457,7 +456,7 @@ impl AppState {
         Ok(())
     }
 
-    pub fn list_workflows(&self) -> Vec<(String, String)> {
+    #[must_use] pub fn list_workflows(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for wf in self.workflows.values() {
             let plan = wf.execution_plan();
@@ -522,9 +521,7 @@ impl AppState {
         let input_content = self.read_input_files(&stage.input_path).await?;
 
         let profile_name = ctx
-            .as_ref()
-            .map(resolve_profile_name)
-            .unwrap_or_else(|| "generic".to_string());
+            .as_ref().map_or_else(|| "generic".to_string(), resolve_profile_name);
 
         let thinking_mode = ctx
             .as_ref()
@@ -533,8 +530,7 @@ impl AppState {
 
         let capture_reasoning = ctx
             .as_ref()
-            .map(resolve_capture_reasoning)
-            .unwrap_or(false);
+            .is_some_and(resolve_capture_reasoning);
 
         let profile = resolve_profile(&profile_name);
 
@@ -565,9 +561,7 @@ impl AppState {
             let mut lua_ctx = LuaContext::new(
                 &stage.id.raw,
                 &stage.path,
-                &self.workflows.get(workflow_id)
-                    .map(|wf| wf.root.clone())
-                    .unwrap_or_else(|| stage.path.clone()),
+                &self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone()),
             ).with_shared_store(shared_store.clone());
             run_hook(&lua, "on_validate", &mut lua_ctx, script)
                 .map_err(DaemonError::Workflow)?;
@@ -702,9 +696,7 @@ impl AppState {
         if let Some(ref script) = lua_script {
             let lua = create_sandboxed_vm()
                 .map_err(DaemonError::Workflow)?;
-            let wf_root = self.workflows.get(workflow_id)
-                .map(|wf| wf.root.clone())
-                .unwrap_or_else(|| stage.path.clone());
+            let wf_root = self.workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
             let mut lua_ctx = LuaContext::new(
                 &stage.id.raw,
                 &stage.path,
@@ -803,7 +795,7 @@ impl AppState {
             "ZEROCHAIN_CAPTURE_REASONING",
         ] {
             if let Ok(val) = std::env::var(key) {
-                vars.push((key.to_string(), val));
+                vars.push(((*key).to_string(), val));
             }
         }
         vars
@@ -886,7 +878,7 @@ fn find_latest_snapshot(snapshots_dir: &Path, stage_id: &str) -> Option<String> 
         return None;
     };
     let mut candidates: Vec<String> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .filter_map(|e| e.file_name().to_str().map(String::from))
         .filter(|name| name.starts_with(&prefix))

@@ -5,7 +5,7 @@ use crate::types::{CompleteResponse, LLMConfig, ThinkingMode};
 pub struct KimiK2Profile;
 
 impl ProviderProfile for KimiK2Profile {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "kimi-k2"
     }
 

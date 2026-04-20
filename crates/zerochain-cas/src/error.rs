@@ -48,7 +48,7 @@ impl CasError {
 
 impl CasError {
     /// Returns true if this error indicates the requested content was not found.
-    pub fn is_not_found(&self) -> bool {
+    #[must_use] pub fn is_not_found(&self) -> bool {
         matches!(self, CasError::NotFound(_))
     }
 }

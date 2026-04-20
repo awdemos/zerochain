@@ -16,7 +16,7 @@ pub struct MemoryBroker {
 
 impl MemoryBroker {
     /// Create a new in-memory broker.
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             channels: Arc::new(Mutex::new(HashMap::new())),
         }
