@@ -184,7 +184,7 @@ impl AppState {
         let _lock = acquire_lock(&stage.path).await?;
 
         if let Err(e) = clean_output(&stage.path).await {
-            tracing::warn!(
+            tracing::error!(
                 error = %e,
                 path = %stage.path.display(),
                 "failed to clean stage output"
@@ -195,14 +195,15 @@ impl AppState {
 
         match &result {
             Ok(()) => {
-                if let Err(e) = self.mark_stage_complete(workflow_id, stage_raw).await {
-                    tracing::warn!(error = %e, "failed to mark stage complete");
-                }
+                self.mark_stage_complete(workflow_id, stage_raw).await.map_err(|e| {
+                    tracing::error!(error = %e, "failed to mark stage complete after successful execution");
+                    e
+                })?;
             }
             Err(e) => {
                 let msg = format!("{e}");
                 if let Err(e2) = self.mark_stage_error(workflow_id, stage_raw, Some(&msg)).await {
-                    tracing::warn!(error = %e2, "failed to mark stage error");
+                    tracing::error!(original = %e, marker_error = %e2, "failed to mark stage error after execution failure");
                 }
             }
         }
