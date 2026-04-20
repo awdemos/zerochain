@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use mlua::{Lua, UserData, UserDataMethods, Value};
 
-use crate::error::{Error, Result};
+use crate::error::{io_err, Error, Result};
 
 fn lua_err(e: mlua::Error) -> Error {
     Error::Lua {
@@ -13,6 +13,7 @@ fn lua_err(e: mlua::Error) -> Error {
 }
 
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct HookResults {
     pub skip: bool,
     pub insert_after: Vec<String>,
@@ -158,7 +159,20 @@ fn json_to_lua_value(lua: &Lua, val: &serde_json::Value) -> mlua::Result<mlua::V
             }
         }
         serde_json::Value::String(s) => Ok(Value::String(lua.create_string(s)?)),
-        _ => Ok(Value::Nil),
+        serde_json::Value::Array(arr) => {
+            let table = lua.create_table()?;
+            for (i, v) in arr.iter().enumerate() {
+                table.set(i + 1, json_to_lua_value(lua, v)?)?;
+            }
+            Ok(Value::Table(table))
+        }
+        serde_json::Value::Object(map) => {
+            let table = lua.create_table()?;
+            for (k, v) in map {
+                table.set(k.as_str(), json_to_lua_value(lua, v)?)?;
+            }
+            Ok(Value::Table(table))
+        }
     }
 }
 
@@ -231,10 +245,19 @@ pub fn load_shared_store(
 ) -> Arc<Mutex<HashMap<String, serde_json::Value>>> {
     let store_path = workflow_root.join(".state").join("lua_store.json");
     let map: HashMap<String, serde_json::Value> = if store_path.exists() {
-        std::fs::read_to_string(&store_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        match std::fs::read_to_string(&store_path) {
+            Ok(content) => match serde_json::from_str(&content) {
+                Ok(map) => map,
+                Err(e) => {
+                    tracing::warn!(path = %store_path.display(), error = %e, "corrupt shared store JSON, resetting");
+                    HashMap::new()
+                }
+            },
+            Err(e) => {
+                tracing::warn!(path = %store_path.display(), error = %e, "failed to read shared store, resetting");
+                HashMap::new()
+            }
+        }
     } else {
         HashMap::new()
     };
@@ -246,10 +269,7 @@ pub fn save_shared_store(
     store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Result<()> {
     let state_dir = workflow_root.join(".state");
-    std::fs::create_dir_all(&state_dir).map_err(|e| Error::Io {
-        path: state_dir.clone(),
-        source: e,
-    })?;
+    std::fs::create_dir_all(&state_dir).map_err(|e| io_err(state_dir.clone(), e))?;
     let store_path = state_dir.join("lua_store.json");
     let map = store.lock().map_err(|_| Error::Lua {
         message: "shared store lock poisoned".into(),
@@ -257,10 +277,7 @@ pub fn save_shared_store(
     let json = serde_json::to_string_pretty(&*map).map_err(|e| Error::Lua {
         message: format!("failed to serialize store: {e}"),
     })?;
-    std::fs::write(&store_path, json).map_err(|e| Error::Io {
-        path: store_path,
-        source: e,
-    })?;
+    std::fs::write(&store_path, json).map_err(|e| io_err(store_path, e))?;
     Ok(())
 }
 

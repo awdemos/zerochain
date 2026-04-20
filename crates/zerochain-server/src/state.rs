@@ -52,4 +52,12 @@ impl ServerState {
         state.load_workflows().await?;
         Ok(())
     }
+
+    pub fn cas(&self) -> Option<&CasStore> {
+        self.cas.as_ref()
+    }
+
+    pub fn broker(&self) -> Option<&MemoryBroker> {
+        self.broker.as_ref()
+    }
 }

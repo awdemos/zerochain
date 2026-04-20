@@ -20,11 +20,10 @@ zerochain-fs = { path = "../zerochain-fs" }
 zerochain-llm = { path = "../zerochain-llm" }
 tokio.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-serde_yaml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 clap = { version = "4.0", features = ["derive", "env"] }

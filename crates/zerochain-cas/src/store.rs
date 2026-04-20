@@ -28,7 +28,6 @@ impl std::fmt::Debug for CasStore {
 }
 
 impl CasStore {
-    /// Create a new CAS store with the local filesystem backend.
     pub async fn new(base_dir: std::path::PathBuf) -> Result<Self> {
         let backend = crate::backend::LocalBackend::new(base_dir).await?;
         Ok(Self {
@@ -36,44 +35,36 @@ impl CasStore {
         })
     }
 
-    /// Create a CAS store with an explicit backend.
     pub fn with_backend<B: StorageBackend + 'static>(backend: B) -> Self {
         Self {
             backend: Arc::new(backend),
         }
     }
 
-    /// Store bytes and return their content identifier.
     pub async fn put(&self, data: &[u8]) -> Result<Cid> {
         self.backend.put(data).await
     }
 
-    /// Retrieve content by its CID.
     pub async fn get(&self, cid: &Cid) -> Result<Vec<u8>> {
         self.backend.get(cid).await
     }
 
-    /// Return a streaming reader for the given CID.
     pub async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
         self.backend.get_reader(cid).await
     }
 
-    /// Check whether content exists in the store.
     pub async fn exists(&self, cid: &Cid) -> Result<bool> {
         self.backend.exists(cid).await
     }
 
-    /// List all content identifiers currently stored.
     pub async fn list(&self) -> Result<Vec<Cid>> {
         self.backend.list().await
     }
 
-    /// Remove content by its CID.
     pub async fn delete(&self, cid: &Cid) -> Result<()> {
         self.backend.delete(cid).await
     }
 
-    /// Return the backend location (filesystem path, bucket name, etc.).
     pub fn location(&self) -> String {
         self.backend.location()
     }

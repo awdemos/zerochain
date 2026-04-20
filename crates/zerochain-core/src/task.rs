@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::error::{io_err, Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -48,10 +48,7 @@ struct TaskFrontmatter {
 
 impl Task {
     pub async fn from_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
 
         let mut task = Self::parse(&content)?;
         task.source_path = Some(path.to_path_buf());

@@ -37,7 +37,7 @@ impl S3Backend {
             None,
             None,
         )
-        .map_err(|e| CasError::InvalidCid(format!("s3 credentials: {e}")))?;
+        .map_err(|e| CasError::Configuration(format!("s3 credentials: {e}")))?;
 
         let region = if let Some(url) = endpoint {
             Region::Custom {
@@ -47,11 +47,11 @@ impl S3Backend {
         } else {
             region
                 .parse::<Region>()
-                .map_err(|e| CasError::InvalidCid(format!("s3 region: {e}")))?
+                .map_err(|e| CasError::Configuration(format!("s3 region: {e}")))?
         };
 
         let bucket = *Bucket::new(bucket_name, region, credentials)
-            .map_err(|e| CasError::InvalidCid(format!("s3 bucket: {e}")))?
+            .map_err(|e| CasError::Configuration(format!("s3 bucket: {e}")))?
             .with_path_style();
 
         Ok(Self { bucket })
@@ -67,13 +67,13 @@ impl S3Backend {
     /// - `ZEROCHAIN_CAS_S3_SECRET_KEY`
     pub fn from_env() -> Result<Self> {
         let bucket_name = std::env::var("ZEROCHAIN_CAS_S3_BUCKET")
-            .map_err(|_| CasError::InvalidCid("ZEROCHAIN_CAS_S3_BUCKET not set".into()))?;
+            .map_err(|_| CasError::Configuration("ZEROCHAIN_CAS_S3_BUCKET not set".into()))?;
         let region = std::env::var("ZEROCHAIN_CAS_S3_REGION").unwrap_or_else(|_| "us-east-1".into());
         let endpoint = std::env::var("ZEROCHAIN_CAS_S3_ENDPOINT").ok();
         let access_key = std::env::var("ZEROCHAIN_CAS_S3_ACCESS_KEY")
-            .map_err(|_| CasError::InvalidCid("ZEROCHAIN_CAS_S3_ACCESS_KEY not set".into()))?;
+            .map_err(|_| CasError::Configuration("ZEROCHAIN_CAS_S3_ACCESS_KEY not set".into()))?;
         let secret_key = std::env::var("ZEROCHAIN_CAS_S3_SECRET_KEY")
-            .map_err(|_| CasError::InvalidCid("ZEROCHAIN_CAS_S3_SECRET_KEY not set".into()))?;
+            .map_err(|_| CasError::Configuration("ZEROCHAIN_CAS_S3_SECRET_KEY not set".into()))?;
 
         Self::new(
             &bucket_name,
@@ -108,13 +108,12 @@ impl StorageBackend for S3Backend {
             .bucket
             .put_object(&key, data)
             .await
-            .map_err(|e| CasError::Io(std::io::Error::other(
-                format!("s3 put failed: {e}"),
-            )))?;
+            .map_err(|e| CasError::S3(format!("s3 put failed: {e}")))?;
 
         if response.status_code() != 200 {
-            return Err(CasError::Io(std::io::Error::other(
-                format!("s3 put failed with status: {}", response.status_code()),
+            return Err(CasError::S3(format!(
+                "s3 put failed with status: {}",
+                response.status_code()
             )));
         }
 
@@ -128,17 +127,16 @@ impl StorageBackend for S3Backend {
             .bucket
             .get_object(&key)
             .await
-            .map_err(|e| CasError::Io(std::io::Error::other(
-                format!("s3 get failed: {e}"),
-            )))?;
+            .map_err(|e| CasError::S3(format!("s3 get failed: {e}")))?;
 
         if response.status_code() == 404 {
             return Err(CasError::NotFound(cid.to_string()));
         }
 
         if response.status_code() != 200 {
-            return Err(CasError::Io(std::io::Error::other(
-                format!("s3 get failed with status: {}", response.status_code()),
+            return Err(CasError::S3(format!(
+                "s3 get failed with status: {}",
+                response.status_code()
             )));
         }
 
@@ -156,10 +154,14 @@ impl StorageBackend for S3Backend {
     async fn exists(&self, cid: &Cid) -> Result<bool> {
         let key = Self::key_for(cid);
         match self.bucket.head_object(&key).await {
-            Ok((_, code)) => Ok(code == 200),
+            Ok((_, 200)) => Ok(true),
+            Ok((_, 404)) => Ok(false),
+            Ok((_, code)) => Err(CasError::S3(format!(
+                "s3 head_object unexpected status: {code}"
+            ))),
             Err(e) => {
-                tracing::debug!(cid = %cid, key = %key, error = %e, "S3 head_object failed");
-                Ok(false)
+                tracing::warn!(cid = %cid, key = %key, error = %e, "S3 head_object failed");
+                Err(CasError::S3(format!("s3 head_object failed: {e}")))
             }
         }
     }
@@ -167,9 +169,7 @@ impl StorageBackend for S3Backend {
     async fn list(&self) -> Result<Vec<Cid>> {
         let mut cids = Vec::new();
         let result = self.bucket.list(String::new(), None).await
-            .map_err(|e| CasError::Io(std::io::Error::other(
-                format!("s3 list failed: {e}"),
-            )))?;
+            .map_err(|e| CasError::S3(format!("s3 list failed: {e}")))?;
 
         for object in result {
             for item in object.contents {
@@ -186,17 +186,16 @@ impl StorageBackend for S3Backend {
     async fn delete(&self, cid: &Cid) -> Result<()> {
         let key = Self::key_for(cid);
         let response = self.bucket.delete_object(&key).await
-            .map_err(|e| CasError::Io(std::io::Error::other(
-                format!("s3 delete failed: {e}"),
-            )))?;
+            .map_err(|e| CasError::S3(format!("s3 delete failed: {e}")))?;
 
         if response.status_code() == 404 {
             return Err(CasError::NotFound(cid.to_string()));
         }
 
         if response.status_code() >= 400 {
-            return Err(CasError::Io(std::io::Error::other(
-                format!("s3 delete failed with status: {}", response.status_code()),
+            return Err(CasError::S3(format!(
+                "s3 delete failed with status: {}",
+                response.status_code()
             )));
         }
 

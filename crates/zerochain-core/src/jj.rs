@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::{Error, Result};
+use crate::error::{io_err, Error, Result};
 
 fn map_jj_spawn_error(e: std::io::Error) -> Error {
     if e.kind() == std::io::ErrorKind::NotFound {
@@ -144,8 +144,18 @@ impl JjManager {
     }
 
     pub fn require_jj() -> Result<()> {
+        if !is_jj_installed_sync() {
+            return Err(Error::JjNotInstalled);
+        }
         Ok(())
     }
+}
+
+fn is_jj_installed_sync() -> bool {
+    std::process::Command::new("jj")
+        .arg("--version")
+        .output()
+        .is_ok()
 }
 
 pub async fn is_jj_installed() -> bool {
@@ -243,10 +253,7 @@ impl JjWorkspace {
         let parent = output_path.parent().ok_or_else(|| Error::JjError {
             message: "output path has no parent directory".into(),
         })?;
-        tokio::fs::create_dir_all(parent).await.map_err(|e| Error::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| io_err(parent.to_path_buf(), e))?;
 
         let file_name = output_path
             .file_name()
@@ -287,19 +294,10 @@ impl JjWorkspace {
         total: &'a mut u64,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| Error::Io {
-                path: dir.to_path_buf(),
-                source: e,
-            })?;
+            let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| io_err(dir.to_path_buf(), e))?;
 
-            while let Some(entry) = entries.next_entry().await.map_err(|e| Error::Io {
-                path: dir.to_path_buf(),
-                source: e,
-            })? {
-                let meta = entry.metadata().await.map_err(|e| Error::Io {
-                    path: entry.path(),
-                    source: e,
-                })?;
+            while let Some(entry) = entries.next_entry().await.map_err(|e| io_err(dir.to_path_buf(), e))? {
+                let meta = entry.metadata().await.map_err(|e| io_err(entry.path(), e))?;
                 if meta.is_dir() {
                     Self::dir_size(&entry.path(), total).await?;
                 } else {
