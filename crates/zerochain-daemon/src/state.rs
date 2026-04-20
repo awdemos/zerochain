@@ -552,7 +552,7 @@ impl AppState {
             capture_reasoning,
         };
 
-        profile.validate_config(&config, &stage_ctx).map_err(|e| DaemonError::ProfileValidation(e))?;
+        profile.validate_config(&config, &stage_ctx).map_err(DaemonError::ProfileValidation)?;
 
         let shared_store = match self.workflows.get(workflow_id) {
             Some(wf) => load_shared_store(&wf.root),
