@@ -159,9 +159,22 @@ We use Git as the wire protocol (GitHub for issues, PRs, and CI), but jj as the 
 
 ---
 
-## 🔄 CI/CD with Dagger
+## 🔄 Local CI with Dagger
 
-Zerochain ships a Dagger module for reproducible CI pipelines — no `Dockerfile` maintenance, no CI YAML drift.
+Zerochain uses Dagger for reproducible local CI — no GitHub Actions, no CI YAML drift. The `Makefile` wraps the Dagger module so you don't have to remember long CLI invocations.
+
+```bash
+# Run the full pipeline before pushing
+make ci
+
+# Individual steps
+make lint
+make test
+make build
+make docker
+```
+
+The underlying Dagger commands (if you prefer them raw):
 
 ```bash
 # Run the full pipeline (lint, test, build)
