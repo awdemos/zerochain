@@ -344,9 +344,10 @@ impl AppState {
         self.cow_backend
             .snapshot(&stage.path, &snap_dir)
             .await
-            .map_err(|e| DaemonError::CowSnapshot(format!(
-                "snapshot {snap_name} failed: {e}"
-            )))?;
+            .map_err(|e| DaemonError::CowSnapshot {
+                stage: stage.id.raw.clone(),
+                source: e,
+            })?;
 
         tracing::info!(
             stage = %stage.id.raw,
@@ -377,13 +378,23 @@ impl AppState {
 
         let snapshots_dir = wf.root.join(".snapshots");
         if !snapshots_dir.exists() {
-            return Err(DaemonError::CowRestore("no snapshots directory".into()));
+            return Err(DaemonError::CowRestore {
+                stage: stage_id.into(),
+                source: zerochain_fs::error::FsError::MarkerFailed {
+                    dir: snapshots_dir.clone(),
+                    reason: "no snapshots directory".into(),
+                },
+            });
         }
 
         let latest = find_latest_snapshot(&snapshots_dir, &stage.id.raw)
-            .ok_or_else(|| DaemonError::CowRestore(format!(
-                "no snapshot found for stage {stage_id}"
-            )))?;
+            .ok_or_else(|| DaemonError::CowRestore {
+                stage: stage_id.into(),
+                source: zerochain_fs::error::FsError::MarkerFailed {
+                    dir: snapshots_dir.clone(),
+                    reason: format!("no snapshot found for stage {stage_id}"),
+                },
+            })?;
 
         let snap_path = snapshots_dir.join(&latest);
         tracing::info!(
@@ -401,7 +412,10 @@ impl AppState {
         self.cow_backend
             .snapshot(&snap_path, &stage.path)
             .await
-            .map_err(|e| DaemonError::CowRestore(format!("restore failed: {e}")))?;
+            .map_err(|e| DaemonError::CowRestore {
+                stage: stage.id.raw.clone(),
+                source: e,
+            })?;
 
         tracing::info!(stage = %stage.id.raw, "stage restored from snapshot");
         Ok(())
@@ -546,7 +560,7 @@ impl AppState {
 
         if let Some(ref script) = lua_script {
             let lua = create_sandboxed_vm()
-                .map_err(|e| DaemonError::Lua(format!("Lua VM init failed: {e}")))?;
+                .map_err(DaemonError::Workflow)?;
             let mut lua_ctx = LuaContext::new(
                 &stage.id.raw,
                 &stage.path,
@@ -555,7 +569,7 @@ impl AppState {
                     .unwrap_or_else(|| stage.path.clone()),
             ).with_shared_store(shared_store.clone());
             run_hook(&lua, "on_validate", &mut lua_ctx, script)
-                .map_err(|e| DaemonError::Lua(format!("on_validate hook failed: {e}")))?;
+                .map_err(DaemonError::Workflow)?;
             if lua_ctx.skip {
                 tracing::info!(stage = %stage.id.raw, "skipped by on_validate hook");
                 return Ok(());
@@ -686,7 +700,7 @@ impl AppState {
 
         if let Some(ref script) = lua_script {
             let lua = create_sandboxed_vm()
-                .map_err(|e| DaemonError::Lua(format!("Lua VM init failed: {e}")))?;
+                .map_err(DaemonError::Workflow)?;
             let wf_root = self.workflows.get(workflow_id)
                 .map(|wf| wf.root.clone())
                 .unwrap_or_else(|| stage.path.clone());
@@ -729,9 +743,7 @@ impl AppState {
         stage: &Stage,
     ) -> Result<(), DaemonError> {
         let executor = crate::container::ContainerExecutor::detect()
-            .ok_or_else(|| DaemonError::ContainerSpawn(
-                "no container runtime found (need docker or podman)".into()
-            ))?;
+            .ok_or_else(|| DaemonError::ContainerRuntimeNotFound)?;
 
         let image = std::env::var("ZEROCHAIN_STAGE_IMAGE")
             .unwrap_or_else(|_| "cgr.dev/chainguard/wolfi-base:latest".into());
@@ -880,35 +892,6 @@ fn find_latest_snapshot(snapshots_dir: &Path, stage_id: &str) -> Option<String> 
         .collect();
     candidates.sort();
     candidates.into_iter().last()
-}
-
-#[allow(dead_code)]
-fn copy_tree_stage<'a>(
-    src: &'a Path,
-    dst: &'a Path,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), DaemonError>> + Send + 'a>> {
-    Box::pin(async move {
-        let mut entries = tokio::fs::read_dir(src).await.map_err(|e| DaemonError::io(src, e))?;
-        while let Some(entry) = entries.next_entry().await.map_err(|e| DaemonError::io(src, e))? {
-            let file_name = entry.file_name();
-            let src_path = entry.path();
-            let dst_path = dst.join(&file_name);
-
-            let file_type = entry.file_type().await.map_err(|e| DaemonError::io(&src_path, e))?;
-
-            if file_type.is_dir() {
-                tokio::fs::create_dir_all(&dst_path)
-                    .await
-                    .map_err(|e| DaemonError::io(&dst_path, e))?;
-                copy_tree_stage(&src_path, &dst_path).await?;
-            } else if file_type.is_file() {
-                tokio::fs::copy(&src_path, &dst_path)
-                    .await
-                    .map_err(|e| DaemonError::io(&src_path, e))?;
-            }
-        }
-        Ok(())
-    })
 }
 
 #[cfg(test)]

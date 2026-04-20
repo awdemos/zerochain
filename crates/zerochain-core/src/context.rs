@@ -1,47 +1,9 @@
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::{io_err, Error, Result};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[non_exhaustive]
-#[derive(Default)]
-pub struct ContextFrontmatter {
-    #[serde(default)]
-    pub role: Option<String>,
-    #[serde(default)]
-    pub container: Option<String>,
-    #[serde(default)]
-    pub command: Option<String>,
-    #[serde(default)]
-    pub human_gate: bool,
-    #[serde(default)]
-    pub timeout: Option<u64>,
-    #[serde(default)]
-    pub network: Option<String>,
-    #[serde(default)]
-    pub definition_of_done: Option<String>,
-    #[serde(default)]
-    pub provider_profile: Option<String>,
-    #[serde(default)]
-    pub thinking_mode: Option<String>,
-    #[serde(default)]
-    pub capture_reasoning: bool,
-    #[serde(default)]
-    pub multimodal_input: Vec<MultimodalInput>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[non_exhaustive]
-pub struct MultimodalInput {
-    #[serde(rename = "type")]
-    pub input_type: String,
-    pub path: String,
-    #[serde(default)]
-    pub detail: Option<String>,
-}
-
+// Re-export for backward compatibility with consumers that import via context.
+pub use crate::frontmatter::{ContextFrontmatter, MultimodalInput};
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -113,39 +75,8 @@ impl Context {
             None => ContextFrontmatter::default(),
         };
 
-        let merged = ContextFrontmatter {
-            role: self.frontmatter.role.clone().or(base.role),
-            container: self.frontmatter.container.clone().or(base.container),
-            command: self.frontmatter.command.clone().or(base.command),
-            human_gate: self.frontmatter.human_gate || base.human_gate,
-            timeout: self.frontmatter.timeout.or(base.timeout),
-            network: self.frontmatter.network.clone().or(base.network),
-            definition_of_done: self
-                .frontmatter
-                .definition_of_done
-                .clone()
-                .or(base.definition_of_done),
-            provider_profile: self
-                .frontmatter
-                .provider_profile
-                .clone()
-                .or(base.provider_profile),
-            thinking_mode: self
-                .frontmatter
-                .thinking_mode
-                .clone()
-                .or(base.thinking_mode),
-            capture_reasoning: self.frontmatter.capture_reasoning
-                || base.capture_reasoning,
-            multimodal_input: if self.frontmatter.multimodal_input.is_empty() {
-                base.multimodal_input
-            } else {
-                self.frontmatter.multimodal_input.clone()
-            },
-        };
-
         Context {
-            frontmatter: merged,
+            frontmatter: self.frontmatter.merge(&base),
             body: self.body.clone(),
             source_path: self.source_path.clone(),
         }
