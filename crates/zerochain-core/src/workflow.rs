@@ -23,6 +23,12 @@ pub struct Workflow {
 }
 
 impl Workflow {
+    /// Load a workflow from a directory on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory does not exist, contains invalid stage definitions,
+    /// or is missing required files (e.g. `CONTEXT.md`).
     pub async fn from_dir(path: &Path) -> Result<Self> {
         let metadata = tokio::fs::metadata(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
         if !metadata.is_dir() {
@@ -210,7 +216,10 @@ impl Workflow {
         let candidates = ["task.md", "TASK.md", "Backlog.md", "backlog.md"];
         for candidate in candidates {
             let task_path = path.join(candidate);
-            if tokio::fs::try_exists(&task_path).await.unwrap_or(false) {
+            let exists = tokio::fs::try_exists(&task_path)
+                .await
+                .map_err(|e| crate::error::io_err(&task_path, e))?;
+            if exists {
                 match Task::from_file(&task_path).await {
                     Ok(task) => return Ok(Some(task)),
                     Err(e) => {
@@ -222,12 +231,14 @@ impl Workflow {
 
         let mut entries = tokio::fs::read_dir(path).await.map_err(|e| crate::error::io_err(path, e))?;
 
-        while let Ok(entry) = entries.next_entry().await {
-            let Some(entry) = entry else { break };
+        while let Some(entry) = entries.next_entry().await.map_err(|e| crate::error::io_err(path, e))? {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("00_spec") {
                 let task_path = entry.path().join("task.md");
-                if tokio::fs::try_exists(&task_path).await.unwrap_or(false) {
+                let exists = tokio::fs::try_exists(&task_path)
+                    .await
+                    .map_err(|e| crate::error::io_err(&task_path, e))?;
+                if exists {
                     match Task::from_file(&task_path).await {
                         Ok(task) => return Ok(Some(task)),
                         Err(e) => {

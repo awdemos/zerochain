@@ -26,6 +26,9 @@ pub enum DaemonError {
     #[error("workflow error: {0}")]
     Workflow(#[from] zerochain_core::error::Error),
 
+    #[error("failed to load workflows: {0}")]
+    WorkflowLoadPartial(String),
+
     #[error("LLM error: {0}")]
     Llm(#[from] zerochain_llm::error::LLMError),
 

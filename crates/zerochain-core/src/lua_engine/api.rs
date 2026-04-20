@@ -243,26 +243,31 @@ pub fn run_hook(
 
 pub fn load_shared_store(
     workflow_root: &Path,
-) -> Arc<Mutex<HashMap<String, serde_json::Value>>> {
+) -> crate::error::Result<Arc<Mutex<HashMap<String, serde_json::Value>>>> {
     let store_path = workflow_root.join(".state").join("lua_store.json");
-    let map: HashMap<String, serde_json::Value> = if store_path.exists() {
-        match std::fs::read_to_string(&store_path) {
-            Ok(content) => match serde_json::from_str(&content) {
-                Ok(map) => map,
-                Err(e) => {
-                    tracing::warn!(path = %store_path.display(), error = %e, "corrupt shared store JSON, resetting");
-                    HashMap::new()
-                }
-            },
-            Err(e) => {
-                tracing::warn!(path = %store_path.display(), error = %e, "failed to read shared store, resetting");
-                HashMap::new()
-            }
+    match std::fs::metadata(&store_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Arc::new(Mutex::new(HashMap::new())));
         }
-    } else {
-        HashMap::new()
-    };
-    Arc::new(Mutex::new(map))
+        Err(e) => {
+            return Err(crate::error::Error::SharedStoreLoad {
+                path: store_path,
+                reason: format!("failed to probe: {e}"),
+            });
+        }
+    }
+    let content = std::fs::read_to_string(&store_path)
+        .map_err(|e| crate::error::Error::SharedStoreLoad {
+            path: store_path.clone(),
+            reason: format!("failed to read: {e}"),
+        })?;
+    let map: HashMap<String, serde_json::Value> = serde_json::from_str(&content)
+        .map_err(|e| crate::error::Error::SharedStoreLoad {
+            path: store_path.clone(),
+            reason: format!("invalid JSON: {e}"),
+        })?;
+    Ok(Arc::new(Mutex::new(map)))
 }
 
 #[allow(clippy::implicit_hasher)]
@@ -311,14 +316,14 @@ mod tests {
     #[test]
     fn shared_store_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = load_shared_store(tmp.path());
+        let store = load_shared_store(tmp.path()).unwrap();
         {
             let mut s = store.lock().unwrap();
             s.insert("key".into(), serde_json::json!("value"));
         }
         save_shared_store(tmp.path(), &store).unwrap();
 
-        let store2 = load_shared_store(tmp.path());
+        let store2 = load_shared_store(tmp.path()).unwrap();
         let s2 = store2.lock().unwrap();
         assert_eq!(s2.get("key").unwrap().as_str(), Some("value"));
     }

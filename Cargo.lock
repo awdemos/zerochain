@@ -3455,8 +3455,6 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
- "zerochain-cas",
- "zerochain-fs",
 ]
 
 [[package]]
@@ -3465,17 +3463,36 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64",
- "chrono",
  "clap",
  "rmcp",
  "schemars",
  "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zerochain-cas",
+ "zerochain-core",
+ "zerochain-engine",
+ "zerochain-fs",
+ "zerochain-llm",
+]
+
+[[package]]
+name = "zerochain-engine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "zerochain-cas",
  "zerochain-core",
  "zerochain-fs",
@@ -3506,7 +3523,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "zerochain-cas",
  "zerochain-core",
 ]
 
@@ -3530,8 +3546,7 @@ dependencies = [
  "zerochain-broker",
  "zerochain-cas",
  "zerochain-core",
- "zerochain-daemon",
- "zerochain-fs",
+ "zerochain-engine",
  "zerochain-llm",
 ]
 

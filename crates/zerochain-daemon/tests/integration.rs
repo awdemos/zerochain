@@ -15,7 +15,7 @@ use zerochain_fs::atomic::{
     mark_complete, mark_error, mark_executing,
 };
 use zerochain_cas::CasStore;
-use zerochain_daemon::state::AppState;
+use zerochain_engine::AppState;
 use zerochain_llm::{
     CompleteResponse, LLM, LLMConfig, Message, ProviderId, Role,
 };
