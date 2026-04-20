@@ -177,7 +177,7 @@ fn json_to_lua_value(lua: &Lua, val: &serde_json::Value) -> mlua::Result<mlua::V
 }
 
 impl LuaContext {
-    pub fn new(stage_raw: &str, stage_path: &Path, workflow_root: &Path) -> Self {
+    #[must_use] pub fn new(stage_raw: &str, stage_path: &Path, workflow_root: &Path) -> Self {
         let mut env_vars = HashMap::new();
         for key in &[
             "ZEROCHAIN_PROVIDER_PROFILE",
@@ -187,7 +187,7 @@ impl LuaContext {
             "ZEROCHAIN_BASE_URL",
         ] {
             if let Ok(val) = std::env::var(key) {
-                env_vars.insert(key.to_string(), val);
+                env_vars.insert((*key).to_string(), val);
             }
         }
         Self {
@@ -203,7 +203,7 @@ impl LuaContext {
         }
     }
 
-    pub fn with_output(mut self, content: &str, tokens: u64) -> Self {
+    #[must_use] pub fn with_output(mut self, content: &str, tokens: u64) -> Self {
         self.output_content = Some(content.to_string());
         self.token_usage = Some(tokens);
         self

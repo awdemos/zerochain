@@ -179,12 +179,12 @@ mod tests {
     #[test]
     fn expensive_computation_hits_limit() {
         let lua = sandbox();
-        let result = lua.load(r#"
+        let result = lua.load(r"
             local x = 0
             for i = 1, 10000000 do
                 x = x + 1
             end
-        "#).exec();
+        ").exec();
         assert!(result.is_err(), "should hit instruction limit");
     }
 
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn coroutine_cannot_bypass_instruction_limit() {
         let lua = sandbox();
-        let result = lua.load(r#"
+        let result = lua.load(r"
             local function infinite()
                 while true do coroutine.yield() end
             end
@@ -259,24 +259,24 @@ mod tests {
             for i = 1, 1000000 do
                 coroutine.resume(co)
             end
-        "#).exec();
+        ").exec();
         assert!(result.is_err(), "coroutines should still respect instruction limit");
     }
 
     #[test]
     fn reset_instruction_counter_allows_fresh_execution() {
         let lua = sandbox();
-        lua.load(r#"
+        lua.load(r"
             local x = 0
             for i = 1, 50000 do x = x + 1 end
-        "#).exec().unwrap();
+        ").exec().unwrap();
 
         reset_instruction_counter(&lua).unwrap();
 
-        lua.load(r#"
+        lua.load(r"
             local y = 0
             for i = 1, 50000 do y = y + 1 end
             assert(y == 50000)
-        "#).exec().unwrap();
+        ").exec().unwrap();
     }
 }

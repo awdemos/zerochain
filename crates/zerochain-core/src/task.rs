@@ -91,7 +91,7 @@ impl Task {
         })
     }
 
-    pub fn stage_names(&self) -> Vec<String> {
+    #[must_use] pub fn stage_names(&self) -> Vec<String> {
         self.execution
             .as_ref()
             .map(|e| e.stages.clone())
@@ -100,14 +100,14 @@ impl Task {
 }
 
 impl TaskExecution {
-    pub fn new(stages: Vec<String>, strategy: Option<String>) -> Self {
+    #[must_use] pub fn new(stages: Vec<String>, strategy: Option<String>) -> Self {
         Self { stages, strategy }
     }
 }
 
 impl Task {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    #[must_use] pub fn new(
         id: String,
         title: String,
         status: String,
@@ -171,17 +171,17 @@ impl TaskBuilder {
         self
     }
 
-    pub fn execution(mut self, execution: TaskExecution) -> Self {
+    #[must_use] pub fn execution(mut self, execution: TaskExecution) -> Self {
         self.execution = Some(execution);
         self
     }
 
-    pub fn stages(mut self, stages: Vec<String>) -> Self {
+    #[must_use] pub fn stages(mut self, stages: Vec<String>) -> Self {
         self.execution = Some(TaskExecution::new(stages, Some("sequential".into())));
         self
     }
 
-    pub fn acceptance_criteria(mut self, criteria: Vec<String>) -> Self {
+    #[must_use] pub fn acceptance_criteria(mut self, criteria: Vec<String>) -> Self {
         self.acceptance_criteria = criteria;
         self
     }
@@ -196,7 +196,7 @@ impl TaskBuilder {
         self
     }
 
-    pub fn build(self) -> Task {
+    #[must_use] pub fn build(self) -> Task {
         Task {
             id: self.id,
             title: self.title,
@@ -215,7 +215,7 @@ mod tests {
     use super::*;
 
     fn sample_task_content() -> &'static str {
-        r#"---
+        r"---
 id: TASK-001
 title: Implement authentication
 status: todo
@@ -234,7 +234,7 @@ acceptance_criteria:
 
 This task implements the full authentication flow including
 login, token management, and session validation.
-"#
+"
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub struct DirectoryCow;
 
 pub struct BtrfsCow;
 
-/// A no-op CoW backend that silently succeeds.
+/// A no-op `CoW` backend that silently succeeds.
 pub struct NoopCow;
 
 #[async_trait::async_trait]
@@ -28,7 +28,7 @@ impl CowPlatform for NoopCow {
         false
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "disabled"
     }
 }
@@ -167,7 +167,7 @@ impl BtrfsCow {
         Ok(())
     }
 
-    pub fn is_btrfs_filesystem(path: &Path) -> bool {
+    #[must_use] pub fn is_btrfs_filesystem(path: &Path) -> bool {
         #[cfg(target_os = "linux")]
         {
             std::process::Command::new("stat")
@@ -247,7 +247,7 @@ impl CowPlatform for BtrfsCow {
             .is_ok()
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "btrfs"
     }
 }
@@ -292,7 +292,7 @@ impl CowPlatform for DirectoryCow {
         true
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "directory"
     }
 }

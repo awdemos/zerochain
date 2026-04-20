@@ -59,25 +59,22 @@ async fn main() -> Result<()> {
         server_state = server_state.with_api_key(key);
     }
 
-    let cas: CasStore = match cli.cas_backend.as_str() {
-        "s3" => {
-            #[cfg(feature = "s3")]
-            {
-                let backend = zerochain_cas::S3Backend::from_env()?;
-                let store = CasStore::with_backend(backend);
-                tracing::info!("CAS backend: s3 ({})", store.location());
-                store
-            }
-            #[cfg(not(feature = "s3"))]
-            {
-                anyhow::bail!("S3 CAS backend requested but zerochain-cas was compiled without the 's3' feature");
-            }
-        }
-        _ => {
-            let store = CasStore::new(cli.cas_dir).await?;
-            tracing::info!("CAS backend: local ({})", store.location());
+    let cas: CasStore = if cli.cas_backend.as_str() == "s3" {
+        #[cfg(feature = "s3")]
+        {
+            let backend = zerochain_cas::S3Backend::from_env()?;
+            let store = CasStore::with_backend(backend);
+            tracing::info!("CAS backend: s3 ({})", store.location());
             store
         }
+        #[cfg(not(feature = "s3"))]
+        {
+            anyhow::bail!("S3 CAS backend requested but zerochain-cas was compiled without the 's3' feature");
+        }
+    } else {
+        let store = CasStore::new(cli.cas_dir).await?;
+        tracing::info!("CAS backend: local ({})", store.location());
+        store
     };
     server_state = server_state.with_cas(cas);
 

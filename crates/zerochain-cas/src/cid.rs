@@ -13,7 +13,7 @@ pub struct Cid([u8; 32]);
 
 impl Cid {
     /// Compute a CID by hashing the given bytes with Blake3.
-    pub fn from_bytes(data: &[u8]) -> Self {
+    #[must_use] pub fn from_bytes(data: &[u8]) -> Self {
         let hash = blake3::hash(data);
         Self(*hash.as_bytes())
     }
@@ -27,12 +27,12 @@ impl Cid {
     }
 
     /// Return the raw 32-byte hash.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use] pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
     /// Return the lowercase hex representation (64 characters).
-    pub fn as_hex(&self) -> String {
+    #[must_use] pub fn as_hex(&self) -> String {
         hex_encode(&self.0)
     }
 

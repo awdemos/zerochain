@@ -12,7 +12,7 @@ use crate::error::{CasError, Result};
 /// S3-compatible content-addressed storage backend.
 ///
 /// Stores objects in a configured S3 bucket using the CID hex as the key.
-/// Supports MinIO, AWS S3, and any other S3-compatible store.
+/// Supports `MinIO`, AWS S3, and any other S3-compatible store.
 #[derive(Clone, Debug)]
 pub struct S3Backend {
     bucket: Bucket,
@@ -21,7 +21,7 @@ pub struct S3Backend {
 impl S3Backend {
     /// Create a new S3 backend.
     ///
-    /// `endpoint` can be used for MinIO or other S3-compatible services.
+    /// `endpoint` can be used for `MinIO` or other S3-compatible services.
     /// If `endpoint` is `None`, standard AWS endpoints are used based on `region`.
     pub fn new(
         bucket_name: &str,
@@ -62,7 +62,7 @@ impl S3Backend {
     /// Expected vars:
     /// - `ZEROCHAIN_CAS_S3_BUCKET`
     /// - `ZEROCHAIN_CAS_S3_REGION` (default: us-east-1)
-    /// - `ZEROCHAIN_CAS_S3_ENDPOINT` (optional, for MinIO)
+    /// - `ZEROCHAIN_CAS_S3_ENDPOINT` (optional, for `MinIO`)
     /// - `ZEROCHAIN_CAS_S3_ACCESS_KEY`
     /// - `ZEROCHAIN_CAS_S3_SECRET_KEY`
     pub fn from_env() -> Result<Self> {
@@ -179,7 +179,7 @@ impl StorageBackend for S3Backend {
             }
         }
 
-        cids.sort_by_key(|a| a.as_hex());
+        cids.sort_by_key(super::cid::Cid::as_hex);
         Ok(cids)
     }
 

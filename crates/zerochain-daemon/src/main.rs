@@ -108,14 +108,11 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let stage_id = match &stage {
-                Some(s) => StageId::parse(s).map_err(|e| anyhow::anyhow!("{e}"))?,
-                None => {
-                    let next = plan
-                        .next_stage()
-                        .ok_or_else(|| anyhow::anyhow!("no pending stages"))?;
-                    next.clone()
-                }
+            let stage_id = if let Some(s) = &stage { StageId::parse(s).map_err(|e| anyhow::anyhow!("{e}"))? } else {
+                let next = plan
+                    .next_stage()
+                    .ok_or_else(|| anyhow::anyhow!("no pending stages"))?;
+                next.clone()
             };
 
             let stage = workflow
@@ -149,7 +146,7 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("workflow not found: {wid}"))?;
             let plan = workflow.execution_plan();
             let complete = plan.is_complete();
-            let next = plan.next_stage().map(|s| s.raw.as_str()).unwrap_or("none");
+            let next = plan.next_stage().map_or("none", |s| s.raw.as_str());
             println!("id:       {}", workflow.id);
             println!("root:     {}", workflow.root.display());
             println!("stages:   {}", workflow.stages.len());

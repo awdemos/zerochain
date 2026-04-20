@@ -5,7 +5,7 @@ use crate::plan::ExecutionPlan;
 use crate::stage::{Stage, StageId};
 use crate::task::Task;
 
-pub fn is_valid_workflow_name(name: &str) -> bool {
+#[must_use] pub fn is_valid_workflow_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
         && name
@@ -32,9 +32,7 @@ impl Workflow {
         }
 
         let id = path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
+            .file_name().map_or_else(|| "unknown".to_string(), |n| n.to_string_lossy().to_string());
 
         let task = Self::find_task(path).await?;
 
@@ -73,7 +71,7 @@ impl Workflow {
         })
     }
 
-    pub fn execution_plan(&self) -> ExecutionPlan {
+    #[must_use] pub fn execution_plan(&self) -> ExecutionPlan {
         ExecutionPlan::from_stages(&self.stages)
     }
 
@@ -145,15 +143,15 @@ impl Workflow {
         Workflow::from_dir(&workflow_dir).await
     }
 
-    pub fn stage_by_id(&self, id: &StageId) -> Option<&Stage> {
+    #[must_use] pub fn stage_by_id(&self, id: &StageId) -> Option<&Stage> {
         self.stages.iter().find(|s| s.id == *id)
     }
 
-    pub fn stage_by_name(&self, name: &str) -> Option<&Stage> {
+    #[must_use] pub fn stage_by_name(&self, name: &str) -> Option<&Stage> {
         self.stages.iter().find(|s| s.id.name == name)
     }
 
-    pub fn stage_index(&self, raw: &str) -> Option<usize> {
+    #[must_use] pub fn stage_index(&self, raw: &str) -> Option<usize> {
         self.stages.iter().position(|s| s.id.raw == raw)
     }
 

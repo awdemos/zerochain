@@ -121,7 +121,7 @@ impl JjManager {
                     continue;
                 }
                 let commit_id_str = lines[1].trim();
-                let commit_id = if commit_id_str.is_empty() || commit_id_str.contains("(") {
+                let commit_id = if commit_id_str.is_empty() || commit_id_str.contains('(') {
                     None
                 } else {
                     Some(commit_id_str.to_string())
@@ -171,7 +171,7 @@ pub struct JjWorkspace {
 }
 
 impl JjWorkspace {
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use] pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
 

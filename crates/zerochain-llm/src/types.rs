@@ -49,7 +49,7 @@ impl Message {
         }
     }
 
-    pub fn with_content(role: Role, content: Content) -> Self {
+    #[must_use] pub fn with_content(role: Role, content: Content) -> Self {
         Self { role, content }
     }
 }
@@ -81,14 +81,14 @@ pub struct ImageUrlContent {
 }
 
 impl Content {
-    pub fn text(&self) -> Option<&str> {
+    #[must_use] pub fn text(&self) -> Option<&str> {
         match self {
             Content::Text(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn is_text(&self) -> bool {
+    #[must_use] pub fn is_text(&self) -> bool {
         matches!(self, Content::Text(_))
     }
 }
@@ -196,7 +196,7 @@ impl LLMConfig {
         }
     }
 
-    pub fn deterministic(mut self, content_cid: &str) -> Self {
+    #[must_use] pub fn deterministic(mut self, content_cid: &str) -> Self {
         let hash = blake3::hash(content_cid.as_bytes());
         self.seed = Some(u64::from_le_bytes(
             hash.as_bytes()[0..8].try_into().unwrap(),
@@ -206,21 +206,21 @@ impl LLMConfig {
         self
     }
 
-    pub fn is_reproducible(&self) -> bool {
+    #[must_use] pub fn is_reproducible(&self) -> bool {
         self.temperature == 0.0 && self.seed.is_some()
     }
 
-    pub fn with_temperature(mut self, t: f32) -> Self {
+    #[must_use] pub fn with_temperature(mut self, t: f32) -> Self {
         self.temperature = t;
         self
     }
 
-    pub fn with_max_tokens(mut self, n: usize) -> Self {
+    #[must_use] pub fn with_max_tokens(mut self, n: usize) -> Self {
         self.max_tokens = n;
         self
     }
 
-    pub fn with_context_window(mut self, n: usize) -> Self {
+    #[must_use] pub fn with_context_window(mut self, n: usize) -> Self {
         self.context_window = n;
         self
     }

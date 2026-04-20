@@ -35,7 +35,7 @@ pub enum FsError {
 
 pub type Result<T> = std::result::Result<T, FsError>;
 
-/// Helper to wrap an io::Error with path context.
+/// Helper to wrap an `io::Error` with path context.
 pub(crate) fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> FsError {
     FsError::Io {
         path: path.into(),

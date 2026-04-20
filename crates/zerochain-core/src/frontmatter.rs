@@ -30,7 +30,7 @@ pub struct ContextFrontmatter {
 
 impl ContextFrontmatter {
     /// Merge `self` over `base`, taking child's values when present.
-    pub fn merge(&self, base: &ContextFrontmatter) -> ContextFrontmatter {
+    #[must_use] pub fn merge(&self, base: &ContextFrontmatter) -> ContextFrontmatter {
         ContextFrontmatter {
             role: self.role.clone().or_else(|| base.role.clone()),
             container: self.container.clone().or_else(|| base.container.clone()),
