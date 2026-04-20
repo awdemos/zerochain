@@ -12,7 +12,8 @@ use zerochain_cas::Cid;
 use zerochain_core::stage::StageId;
 use zerochain_fs::{acquire_lock, clean_output};
 
-use zerochain_core::{jj, is_valid_workflow_name};
+use zerochain_core::jj;
+use zerochain_core::workflow::is_valid_workflow_name;
 
 use crate::auth;
 use crate::state::ServerState;
@@ -116,6 +117,7 @@ async fn init_workflow(
     State(state): State<ServerState>,
     Json(body): Json<InitWorkflowRequest>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "init_workflow", name = %body.name, "mutation");
     if !is_valid_workflow_name(&body.name) {
         return (
             StatusCode::BAD_REQUEST,
@@ -271,6 +273,7 @@ async fn run_stage_by_id(
     id: &str,
     stage_raw: &str,
 ) -> axum::response::Response {
+    tracing::info!(action = "run_stage", workflow = %id, stage = %stage_raw, "mutation");
     let sid = match StageId::parse(stage_raw) {
         Ok(s) => s,
         Err(e) => {
@@ -333,6 +336,7 @@ async fn approve(
     State(state): State<ServerState>,
     Path((id, stage_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "approve", workflow = %id, stage = %stage_raw, "mutation");
     if let Err(e) = StageId::parse(&stage_raw) {
         return (
             StatusCode::BAD_REQUEST,
@@ -370,6 +374,7 @@ async fn reject(
     Path((id, stage_raw)): Path<(String, String)>,
     Json(body): Json<RejectRequest>,
 ) -> impl IntoResponse {
+    tracing::info!(action = "reject", workflow = %id, stage = %stage_raw, "mutation");
     if let Err(e) = StageId::parse(&stage_raw) {
         return (
             StatusCode::BAD_REQUEST,
@@ -476,25 +481,25 @@ async fn upload_artifact(
     State(state): State<ServerState>,
     body: Bytes,
 ) -> impl IntoResponse {
-    match state.cas {
-        Some(cas) => match cas.put(&body).await {
-            Ok(cid) => (
-                StatusCode::CREATED,
-                Json(ArtifactResponse { cid: cid.to_string() }),
-            )
-                .into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SimpleMessage {
-                    message: format!("failed to store artifact: {e}"),
-                }),
-            )
-                .into_response(),
-        },
-        None => (
+    let Some(cas) = state.cas() else {
+        return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(SimpleMessage {
                 message: "CAS not configured".into(),
+            }),
+        )
+            .into_response();
+    };
+    match cas.put(&body).await {
+        Ok(cid) => (
+            StatusCode::CREATED,
+            Json(ArtifactResponse { cid: cid.to_string() }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SimpleMessage {
+                message: format!("failed to store artifact: {e}"),
             }),
         )
             .into_response(),
@@ -502,26 +507,26 @@ async fn upload_artifact(
 }
 
 async fn list_artifacts(State(state): State<ServerState>) -> impl IntoResponse {
-    match state.cas {
-        Some(cas) => match cas.list().await {
-            Ok(cids) => Json(
-                cids.into_iter()
-                    .map(|c| c.to_string())
-                    .collect::<Vec<String>>(),
-            )
-            .into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SimpleMessage {
-                    message: format!("failed to list artifacts: {e}"),
-                }),
-            )
-                .into_response(),
-        },
-        None => (
+    let Some(cas) = state.cas() else {
+        return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(SimpleMessage {
                 message: "CAS not configured".into(),
+            }),
+        )
+            .into_response();
+    };
+    match cas.list().await {
+        Ok(cids) => Json(
+            cids.into_iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<String>>(),
+        )
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SimpleMessage {
+                message: format!("failed to list artifacts: {e}"),
             }),
         )
             .into_response(),
@@ -545,28 +550,28 @@ async fn download_artifact(
         }
     };
 
-    match state.cas {
-        Some(cas) => match cas.get(&cid).await {
-            Ok(data) => data.into_response(),
-            Err(zerochain_cas::CasError::NotFound(_)) => (
-                StatusCode::NOT_FOUND,
-                Json(SimpleMessage {
-                    message: "artifact not found".into(),
-                }),
-            )
-                .into_response(),
-            Err(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(SimpleMessage {
-                    message: format!("failed to retrieve artifact: {e}"),
-                }),
-            )
-                .into_response(),
-        },
-        None => (
+    let Some(cas) = state.cas() else {
+        return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(SimpleMessage {
                 message: "CAS not configured".into(),
+            }),
+        )
+            .into_response();
+    };
+    match cas.get(&cid).await {
+        Ok(data) => data.into_response(),
+        Err(e) if e.is_not_found() => (
+            StatusCode::NOT_FOUND,
+            Json(SimpleMessage {
+                message: "artifact not found".into(),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SimpleMessage {
+                message: format!("failed to retrieve artifact: {e}"),
             }),
         )
             .into_response(),
@@ -591,30 +596,23 @@ async fn send_prompt(
         )
             .into_response();
     }
-    let broker = match state.broker {
-        Some(b) => b,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(SimpleMessage {
-                    message: "broker not configured".into(),
-                }),
-            )
-                .into_response();
-        }
+    let Some(broker) = state.broker() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SimpleMessage {
+                message: "broker not configured".into(),
+            }),
+        )
+            .into_response();
     };
-
-    let cas = match state.cas {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(SimpleMessage {
-                    message: "CAS not configured".into(),
-                }),
-            )
-                .into_response();
-        }
+    let Some(cas) = state.cas() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SimpleMessage {
+                message: "CAS not configured".into(),
+            }),
+        )
+            .into_response();
     };
 
     // Store the prompt content in CAS
@@ -662,17 +660,14 @@ async fn poll_prompts(
         )
             .into_response();
     }
-    let broker = match state.broker {
-        Some(b) => b,
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(SimpleMessage {
-                    message: "broker not configured".into(),
-                }),
-            )
-                .into_response();
-        }
+    let Some(broker) = state.broker() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(SimpleMessage {
+                message: "broker not configured".into(),
+            }),
+        )
+            .into_response();
     };
 
     let subject = format!("zerochain.{id}.{stage_raw}");
@@ -692,7 +687,7 @@ async fn poll_prompts(
     // For MVP, return the first available message or empty.
     // In production this would be an SSE stream.
     match tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv()).await {
-        Ok(Some(msg)) => Json(msg).into_response(),
+        Ok(Some(msg)) => Json::<zerochain_broker::BrokerMessage>(msg).into_response(),
         Ok(None) => Json(SimpleMessage {
             message: "no messages".into(),
         })

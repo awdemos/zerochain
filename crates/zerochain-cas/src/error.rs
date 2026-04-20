@@ -4,23 +4,28 @@ use thiserror::Error;
 /// Errors that can occur when interacting with the content-addressed store.
 #[derive(Error, Debug)]
 pub enum CasError {
-    /// The requested content identifier was not found in the store.
     #[error("content not found: {0}")]
     NotFound(String),
 
-    /// An I/O error occurred during a filesystem operation.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    #[error("I/O error at {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 
-    /// A CID string failed to parse.
     #[error("invalid CID: {0}")]
     InvalidCid(String),
 
-    /// A serialization or deserialization error.
+    #[error("S3 error: {0}")]
+    S3(String),
+
+    #[error("configuration error: {0}")]
+    Configuration(String),
+
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    /// The base directory could not be created or is inaccessible.
     #[error("store directory error: {path}")]
     StoreDirectory {
         path: PathBuf,
@@ -28,9 +33,24 @@ pub enum CasError {
         source: std::io::Error,
     },
 
-    /// The requested operation is not supported by the current backend.
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+}
+
+impl CasError {
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.into(),
+            source,
+        }
+    }
+}
+
+impl CasError {
+    /// Returns true if this error indicates the requested content was not found.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, CasError::NotFound(_))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CasError>;

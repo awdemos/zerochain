@@ -1,0 +1,62 @@
+version: "3.8"
+
+services:
+  zerochaind:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${ZEROCHAIN_LISTEN:-8080}:8080"
+    environment:
+      ZEROCHAIN_WORKSPACE: /workspace
+      ZEROCHAIN_LISTEN: 0.0.0.0:8080
+      ZEROCHAIN_CAS_DIR: /workspace/.zerochain/cas
+      ZEROCHAIN_BROKER_ENABLED: "true"
+      ZEROCHAIN_API_KEY: ${ZEROCHAIN_API_KEY:-}
+      ZEROCHAIN_COW_BACKEND: ${ZEROCHAIN_COW_BACKEND:-auto}
+      ZEROCHAIN_CAS_S3_BUCKET: ${ZEROCHAIN_CAS_S3_BUCKET:-zerochain}
+      ZEROCHAIN_CAS_S3_REGION: ${ZEROCHAIN_CAS_S3_REGION:-us-east-1}
+      ZEROCHAIN_CAS_S3_ENDPOINT: http://minio:9000
+      ZEROCHAIN_CAS_S3_ACCESS_KEY: ${ZEROCHAIN_CAS_S3_ACCESS_KEY:-minioadmin}
+      ZEROCHAIN_CAS_S3_SECRET_KEY: ${ZEROCHAIN_CAS_S3_SECRET_KEY:-minioadmin}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RUST_LOG: ${RUST_LOG:-zerochaind=info}
+    volumes:
+      - zerochain-workspace:/workspace
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    ports:
+      - "${MINIO_S3_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${ZEROCHAIN_CAS_S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${ZEROCHAIN_CAS_S3_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${ZEROCHAIN_CAS_S3_ACCESS_KEY:-minioadmin} ${ZEROCHAIN_CAS_S3_SECRET_KEY:-minioadmin};
+      mc mb --ignore-existing local/zerochain;
+      "
+    restart: "no"
+
+volumes:
+  zerochain-workspace:
+  minio-data:

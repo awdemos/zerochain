@@ -5,6 +5,7 @@ use crate::context::Context;
 use crate::stage::StageId;
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct StageDef {
     pub name: String,
     pub role: String,

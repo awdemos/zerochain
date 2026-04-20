@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::DaemonError;
+use zerochain_fs::CowPlatform;
 use zerochain_core::context::Context as StageContext;
 use zerochain_core::lua_engine::{
     create_sandboxed_vm, run_hook, load_shared_store, save_shared_store, LuaContext,
@@ -21,10 +22,10 @@ pub struct InitWorkflowParams<'a> {
     pub template: Option<&'a str>,
 }
 
-
 pub struct AppState {
     pub workspace_root: PathBuf,
     pub workflows: HashMap<String, Workflow>,
+    cow_backend: Box<dyn zerochain_fs::CowPlatform>,
 }
 
 fn workflow_dir(workspace_root: &Path) -> PathBuf {
@@ -79,11 +80,59 @@ fn resolve_capture_reasoning(ctx: &StageContext) -> bool {
         .unwrap_or(false)
 }
 
+fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::CowPlatform> {
+    let env_val = std::env::var("ZEROCHAIN_COW_BACKEND")
+        .unwrap_or_default()
+        .to_lowercase();
+
+    match env_val.as_str() {
+        "btrfs" => {
+            let btrfs = zerochain_fs::BtrfsCow;
+            if btrfs.is_available() {
+                tracing::info!("CoW backend: btrfs (forced by ZEROCHAIN_COW_BACKEND)");
+                return Box::new(btrfs);
+            }
+            tracing::warn!("ZEROCHAIN_COW_BACKEND=btrfs but btrfs unavailable, falling back to auto");
+            zerochain_fs::detect_backend(workspace_root)
+        }
+        "directory" => {
+            tracing::info!("CoW backend: directory (forced by ZEROCHAIN_COW_BACKEND)");
+            Box::new(zerochain_fs::DirectoryCow)
+        }
+        "none" | "disabled" => {
+            tracing::info!("CoW backend: disabled by ZEROCHAIN_COW_BACKEND");
+            Box::new(NoopCow)
+        }
+        _ => zerochain_fs::detect_backend(workspace_root),
+    }
+}
+
+const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
+
+struct NoopCow;
+
+#[async_trait::async_trait]
+impl zerochain_fs::CowPlatform for NoopCow {
+    async fn snapshot(&self, _source_dir: &Path, _target_dir: &Path) -> zerochain_fs::Result<()> {
+        Ok(())
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &str {
+        "disabled"
+    }
+}
+
 impl AppState {
     pub fn new(workspace_root: &Path) -> AppState {
+        let cow_backend = resolve_cow_backend(workspace_root);
         AppState {
             workspace_root: workspace_root.to_path_buf(),
             workflows: HashMap::new(),
+            cow_backend,
         }
     }
 
@@ -140,14 +189,7 @@ impl AppState {
             .await
             .map_err(|e| DaemonError::io(&wf_base, e))?;
 
-        let mut registry = zerochain_core::template::TemplateRegistry::new();
-        let builtin_template_dir = self.workspace_root.join("templates");
-        if builtin_template_dir.is_dir() {
-            if let Err(e) = registry.load_from_dir(&builtin_template_dir) {
-                tracing::debug!(error = %e, "no builtin templates directory");
-            }
-        }
-
+        let registry = zerochain_core::template::TemplateRegistry::new();
         let named_template = template.and_then(|t| registry.get(t));
 
         let (stage_names, stage_defs): (Vec<String>, Option<&Vec<zerochain_core::template::StageDef>>) = if let Some(tpl) = named_template {
@@ -175,16 +217,10 @@ impl AppState {
 
         if let Some(defs) = stage_defs {
             for def in defs {
-                let stage_dir = workflow.root.join(&def.name);
-                let ctx_path = stage_dir.join("CONTEXT.md");
-
-                if let Some(ref src_dir) = def.source_dir {
-                    copy_tree_stage(src_dir, &stage_dir).await?;
-                } else {
-                    tokio::fs::write(&ctx_path, def.to_context_md())
-                        .await
-                        .map_err(|e| DaemonError::io(&ctx_path, e))?;
-                }
+                let ctx_path = workflow.root.join(&def.name).join("CONTEXT.md");
+                tokio::fs::write(&ctx_path, def.to_context_md())
+                    .await
+                    .map_err(|e| DaemonError::io(&ctx_path, e))?;
             }
         }
 
@@ -235,6 +271,129 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn snapshot_stage(
+        &self,
+        workflow_id: &str,
+        stage_id: &str,
+    ) -> Result<PathBuf, DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
+
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let snap_name = format!("{}.{}.{nonce}", &stage.id.raw, timestamp);
+        let snapshots_dir = wf.root.join(".snapshots");
+        let snap_dir = snapshots_dir.join(&snap_name);
+
+        tokio::fs::create_dir_all(&snapshots_dir)
+            .await
+            .map_err(|e| DaemonError::io(&snapshots_dir, e))?;
+
+        self.cow_backend
+            .snapshot(&stage.path, &snap_dir)
+            .await
+            .map_err(|e| DaemonError::CowSnapshot(format!(
+                "snapshot {snap_name} failed: {e}"
+            )))?;
+
+        tracing::info!(
+            stage = %stage.id.raw,
+            backend = %self.cow_backend.name(),
+            snapshot = %snap_dir.display(),
+            "stage snapshot created"
+        );
+
+        self.cleanup_old_snapshots(&wf.root).await?;
+
+        Ok(snap_dir)
+    }
+
+    pub async fn restore_stage(
+        &self,
+        workflow_id: &str,
+        stage_id: &str,
+    ) -> Result<(), DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let sid = StageId::parse(stage_id).map_err(|e| DaemonError::InvalidStageId(e.to_string()))?;
+        let stage = wf.stage_by_id(&sid).ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
+
+        let snapshots_dir = wf.root.join(".snapshots");
+        if !snapshots_dir.exists() {
+            return Err(DaemonError::CowRestore("no snapshots directory".into()));
+        }
+
+        let latest = find_latest_snapshot(&snapshots_dir, &stage.id.raw)
+            .ok_or_else(|| DaemonError::CowRestore(format!(
+                "no snapshot found for stage {stage_id}"
+            )))?;
+
+        let snap_path = snapshots_dir.join(&latest);
+        tracing::info!(
+            stage = %stage.id.raw,
+            snapshot = %snap_path.display(),
+            "restoring stage from snapshot"
+        );
+
+        if stage.path.exists() {
+            tokio::fs::remove_dir_all(&stage.path)
+                .await
+                .map_err(|e| DaemonError::io(&stage.path, e))?;
+        }
+
+        self.cow_backend
+            .snapshot(&snap_path, &stage.path)
+            .await
+            .map_err(|e| DaemonError::CowRestore(format!("restore failed: {e}")))?;
+
+        tracing::info!(stage = %stage.id.raw, "stage restored from snapshot");
+        Ok(())
+    }
+
+    async fn cleanup_old_snapshots(&self, workflow_root: &Path) -> Result<(), DaemonError> {
+        let snapshots_dir = workflow_root.join(".snapshots");
+        if !snapshots_dir.exists() {
+            return Ok(());
+        }
+
+        let mut rd = tokio::fs::read_dir(&snapshots_dir)
+            .await
+            .map_err(|e| DaemonError::io(&snapshots_dir, e))?;
+
+        let mut entries = Vec::new();
+        while let Some(entry) = rd.next_entry().await.map_err(|e| DaemonError::io(&snapshots_dir, e))? {
+            let path = entry.path();
+            if path.is_dir() {
+                entries.push(entry);
+            }
+        }
+
+        if entries.len() <= MAX_SNAPSHOTS_PER_WORKFLOW {
+            return Ok(());
+        }
+
+        entries.sort_by_key(|e| e.file_name());
+        let to_remove = entries.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
+
+        for entry in entries.iter().take(to_remove) {
+            let path = entry.path();
+            if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                tracing::warn!(path = %path.display(), error = %e, "failed to remove old snapshot");
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn list_workflows(&self) -> Vec<(String, String)> {
         let mut out = Vec::new();
         for wf in self.workflows.values() {
@@ -255,8 +414,24 @@ impl AppState {
         workflow_id: &str,
         stage: &Stage,
     ) -> Result<(), DaemonError> {
-        let llm = self.create_llm()?;
-        self.execute_stage_with_llm(workflow_id, stage, llm.as_ref()).await
+        let container_mode = std::env::var("ZEROCHAIN_CONTAINER_ISOLATION")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if container_mode {
+            let snapshot_taken = self.snapshot_stage(workflow_id, &stage.id.raw).await.ok();
+            let result = self.execute_stage_in_container(workflow_id, stage).await;
+            if result.is_err() && snapshot_taken.is_some() {
+                tracing::info!(
+                    stage = %stage.id.raw,
+                    "snapshot available for restore via restore_stage()"
+                );
+            }
+            result
+        } else {
+            let llm = self.create_llm()?;
+            self.execute_stage_with_llm(workflow_id, stage, llm.as_ref()).await
+        }
     }
 
     pub async fn execute_stage_with_llm(
@@ -417,11 +592,19 @@ impl AppState {
             "calling LLM"
         );
 
+        let snapshot_taken = self.snapshot_stage(workflow_id, &stage.id.raw).await.ok();
+
         let response = llm
             .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
             .await
             .map_err(|e| {
                 tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
+                if snapshot_taken.is_some() {
+                    tracing::info!(
+                        stage = %stage.id.raw,
+                        "snapshot available for restore via restore_stage()"
+                    );
+                }
                 DaemonError::Llm(format!("LLM call failed: {e}"))
             })?;
 
@@ -492,6 +675,79 @@ impl AppState {
         }
 
         Ok(())
+    }
+
+    pub async fn execute_stage_in_container(
+        &mut self,
+        workflow_id: &str,
+        stage: &Stage,
+    ) -> Result<(), DaemonError> {
+        let executor = crate::container::ContainerExecutor::detect()
+            .ok_or_else(|| DaemonError::ContainerSpawn(
+                "no container runtime found (need docker or podman)".into()
+            ))?;
+
+        let image = std::env::var("ZEROCHAIN_STAGE_IMAGE")
+            .unwrap_or_else(|_| "cgr.dev/chainguard/wolfi-base:latest".into());
+
+        let env_vars = self.container_env_vars();
+        let wf = self.workflows.get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+
+        tokio::fs::create_dir_all(&stage.output_path).await
+            .map_err(|e| DaemonError::io(&stage.output_path, e))?;
+
+        let config = crate::container::ContainerConfig {
+            image,
+            stage_dir: stage.path.clone(),
+            output_dir: stage.output_path.clone(),
+            env_vars,
+            command: vec![
+                "zerochain".into(),
+                "run-stage".into(),
+                "--workflow-id".into(),
+                workflow_id.into(),
+                "--stage-id".into(),
+                stage.id.raw.clone(),
+                "--workspace".into(),
+                "/workspace".into(),
+            ],
+            workspace_root: wf.root.clone(),
+        };
+
+        let result = executor.run_stage(&config).await?;
+
+        tokio::fs::write(stage.output_path.join("result.md"), &result.stdout)
+            .await
+            .map_err(|e| DaemonError::io(stage.output_path.join("result.md"), e))?;
+
+        if !result.stderr.is_empty() {
+            let stderr_path = stage.output_path.join("stderr.log");
+            tokio::fs::write(&stderr_path, &result.stderr)
+                .await
+                .map_err(|e| DaemonError::io(&stderr_path, e))?;
+        }
+
+        Ok(())
+    }
+
+    fn container_env_vars(&self) -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+        for key in &[
+            "OPENAI_API_KEY",
+            "ZEROCHAIN_MODEL",
+            "ZEROCHAIN_LLM_PROVIDER",
+            "ZEROCHAIN_BASE_URL",
+            "ZEROCHAIN_API_KEY_ENV",
+            "ZEROCHAIN_PROVIDER_PROFILE",
+            "ZEROCHAIN_THINKING_MODE",
+            "ZEROCHAIN_CAPTURE_REASONING",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                vars.push((key.to_string(), val));
+            }
+        }
+        vars
     }
 
     fn create_llm(&self) -> Result<Box<dyn LLM>, DaemonError> {
@@ -565,6 +821,22 @@ impl AppState {
     }
 }
 
+fn find_latest_snapshot(snapshots_dir: &Path, stage_id: &str) -> Option<String> {
+    let prefix = format!("{stage_id}.");
+    let Ok(entries) = std::fs::read_dir(snapshots_dir) else {
+        return None;
+    };
+    let mut candidates: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    candidates.sort();
+    candidates.into_iter().last()
+}
+
+#[allow(dead_code)]
 fn copy_tree_stage<'a>(
     src: &'a Path,
     dst: &'a Path,
@@ -680,5 +952,158 @@ mod tests {
 
         let content = tokio::fs::read_to_string(stage.path.join(".error")).await.unwrap();
         assert_eq!(content, "bad output");
+    }
+
+    #[tokio::test]
+    async fn snapshot_stage_creates_snapshot_directory() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "snap-test", path: None, template: Some("00_spec"),
+        }).await.unwrap();
+        let stage = &wf.stages[0];
+
+        tokio::fs::write(stage.path.join("data.txt"), b"original")
+            .await.unwrap();
+
+        let snap_path = state.snapshot_stage("snap-test", &stage.id.raw).await.unwrap();
+
+        assert!(snap_path.exists());
+        let content = tokio::fs::read_to_string(snap_path.join("data.txt")).await.unwrap();
+        assert_eq!(content, "original");
+    }
+
+    #[tokio::test]
+    async fn snapshot_stage_preserves_multiple_files() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "multi-snap", path: None, template: Some("00_spec,01_impl"),
+        }).await.unwrap();
+
+        tokio::fs::write(wf.stages[0].path.join("a.txt"), b"aaa").await.unwrap();
+        tokio::fs::write(wf.stages[1].path.join("b.txt"), b"bbb").await.unwrap();
+
+        let snap0 = state.snapshot_stage("multi-snap", &wf.stages[0].id.raw).await.unwrap();
+        let snap1 = state.snapshot_stage("multi-snap", &wf.stages[1].id.raw).await.unwrap();
+
+        assert!(snap0.join("a.txt").exists());
+        assert!(snap1.join("b.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn restore_stage_reverts_to_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "restore-test", path: None, template: Some("00_spec"),
+        }).await.unwrap();
+        let stage = &wf.stages[0];
+
+        tokio::fs::write(stage.path.join("data.txt"), b"before")
+            .await.unwrap();
+
+        state.snapshot_stage("restore-test", &stage.id.raw).await.unwrap();
+
+        tokio::fs::write(stage.path.join("data.txt"), b"corrupted")
+            .await.unwrap();
+        tokio::fs::write(stage.path.join("extra.txt"), b"junk")
+            .await.unwrap();
+
+        state.restore_stage("restore-test", &stage.id.raw).await.unwrap();
+
+        let restored = tokio::fs::read_to_string(stage.path.join("data.txt")).await.unwrap();
+        assert_eq!(restored, "before");
+        assert!(!stage.path.join("extra.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn restore_stage_fails_without_snapshot() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "no-snap", path: None, template: Some("00_spec"),
+        }).await.unwrap();
+
+        let result = state.restore_stage("no-snap", &wf.stages[0].id.raw).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("no snapshot"), "unexpected error: {err_msg}");
+    }
+
+    #[tokio::test]
+    async fn snapshot_restores_latest_when_multiple() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "multi-restore", path: None, template: Some("00_spec"),
+        }).await.unwrap();
+        let stage = &wf.stages[0];
+
+        tokio::fs::write(stage.path.join("data.txt"), b"v1").await.unwrap();
+        state.snapshot_stage("multi-restore", &stage.id.raw).await.unwrap();
+
+        tokio::fs::write(stage.path.join("data.txt"), b"v2").await.unwrap();
+        state.snapshot_stage("multi-restore", &stage.id.raw).await.unwrap();
+
+        tokio::fs::write(stage.path.join("data.txt"), b"corrupted").await.unwrap();
+
+        state.restore_stage("multi-restore", &stage.id.raw).await.unwrap();
+
+        let restored = tokio::fs::read_to_string(stage.path.join("data.txt")).await.unwrap();
+        assert_eq!(restored, "v2");
+    }
+
+    #[tokio::test]
+    async fn snapshot_cleanup_removes_oldest() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path());
+        let wf = state.init_workflow(InitWorkflowParams {
+            name: "cleanup-test", path: None, template: Some("00_spec"),
+        }).await.unwrap();
+        let stage = &wf.stages[0];
+
+        for i in 0..(MAX_SNAPSHOTS_PER_WORKFLOW + 3) {
+            tokio::fs::write(stage.path.join("data.txt"), format!("v{i}")).await.unwrap();
+            state.snapshot_stage("cleanup-test", &stage.id.raw).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        let snapshots_dir = wf.root.join(".snapshots");
+        let mut rd = tokio::fs::read_dir(&snapshots_dir).await.unwrap();
+        let mut count = 0;
+        while rd.next_entry().await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, MAX_SNAPSHOTS_PER_WORKFLOW);
+    }
+
+    #[test]
+    fn find_latest_snapshot_returns_none_on_empty() {
+        let tmp = TempDir::new().unwrap();
+        assert!(find_latest_snapshot(tmp.path(), "00_spec").is_none());
+    }
+
+    #[test]
+    fn find_latest_snapshot_picks_newest() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join("00_spec.20250101T000000Z")).unwrap();
+        std::fs::create_dir_all(dir.join("00_spec.20250201T000000Z")).unwrap();
+        std::fs::create_dir_all(dir.join("00_spec.20250301T000000Z")).unwrap();
+
+        let latest = find_latest_snapshot(dir, "00_spec").unwrap();
+        assert_eq!(latest, "00_spec.20250301T000000Z");
+    }
+
+    #[test]
+    fn find_latest_snapshot_ignores_other_stages() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir_all(dir.join("01_impl.20250101T000000Z")).unwrap();
+        std::fs::create_dir_all(dir.join("00_spec.20250101T000000Z")).unwrap();
+
+        let latest = find_latest_snapshot(dir, "00_spec").unwrap();
+        assert_eq!(latest, "00_spec.20250101T000000Z");
     }
 }
