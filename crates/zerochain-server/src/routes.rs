@@ -559,7 +559,7 @@ async fn download_artifact(
     match state.cas {
         Some(cas) => match cas.get(&cid).await {
             Ok(data) => data.into_response(),
-            Err(zerochain_cas::CasError::NotFound(_)) => (
+            Err(e) if e.is_not_found() => (
                 StatusCode::NOT_FOUND,
                 Json(SimpleMessage {
                     message: "artifact not found".into(),
