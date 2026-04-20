@@ -50,14 +50,14 @@ impl Context {
 
         let end_marker = after_first.find("\n---").ok_or_else(|| Error::YamlParse {
             path: std::path::PathBuf::from("<inline>"),
-            source: serde_yaml::from_str::<serde_yaml::Value>("---").unwrap_err(),
+            source: serde_yml::from_str::<serde_yml::Value>("---").unwrap_err(),
         })?;
 
         let yaml_str = &after_first[..end_marker];
         let body = after_first[end_marker + 4..].trim_start().to_string();
 
         let frontmatter: ContextFrontmatter =
-            serde_yaml::from_str(yaml_str).map_err(|e| Error::YamlParse {
+            serde_yml::from_str(yaml_str).map_err(|e| Error::YamlParse {
                 path: std::path::PathBuf::from("<inline>"),
                 source: e,
             })?;
