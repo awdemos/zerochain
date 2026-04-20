@@ -149,7 +149,10 @@ impl TemplateRegistry {
                 };
                 let sid = match StageId::parse(&dir_name) {
                     Ok(s) => s,
-                    Err(_) => continue,
+                    Err(e) => {
+                        tracing::warn!(dir = %dir_name, error = %e, "skipping invalid stage directory");
+                        continue;
+                    }
                 };
 
                 let context_path = stage_path.join("CONTEXT.md");
@@ -162,7 +165,10 @@ impl TemplateRegistry {
                             ctx.body,
                             ctx.frontmatter.human_gate,
                         ),
-                        Err(_) => (String::new(), String::new(), false),
+                        Err(e) => {
+                            tracing::warn!(path = %context_path.display(), error = %e, "failed to parse CONTEXT.md");
+                            (String::new(), String::new(), false)
+                        }
                     }
                 } else {
                     (String::new(), String::new(), false)
@@ -243,7 +249,10 @@ impl TemplateRegistry {
                     };
                     let sid = match StageId::parse(&dir_name) {
                         Ok(s) => s,
-                        Err(_) => continue,
+                        Err(e) => {
+                            tracing::warn!(dir = %dir_name, error = %e, "skipping invalid stage directory");
+                            continue;
+                        }
                     };
 
                     let context_path = stage_path.join("CONTEXT.md");
@@ -256,7 +265,10 @@ impl TemplateRegistry {
                                 ctx.body,
                                 ctx.frontmatter.human_gate,
                             ),
-                            Err(_) => (String::new(), String::new(), false),
+                            Err(e) => {
+                                tracing::warn!(path = %context_path.display(), error = %e, "failed to parse CONTEXT.md");
+                                (String::new(), String::new(), false)
+                            }
                         }
                     } else {
                         (String::new(), String::new(), false)

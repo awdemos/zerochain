@@ -4,7 +4,7 @@ pub mod vm;
 
 use std::path::Path;
 
-use crate::context::ContextFrontmatter;
+use crate::frontmatter::ContextFrontmatter;
 use crate::error::Result;
 
 pub use api::{load_shared_store, run_hook, save_shared_store, HookResults, LuaContext};

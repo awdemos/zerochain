@@ -109,7 +109,7 @@ impl ContainerExecutor {
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .map_err(|e| DaemonError::ContainerSpawn(format!("failed to spawn container: {e}")))?;
+            .map_err(DaemonError::ContainerSpawn)?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -151,13 +151,14 @@ impl ContainerExecutor {
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .map_err(|e| DaemonError::ContainerSpawn(format!("failed to pull image: {e}")))?;
+            .map_err(DaemonError::ContainerSpawn)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DaemonError::ContainerSpawn(format!(
-                "failed to pull image {image}: {stderr}"
-            )));
+            return Err(DaemonError::ContainerImage {
+                image: image.into(),
+                stderr: stderr.into(),
+            });
         }
 
         Ok(())
@@ -196,13 +197,14 @@ impl ContainerExecutor {
             .stderr(std::process::Stdio::piped())
             .output()
             .await
-            .map_err(|e| DaemonError::ContainerSpawn(format!("failed to build image: {e}")))?;
+            .map_err(DaemonError::ContainerSpawn)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DaemonError::ContainerSpawn(format!(
-                "failed to build image {tag}: {stderr}"
-            )));
+            return Err(DaemonError::ContainerImage {
+                image: tag.into(),
+                stderr: stderr.into(),
+            });
         }
 
         Ok(())
