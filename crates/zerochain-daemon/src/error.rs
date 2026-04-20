@@ -49,18 +49,9 @@ pub enum DaemonError {
 
     #[error("container execution error: {0}")]
     ContainerExec(String),
-}
 
-impl From<zerochain_fs::error::FsError> for DaemonError {
-    fn from(err: zerochain_fs::error::FsError) -> Self {
-        match err {
-            zerochain_fs::error::FsError::Io { path, source } => DaemonError::Io { path, source },
-            other => DaemonError::Io {
-                path: PathBuf::from("<fs>"),
-                source: std::io::Error::other(other.to_string()),
-            },
-        }
-    }
+    #[error("filesystem error: {0}")]
+    Fs(#[from] zerochain_fs::error::FsError),
 }
 
 impl DaemonError {

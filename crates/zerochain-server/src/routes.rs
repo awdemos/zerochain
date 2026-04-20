@@ -17,7 +17,7 @@ use zerochain_core::workflow::is_valid_workflow_name;
 
 use crate::auth;
 use crate::state::ServerState;
-use zerochain_daemon::state::InitWorkflowParams;
+use zerochain_daemon::InitWorkflowParams;
 
 #[derive(Deserialize)]
 pub struct InitWorkflowRequest {
