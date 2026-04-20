@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
+use crate::error::{io_err, Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
@@ -58,20 +58,14 @@ impl Context {
             return Self::from_lua_file(&lua_path).await;
         }
 
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
         Ok(ctx)
     }
 
     pub async fn from_lua_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| Error::Io {
-            path: path.to_path_buf(),
-            source: e,
-        })?;
+        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
         let frontmatter = crate::lua_engine::eval_context_lua(&content)?;
         Ok(Context {
             frontmatter,

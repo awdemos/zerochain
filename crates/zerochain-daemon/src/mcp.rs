@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use zerochain_core::is_valid_workflow_name;
+use zerochain_core::workflow::is_valid_workflow_name;
 
 use crate::{state::AppState, DaemonError};
 
@@ -20,6 +20,7 @@ pub struct ZerochainMcpServer {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct InitParams {
     pub name: String,
     #[serde(default)]
@@ -270,6 +271,36 @@ impl ZerochainMcpServer {
         match state.mark_stage_error(&workflow_id, &stage_id, feedback.as_deref()).await {
             Ok(_) => ok(format!("rejected: {workflow_id} / {stage_id}")),
             Err(e) => err_result(format!("reject failed: {e}")),
+        }
+    }
+
+    #[tool(
+        name = "zerochain_snapshot",
+        description = "Create a CoW snapshot of a stage's current state for rollback."
+    )]
+    async fn snapshot_stage(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+    ) -> rmcp::model::CallToolResult {
+        let state = self.state.lock().await;
+        match state.snapshot_stage(&workflow_id, &stage_id).await {
+            Ok(path) => ok(format!("snapshot created: {}", path.display())),
+            Err(e) => err_result(format!("snapshot failed: {e}")),
+        }
+    }
+
+    #[tool(
+        name = "zerochain_restore",
+        description = "Restore a stage from its latest CoW snapshot."
+    )]
+    async fn restore_stage(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+    ) -> rmcp::model::CallToolResult {
+        let state = self.state.lock().await;
+        match state.restore_stage(&workflow_id, &stage_id).await {
+            Ok(()) => ok(format!("restored: {workflow_id} / {stage_id}")),
+            Err(e) => err_result(format!("restore failed: {e}")),
         }
     }
 }

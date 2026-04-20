@@ -33,10 +33,21 @@ pub enum DaemonError {
 
     #[error("missing environment variable: {0}")]
     MissingEnv(String),
+
+    #[error("CoW snapshot error: {0}")]
+    CowSnapshot(String),
+
+    #[error("CoW restore error: {0}")]
+    CowRestore(String),
+
+    #[error("container spawn error: {0}")]
+    ContainerSpawn(String),
+
+    #[error("container execution error: {0}")]
+    ContainerExec(String),
 }
 
 impl DaemonError {
-    /// Create an I/O error with the given path.
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),
@@ -44,5 +55,3 @@ impl DaemonError {
         }
     }
 }
-
-

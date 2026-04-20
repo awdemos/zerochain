@@ -7,6 +7,14 @@ const ERROR_MARKER: &str = ".error";
 const EXECUTING_MARKER: &str = ".executing";
 const LOCK_FILE: &str = ".lock";
 
+async fn remove_marker(path: &Path) -> Result<()> {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io_err(path, e)),
+    }
+}
+
 pub async fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| FsError::AtomicWriteFailed {
         path: path.to_path_buf(),
@@ -50,8 +58,8 @@ pub async fn mark_complete(dir: &Path, metadata: Option<&str>) -> Result<()> {
 
     let error_path = dir.join(ERROR_MARKER);
     let exec_path = dir.join(EXECUTING_MARKER);
-    let _ = tokio::fs::remove_file(&error_path).await;
-    let _ = tokio::fs::remove_file(&exec_path).await;
+    remove_marker(&error_path).await?;
+    remove_marker(&exec_path).await?;
 
     Ok(())
 }
@@ -68,8 +76,8 @@ pub async fn mark_error(dir: &Path, error: &str) -> Result<()> {
 
     let complete_path = dir.join(COMPLETE_MARKER);
     let exec_path = dir.join(EXECUTING_MARKER);
-    let _ = tokio::fs::remove_file(&complete_path).await;
-    let _ = tokio::fs::remove_file(&exec_path).await;
+    remove_marker(&complete_path).await?;
+    remove_marker(&exec_path).await?;
 
     Ok(())
 }

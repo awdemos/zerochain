@@ -23,3 +23,21 @@ export interface InitWorkflowRequest {
 export interface RejectRequest {
   feedback?: string;
 }
+
+export interface ArtifactResponse {
+  cid: string;
+}
+
+export interface PromptRequest {
+  to_stage: string;
+  content: string;
+}
+
+export interface BrokerMessage {
+  workflow_id: string;
+  from_stage: string;
+  to_stage: string;
+  content_cid: string;
+  timestamp: string;
+  metadata: Record<string, string>;
+}

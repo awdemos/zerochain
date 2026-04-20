@@ -115,6 +115,76 @@ export const ZerochainPlugin: Plugin = async (_ctx) => {
           return await client.readReasoning(workflow_id as string, stage as string);
         },
       }),
+
+      zerochain_upload_artifact: tool({
+        description: "Upload a binary artifact to zerochain's content-addressed store. Returns a CID (content hash) for retrieval.",
+        args: {
+          data: tool.schema.string().describe("Base64-encoded artifact data"),
+        },
+        async execute({ data }) {
+          const client = new ZerochainClient(getServerUrl());
+          const binary = Uint8Array.from(atob(data as string), (c) => c.charCodeAt(0));
+          const result = await client.uploadArtifact(binary.buffer as ArrayBuffer);
+          return `Artifact uploaded: ${result.cid}`;
+        },
+      }),
+
+      zerochain_download_artifact: tool({
+        description: "Download an artifact from zerochain's content-addressed store by its CID.",
+        args: {
+          cid: tool.schema.string().describe("Content ID (CID) of the artifact"),
+        },
+        async execute({ cid }) {
+          const client = new ZerochainClient(getServerUrl());
+          return await client.downloadArtifact(cid as string);
+        },
+      }),
+
+      zerochain_list_artifacts: tool({
+        description: "List all artifact CIDs in zerochain's content-addressed store.",
+        args: {},
+        async execute() {
+          const client = new ZerochainClient(getServerUrl());
+          const cids = await client.listArtifacts();
+          if (cids.length === 0) return "No artifacts stored.";
+          return cids.join("\n");
+        },
+      }),
+
+      zerochain_send_prompt: tool({
+        description: "Send a cross-pod prompt from one stage to another. Used for multi-agent communication within a workflow.",
+        args: {
+          workflow_id: tool.schema.string().describe("Workflow ID"),
+          from_stage: tool.schema.string().describe("Source stage ID"),
+          to_stage: tool.schema.string().describe("Target stage ID"),
+          content: tool.schema.string().describe("Prompt content to send"),
+        },
+        async execute({ workflow_id, from_stage, to_stage, content }) {
+          const client = new ZerochainClient(getServerUrl());
+          const result = await client.sendPrompt(
+            workflow_id as string,
+            from_stage as string,
+            to_stage as string,
+            content as string,
+          );
+          return result.message;
+        },
+      }),
+
+      zerochain_poll_prompts: tool({
+        description: "Poll for pending prompts/messages addressed to a stage. Returns the latest message or timeout.",
+        args: {
+          workflow_id: tool.schema.string().describe("Workflow ID"),
+          stage: tool.schema.string().describe("Stage ID to poll"),
+        },
+        async execute({ workflow_id, stage }) {
+          const client = new ZerochainClient(getServerUrl());
+          const result = await client.pollPrompts(workflow_id as string, stage as string);
+          if ("message" in result) return (result as { message: string }).message;
+          const msg = result as import("./types").BrokerMessage;
+          return `From: ${msg.from_stage}, CID: ${msg.content_cid}, Timestamp: ${msg.timestamp}`;
+        },
+      }),
     },
   };
 };

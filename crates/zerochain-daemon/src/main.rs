@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use zerochain_daemon::state::{AppState, InitWorkflowParams};
+use zerochain_daemon::state::AppState;
 use std::path::PathBuf;
 use zerochain_fs::{acquire_lock, clean_output, mark_complete};
 use zerochain_core::stage::StageId;
@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
             template,
         } => {
             state
-                .init_workflow(InitWorkflowParams {
+                .init_workflow(zerochain_daemon::state::InitWorkflowParams {
                     name: &name,
                     path: path.as_deref(),
                     template: template.as_deref(),
