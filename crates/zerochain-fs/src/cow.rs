@@ -15,6 +15,24 @@ pub struct DirectoryCow;
 
 pub struct BtrfsCow;
 
+/// A no-op CoW backend that silently succeeds.
+pub struct NoopCow;
+
+#[async_trait::async_trait]
+impl CowPlatform for NoopCow {
+    async fn snapshot(&self, _source_dir: &Path, _target_dir: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn name(&self) -> &str {
+        "disabled"
+    }
+}
+
 pub fn detect_backend(workspace_path: &Path) -> Box<dyn CowPlatform> {
     let btrfs = BtrfsCow;
     if btrfs.is_available() && BtrfsCow::is_btrfs_filesystem(workspace_path) {

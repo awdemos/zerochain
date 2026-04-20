@@ -101,30 +101,13 @@ fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::CowPlatfo
         }
         "none" | "disabled" => {
             tracing::info!("CoW backend: disabled by ZEROCHAIN_COW_BACKEND");
-            Box::new(NoopCow)
+            Box::new(zerochain_fs::NoopCow)
         }
         _ => zerochain_fs::detect_backend(workspace_root),
     }
 }
 
 const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
-
-struct NoopCow;
-
-#[async_trait::async_trait]
-impl zerochain_fs::CowPlatform for NoopCow {
-    async fn snapshot(&self, _source_dir: &Path, _target_dir: &Path) -> zerochain_fs::Result<()> {
-        Ok(())
-    }
-
-    fn is_available(&self) -> bool {
-        false
-    }
-
-    fn name(&self) -> &str {
-        "disabled"
-    }
-}
 
 impl AppState {
     pub fn new(workspace_root: &Path) -> AppState {
