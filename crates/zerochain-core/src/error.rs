@@ -20,7 +20,7 @@ pub enum Error {
     YamlParse {
         path: PathBuf,
         #[source]
-        source: serde_yaml::Error,
+        source: serde_yml::Error,
     },
 
     #[error("missing CONTEXT.md in stage {stage}")]
