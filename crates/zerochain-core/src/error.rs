@@ -53,7 +53,6 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[allow(dead_code)]
 pub(crate) fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> Error {
     Error::Io {
         path: path.into(),
