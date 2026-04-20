@@ -9,8 +9,12 @@ pub enum DaemonError {
     #[error("stage not found: {0}")]
     StageNotFound(String),
 
-    #[error("invalid stage id: {0}")]
-    InvalidStageId(String),
+    #[error("invalid stage id: {stage_id}")]
+    InvalidStageId {
+        stage_id: String,
+        #[source]
+        source: zerochain_core::error::Error,
+    },
 
     #[error("I/O error at {path}: {source}")]
     Io {
@@ -23,13 +27,13 @@ pub enum DaemonError {
     Workflow(#[from] zerochain_core::error::Error),
 
     #[error("LLM error: {0}")]
-    Llm(String),
+    Llm(#[from] zerochain_llm::error::LLMError),
 
     #[error("Lua error: {0}")]
     Lua(String),
 
     #[error("profile validation failed: {0}")]
-    ProfileValidation(String),
+    ProfileValidation(zerochain_llm::error::LLMError),
 
     #[error("missing environment variable: {0}")]
     MissingEnv(String),
