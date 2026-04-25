@@ -1,11 +1,13 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use zerochain_broker::memory::MemoryBroker;
+use zerochain_broker::Broker;
 use zerochain_cas::CasStore;
 use zerochain_server::routes;
 use zerochain_server::state;
+use zerochain_server::subscriber;
 
 #[derive(Parser)]
 #[command(
@@ -28,6 +30,9 @@ struct Cli {
 
     #[arg(long, env = "ZEROCHAIN_BROKER_ENABLED")]
     broker_enabled: bool,
+
+    #[arg(long, env = "ZEROCHAIN_BROKER_BACKEND", default_value = "memory")]
+    broker_backend: String,
 
     #[arg(long, env = "ZEROCHAIN_API_KEY")]
     api_key: Option<String>,
@@ -53,6 +58,7 @@ async fn main() -> Result<()> {
         cas_dir = %cli.cas_dir.display(),
         cas_backend = %cli.cas_backend,
         broker_enabled = cli.broker_enabled,
+        broker_backend = %cli.broker_backend,
         auth_enabled = cli.api_key.is_some() && !cli.no_auth,
         "starting zerochaind"
     );
@@ -82,12 +88,32 @@ async fn main() -> Result<()> {
         tracing::info!("CAS backend: local ({})", store.location());
         store
     };
-    server_state = server_state.with_cas(cas);
+    server_state = server_state.with_cas(cas.clone());
 
     if cli.broker_enabled {
-        let broker = MemoryBroker::new();
-        server_state = server_state.with_broker(broker);
-        tracing::info!("broker enabled (memory backend)");
+        let broker: Arc<dyn Broker> = match cli.broker_backend.as_str() {
+            "nats" => {
+                #[cfg(feature = "nats")]
+                {
+                    let nats = zerochain_broker::nats::NatsBroker::from_env().await?;
+                    tracing::info!("broker backend: nats");
+                    Arc::new(nats)
+                }
+                #[cfg(not(feature = "nats"))]
+                {
+                    anyhow::bail!("NATS broker backend requested but zerochain-broker was compiled without the 'nats' feature");
+                }
+            }
+            _ => {
+                let memory = zerochain_broker::memory::MemoryBroker::new();
+                tracing::info!("broker backend: memory");
+                Arc::new(memory)
+            }
+        };
+        server_state = server_state.with_broker(broker.clone());
+
+        // Spawn background subscriber that bridges broker messages into stage input directories.
+        tokio::spawn(subscriber::spawn(cas, broker, cli.workspace.clone()));
     }
 
     server_state.refresh().await?;

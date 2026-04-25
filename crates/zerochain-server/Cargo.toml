@@ -19,6 +19,7 @@ path = "src/lib.rs"
 [features]
 default = []
 s3 = ["zerochain-cas/s3"]
+nats = ["zerochain-broker/nats"]
 
 [dependencies]
 zerochain-core = { path = "../zerochain-core" }

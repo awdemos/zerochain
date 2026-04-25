@@ -8,6 +8,7 @@ data:
   ZEROCHAIN_WORKSPACE: "/workspace"
   ZEROCHAIN_CAS_DIR: "/workspace/.zerochain/cas"
   ZEROCHAIN_BROKER_ENABLED: "true"
+  ZEROCHAIN_BROKER_BACKEND: "nats"
   ZEROCHAIN_BROKER_URL: "nats://nats.zerochain.svc.cluster.local:4222"
   ZEROCHAIN_CAS_BACKEND: "s3"
   ZEROCHAIN_CAS_S3_REGION: "us-east-1"

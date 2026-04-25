@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use zerochain_core::stage::StageId;
-use zerochain_broker::{Broker, BrokerMessage};
+use zerochain_broker::BrokerMessage;
 
 use crate::handlers::{PromptRequest, SimpleMessage};
 use crate::state::ServerState;
