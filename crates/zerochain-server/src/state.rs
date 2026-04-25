@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use zerochain_broker::memory::MemoryBroker;
+use zerochain_broker::Broker;
 use zerochain_cas::CasStore;
 use zerochain_engine::{AppState, DaemonError};
 
@@ -15,7 +15,7 @@ pub struct ServerState {
     pub inner: Arc<Mutex<AppState>>,
     pub workspace: PathBuf,
     pub cas: Option<CasStore>,
-    pub broker: Option<MemoryBroker>,
+    pub broker: Option<Arc<dyn Broker>>,
     pub api_key: Option<String>,
     pub auth_disabled: bool,
 }
@@ -38,7 +38,7 @@ impl ServerState {
         self
     }
 
-    #[must_use] pub fn with_broker(mut self, broker: MemoryBroker) -> Self {
+    #[must_use] pub fn with_broker(mut self, broker: Arc<dyn Broker>) -> Self {
         self.broker = Some(broker);
         self
     }
@@ -68,7 +68,7 @@ impl ServerState {
         self.cas.as_ref()
     }
 
-    #[must_use] pub fn broker(&self) -> Option<&MemoryBroker> {
+    #[must_use] pub fn broker(&self) -> Option<&Arc<dyn Broker>> {
         self.broker.as_ref()
     }
 }

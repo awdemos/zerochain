@@ -92,7 +92,7 @@ pub type Result<T> = std::result::Result<T, BrokerError>;
 
 /// Abstraction over message broker backends.
 #[async_trait::async_trait]
-pub trait Broker: Send + Sync + Clone {
+pub trait Broker: Send + Sync {
     /// Publish a message to the given subject.
     ///
     /// Subjects follow NATS conventions, e.g. `zerochain.{workflow_id}.{stage}`.
