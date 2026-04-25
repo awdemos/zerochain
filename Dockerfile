@@ -34,11 +34,11 @@ RUN mkdir -p crates/zerochain-cas/src crates/zerochain-fs/src crates/zerochain-l
     && touch crates/zerochain-llm/src/lib.rs crates/zerochain-core/src/lib.rs \
     && touch crates/zerochain-engine/src/lib.rs crates/zerochain-broker/src/lib.rs \
     && touch crates/zerochain-server/src/lib.rs \
-    && cargo build --release --bin zerochaind 2>/dev/null || true
+    && cargo build --release --bin zerochaind --features nats 2>/dev/null || true
 
 # Now build with real source (dependency layer is cached)
 COPY . .
-RUN touch crates/*/src/*.rs && cargo build --release --bin zerochaind
+RUN touch crates/*/src/*.rs && cargo build --release --bin zerochaind --features nats
 
 # -- Runtime stage ---------------------------------------------------------
 FROM cgr.dev/chainguard/wolfi-base:latest AS runtime

@@ -1,6 +1,19 @@
 version: "3.8"
 
 services:
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["--http_port", "8222"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
   zerochaind:
     build:
       context: .
@@ -12,6 +25,8 @@ services:
       ZEROCHAIN_LISTEN: 0.0.0.0:8080
       ZEROCHAIN_CAS_DIR: /workspace/.zerochain/cas
       ZEROCHAIN_BROKER_ENABLED: "true"
+      ZEROCHAIN_BROKER_BACKEND: "nats"
+      ZEROCHAIN_BROKER_URL: "nats://nats:4222"
       ZEROCHAIN_API_KEY: ${ZEROCHAIN_API_KEY:-}
       ZEROCHAIN_COW_BACKEND: ${ZEROCHAIN_COW_BACKEND:-auto}
       ZEROCHAIN_CAS_S3_BUCKET: ${ZEROCHAIN_CAS_S3_BUCKET:-zerochain}
@@ -24,6 +39,8 @@ services:
     volumes:
       - zerochain-workspace:/workspace
     depends_on:
+      nats:
+        condition: service_healthy
       minio:
         condition: service_healthy
 
