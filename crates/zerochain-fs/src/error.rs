@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use zerochain_error::ZerochainError;
 
 /// Errors produced by zerochain-fs operations.
 #[derive(Debug, thiserror::Error)]
@@ -40,5 +41,51 @@ pub(crate) fn io_err(path: impl Into<PathBuf>, source: std::io::Error) -> FsErro
     FsError::Io {
         path: path.into(),
         source,
+    }
+}
+
+impl From<FsError> for ZerochainError {
+    fn from(err: FsError) -> Self {
+        match err {
+            FsError::Io { path, source } => ZerochainError::Io { path, source },
+            FsError::SnapshotFailed {
+                src_path,
+                target,
+                reason,
+            } => ZerochainError::Fs {
+                message: format!("snapshot failed: {src_path:?} -> {target:?}: {reason}"),
+            },
+            FsError::AtomicWriteFailed { path, reason } => ZerochainError::Fs {
+                message: format!("atomic write failed for {path:?}: {reason}"),
+            },
+            FsError::MarkerFailed { dir, reason } => ZerochainError::Fs {
+                message: format!("marker failed in {dir:?}: {reason}"),
+            },
+            FsError::LockHeld { path, pid } => ZerochainError::Fs {
+                message: format!("lock held at {path:?} by process {pid}"),
+            },
+            FsError::BtrfsCommandFailed { command, reason } => ZerochainError::Fs {
+                message: format!("btrfs command '{command}' failed: {reason}"),
+            },
+            FsError::SubvolumeError { path, reason } => ZerochainError::Fs {
+                message: format!("subvolume error at {path:?}: {reason}"),
+            },
+        }
+    }
+}
+
+impl From<ZerochainError> for FsError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::Io { path, source } => FsError::Io { path, source },
+            ZerochainError::Fs { message } => FsError::SubvolumeError {
+                path: PathBuf::new(),
+                reason: message,
+            },
+            other => FsError::SubvolumeError {
+                path: PathBuf::new(),
+                reason: other.to_string(),
+            },
+        }
     }
 }

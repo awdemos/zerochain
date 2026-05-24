@@ -12,19 +12,32 @@ pub async fn run_next(
     State(state): State<ServerState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let wf = {
-        let inner = state.inner.lock().await;
-        match inner.get_workflow(&id) {
-            Some(wf) => wf.clone(),
-            None => {
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(&id).await {
+            Ok(h) => h,
+            Err(e) => {
                 return (
-                    StatusCode::NOT_FOUND,
+                    StatusCode::INTERNAL_SERVER_ERROR,
                     Json(SimpleMessage {
-                        message: format!("workflow not found: {id}"),
+                        message: e.to_string(),
                     }),
                 )
-                    .into_response()
+                    .into_response();
             }
+        }
+    };
+
+    let wf = match handle.get_workflow(id.clone()).await {
+        Some(wf) => wf,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(SimpleMessage {
+                    message: format!("workflow not found: {id}"),
+                }),
+            )
+                .into_response()
         }
     };
 
@@ -68,8 +81,36 @@ async fn run_stage_by_id(
         }
     };
 
-    let mut inner = state.inner.lock().await;
-    let stage = match inner.get_workflow(id).and_then(|wf| wf.stage_by_id(&sid)) {
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(id).await {
+            Ok(h) => h,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SimpleMessage {
+                        message: e.to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    let wf = match handle.get_workflow(id.to_string()).await {
+        Some(wf) => wf,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(SimpleMessage {
+                    message: format!("workflow not found: {id}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let stage = match wf.stage_by_id(&sid) {
         Some(s) => s.clone(),
         None => {
             return (
@@ -83,8 +124,7 @@ async fn run_stage_by_id(
     };
 
     let stage_raw = stage.id.raw.clone();
-    let result = inner.run_stage(id, &stage_raw).await;
-    drop(inner);
+    let result = handle.run_stage(id.to_string(), stage_raw.clone()).await;
 
     match result {
         Ok(()) => {
@@ -121,13 +161,28 @@ pub async fn approve(
         )
             .into_response();
     }
-    let mut inner = state.inner.lock().await;
-    match inner.mark_stage_complete(&id, &stage_raw).await {
+
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(&id).await {
+            Ok(h) => h,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SimpleMessage {
+                        message: e.to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    match handle.mark_stage_complete(id.clone(), stage_raw.clone()).await {
         Ok(()) => {
-            if let Err(e) = inner.reload_workflow(&id).await {
+            if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after approve");
             }
-            drop(inner);
             jj::commit_stage_complete(&state.workspace, &id, &stage_raw);
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} approved"),
@@ -159,16 +214,31 @@ pub async fn reject(
         )
             .into_response();
     }
-    let mut inner = state.inner.lock().await;
-    match inner
-        .mark_stage_error(&id, &stage_raw, body.feedback.as_deref())
+
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(&id).await {
+            Ok(h) => h,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SimpleMessage {
+                        message: e.to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    match handle
+        .mark_stage_error(id.clone(), stage_raw.clone(), body.feedback)
         .await
     {
         Ok(()) => {
-            if let Err(e) = inner.reload_workflow(&id).await {
+            if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after reject");
             }
-            drop(inner);
             jj::commit_stage_error(&state.workspace, &id, &stage_raw);
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} rejected"),
@@ -192,7 +262,22 @@ async fn read_stage_file(
     filename: &str,
     not_found_msg: String,
 ) -> axum::response::Response {
-    let inner = state.inner.lock().await;
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(id).await {
+            Ok(h) => h,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SimpleMessage {
+                        message: e.to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
     let sid = match StageId::parse(stage_raw) {
         Ok(s) => s,
         Err(e) => {
@@ -206,13 +291,22 @@ async fn read_stage_file(
         }
     };
 
-    match inner
-        .get_workflow(id)
-        .and_then(|wf| wf.stage_by_id(&sid))
-    {
+    let wf = match handle.get_workflow(id.to_string()).await {
+        Some(wf) => wf,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(SimpleMessage {
+                    message: format!("workflow not found: {id}"),
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    match wf.stage_by_id(&sid) {
         Some(stage) => {
             let path = stage.output_path.join(filename);
-            drop(inner);
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => content.into_response(),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => (

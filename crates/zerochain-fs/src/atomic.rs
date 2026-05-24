@@ -154,7 +154,7 @@ fn epoch_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn is_pid_alive(pid: u32) -> bool {
+async fn is_pid_alive(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
         PathBuf::from("/proc")
@@ -163,10 +163,11 @@ fn is_pid_alive(pid: u32) -> bool {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        std::process::Command::new("kill")
+        tokio::process::Command::new("kill")
             .arg("-0")
             .arg(pid.to_string())
             .output()
+            .await
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
@@ -189,10 +190,22 @@ fn parse_lock_content(content: &str) -> Option<(u32, u64)> {
 
 pub struct LockGuard {
     lock_path: PathBuf,
+    released: bool,
+}
+
+impl LockGuard {
+    pub async fn release(mut self) {
+        self.released = true;
+        tokio::fs::remove_file(&self.lock_path).await.ok();
+        std::mem::forget(self);
+    }
 }
 
 impl Drop for LockGuard {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         let path = self.lock_path.clone();
         std::fs::remove_file(&path).ok();
     }
@@ -210,7 +223,7 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
             .map_err(|e| io_err(&lock_path, e))?;
 
         if let Some((pid, _ts)) = parse_lock_content(&content) {
-            if pid != std::process::id() && is_pid_alive(pid) {
+            if pid != std::process::id() && is_pid_alive(pid).await {
                 return Err(FsError::LockHeld {
                     path: lock_path,
                     pid,
@@ -224,7 +237,10 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
         .await
         .map_err(|e| io_err(&lock_path, e))?;
 
-    Ok(LockGuard { lock_path })
+    Ok(LockGuard {
+        lock_path,
+        released: false,
+    })
 }
 
 pub async fn is_locked(dir: &Path) -> bool {
@@ -243,7 +259,7 @@ pub async fn is_locked(dir: &Path) -> bool {
         return false;
     };
 
-    pid != std::process::id() && is_pid_alive(pid)
+    pid != std::process::id() && is_pid_alive(pid).await
 }
 
 #[cfg(test)]
@@ -445,6 +461,12 @@ mod tests {
             .unwrap());
 
         drop(guard);
+
+        let mut attempts = 0;
+        while tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap() && attempts < 50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            attempts += 1;
+        }
         assert!(!tokio::fs::try_exists(tmp.path().join(".lock"))
             .await
             .unwrap());
@@ -505,6 +527,42 @@ mod tests {
         // This line verifies LockGuard is NOT Clone at compile time
         let _ = &guard;
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn lock_guard_drop_does_not_block_runtime() {
+        let tmp = TempDir::new().unwrap();
+        let guard = acquire_lock(tmp.path()).await.unwrap();
+
+        let handle = tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        });
+
+        drop(guard);
+
+        tokio::time::timeout(tokio::time::Duration::from_millis(100), handle)
+            .await
+            .expect("drop blocked the runtime")
+            .expect("spawned task panicked");
+
+        let mut attempts = 0;
+        while tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap() && attempts < 50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            attempts += 1;
+        }
+        assert!(!tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn lock_guard_explicit_release_works() {
+        let tmp = TempDir::new().unwrap();
+        let guard = acquire_lock(tmp.path()).await.unwrap();
+
+        assert!(tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
+
+        guard.release().await;
+
+        assert!(!tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
     }
 
     #[tokio::test]

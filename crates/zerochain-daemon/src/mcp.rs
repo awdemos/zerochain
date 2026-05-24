@@ -7,16 +7,16 @@ use rmcp::model::Content;
 use rmcp::{tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 use zerochain_core::workflow::is_valid_workflow_name;
 
-use zerochain_engine::{AppState, DaemonError};
+use zerochain_engine::{DaemonError, WorkflowRegistry};
 
 pub struct ZerochainMcpServer {
     #[allow(dead_code)] // read by #[tool_router] macro-generated code
     tool_router: ToolRouter<Self>,
-    state: Arc<Mutex<AppState>>,
+    state: Arc<RwLock<WorkflowRegistry>>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -51,18 +51,17 @@ pub struct RejectParams {
 }
 
 impl ZerochainMcpServer {
-    #[must_use] pub fn new(workspace: impl AsRef<std::path::Path>) -> Self {
-        let state = AppState::new(workspace.as_ref());
+    pub async fn new(workspace: impl AsRef<std::path::Path>) -> Self {
+        let registry = WorkflowRegistry::new(workspace.as_ref().to_path_buf());
         Self {
             tool_router: Self::tool_router(),
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(RwLock::new(registry)),
         }
     }
 
     pub async fn load(&self) -> Result<(), DaemonError> {
-        let mut state = self.state.lock().await;
-        state.load_workflows().await?;
-        Ok(())
+        let mut registry = self.state.write().await;
+        registry.load_all().await
     }
 }
 
@@ -87,13 +86,10 @@ impl ZerochainMcpServer {
         if !is_valid_workflow_name(&name) {
             return tool_error("invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into());
         }
-        let mut state = self.state.lock().await;
-        match state.init_workflow(zerochain_engine::InitWorkflowParams {
-            name: &name,
-            path: None,
-            template: template.as_deref(),
-        }).await {
-            Ok(_) => tool_success(format!("initialized workflow: {name}")),
+        let name_for_msg = name.clone();
+        let mut registry = self.state.write().await;
+        match registry.init_workflow(name, template).await {
+            Ok(_) => tool_success(format!("initialized workflow: {name_for_msg}")),
             Err(e) => tool_error(format!("init failed: {e}")),
         }
     }
@@ -108,9 +104,12 @@ impl ZerochainMcpServer {
     ) -> rmcp::model::CallToolResult {
         use zerochain_core::stage::StageId;
 
-
-        let mut state = self.state.lock().await;
-        let Some(workflow) = state.get_workflow(&workflow_id).cloned() else {
+        let mut registry = self.state.write().await;
+        let handle = match registry.get_or_create(&workflow_id).await {
+            Ok(h) => h,
+            Err(e) => return tool_error(format!("failed to get handle: {e}")),
+        };
+        let Some(workflow) = handle.get_workflow(workflow_id.clone()).await else {
             return tool_error(format!("workflow not found: {workflow_id}"));
         };
 
@@ -134,8 +133,9 @@ impl ZerochainMcpServer {
             return tool_error(format!("stage not found: {}", stage_id.raw));
         };
 
-        match state.run_stage(&workflow_id, &stage_id.raw).await {
-            Ok(()) => tool_success(format!("stage {} complete in {}", stage_id.raw, workflow_id)),
+        let success_msg = format!("stage {} complete in {}", stage_id.raw, workflow_id);
+        match handle.run_stage(workflow_id, stage_id.raw).await {
+            Ok(()) => tool_success(success_msg),
             Err(e) => tool_error(format!("stage execution failed: {e}")),
         }
     }
@@ -148,10 +148,13 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(StatusParams { workflow_id }): rmcp::handler::server::wrapper::Parameters<StatusParams>,
     ) -> rmcp::model::CallToolResult {
-        let state = self.state.lock().await;
-
         if let Some(wid) = workflow_id {
-            let Some(workflow) = state.get_workflow(&wid) else {
+            let mut registry = self.state.write().await;
+            let handle = match registry.get_or_create(&wid).await {
+                Ok(h) => h,
+                Err(e) => return tool_error(format!("failed to get handle: {e}")),
+            };
+            let Some(workflow) = handle.get_workflow(wid.clone()).await else {
                 return tool_error(format!("workflow not found: {wid}"));
             };
             let plan = workflow.execution_plan();
@@ -180,7 +183,8 @@ impl ZerochainMcpServer {
             }
             tool_success(lines.join("\n"))
         } else {
-            let workflows = state.list_workflows();
+            let registry = self.state.read().await;
+            let workflows = registry.list_workflows().await;
             if workflows.is_empty() {
                 return tool_success("no workflows".into());
             }
@@ -197,8 +201,8 @@ impl ZerochainMcpServer {
         description = "List all workflows and their status."
     )]
     async fn list_workflows(&self) -> rmcp::model::CallToolResult {
-        let state = self.state.lock().await;
-        let workflows = state.list_workflows();
+        let registry = self.state.read().await;
+        let workflows = registry.list_workflows().await;
         if workflows.is_empty() {
             return tool_success("no workflows".into());
         }
@@ -217,10 +221,14 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
-        let mut state = self.state.lock().await;
-        match state.mark_stage_complete(&workflow_id, &stage_id).await {
+        let mut registry = self.state.write().await;
+        let handle = match registry.get_or_create(&workflow_id).await {
+            Ok(h) => h,
+            Err(e) => return tool_error(format!("failed to get handle: {e}")),
+        };
+        match handle.mark_stage_complete(workflow_id.clone(), stage_id.clone()).await {
             Ok(()) => {
-                if let Err(e) = state.reload_workflow(&workflow_id).await {
+                if let Err(e) = handle.reload_workflow(workflow_id.clone()).await {
                     tracing::warn!(error = %e, "failed to reload workflow after approve");
                 }
                 tool_success(format!("approved: {workflow_id} / {stage_id}"))
@@ -237,10 +245,14 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(RejectParams { workflow_id, stage_id, feedback }): rmcp::handler::server::wrapper::Parameters<RejectParams>,
     ) -> rmcp::model::CallToolResult {
-        let mut state = self.state.lock().await;
-        match state.mark_stage_error(&workflow_id, &stage_id, feedback.as_deref()).await {
+        let mut registry = self.state.write().await;
+        let handle = match registry.get_or_create(&workflow_id).await {
+            Ok(h) => h,
+            Err(e) => return tool_error(format!("failed to get handle: {e}")),
+        };
+        match handle.mark_stage_error(workflow_id.clone(), stage_id.clone(), feedback).await {
             Ok(()) => {
-                if let Err(e) = state.reload_workflow(&workflow_id).await {
+                if let Err(e) = handle.reload_workflow(workflow_id.clone()).await {
                     tracing::warn!(error = %e, "failed to reload workflow after reject");
                 }
                 tool_success(format!("rejected: {workflow_id} / {stage_id}"))
@@ -257,8 +269,12 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
-        let state = self.state.lock().await;
-        match state.snapshot_stage(&workflow_id, &stage_id).await {
+        let mut registry = self.state.write().await;
+        let handle = match registry.get_or_create(&workflow_id).await {
+            Ok(h) => h,
+            Err(e) => return tool_error(format!("failed to get handle: {e}")),
+        };
+        match handle.snapshot_stage(workflow_id, stage_id).await {
             Ok(path) => tool_success(format!("snapshot created: {}", path.display())),
             Err(e) => tool_error(format!("snapshot failed: {e}")),
         }
@@ -272,9 +288,14 @@ impl ZerochainMcpServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
-        let state = self.state.lock().await;
-        match state.restore_stage(&workflow_id, &stage_id).await {
-            Ok(()) => tool_success(format!("restored: {workflow_id} / {stage_id}")),
+        let mut registry = self.state.write().await;
+        let handle = match registry.get_or_create(&workflow_id).await {
+            Ok(h) => h,
+            Err(e) => return tool_error(format!("failed to get handle: {e}")),
+        };
+        let msg = format!("restored: {workflow_id} / {stage_id}");
+        match handle.restore_stage(workflow_id, stage_id).await {
+            Ok(()) => tool_success(msg),
             Err(e) => tool_error(format!("restore failed: {e}")),
         }
     }
@@ -289,7 +310,7 @@ impl ServerHandler for ZerochainMcpServer {
 pub async fn run_stdio_server(workspace: PathBuf) -> Result<(), zerochain_engine::DaemonError> {
     use rmcp::ServiceExt;
 
-    let server = ZerochainMcpServer::new(workspace);
+    let server = ZerochainMcpServer::new(workspace).await;
     server.load().await?;
 
     let transport = (tokio::io::stdin(), tokio::io::stdout());

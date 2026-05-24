@@ -2,12 +2,10 @@ pub mod api;
 pub mod config;
 pub mod vm;
 
-use std::path::Path;
-
 use crate::frontmatter::ContextFrontmatter;
 use crate::error::Result;
 
-pub use api::{load_shared_store, run_hook, save_shared_store, HookResults, LuaContext};
+pub use api::{load_shared_store, run_hook, save_shared_store, LuaContext};
 pub use config::eval_config_script;
 pub use vm::create_sandboxed_vm;
 
@@ -16,9 +14,6 @@ pub fn eval_context_lua(script: &str) -> Result<ContextFrontmatter> {
     eval_config_script(&lua, script)
 }
 
-pub fn eval_context_lua_file(path: &Path) -> Result<ContextFrontmatter> {
-    let script = std::fs::read_to_string(path).map_err(|e| crate::error::io_err(path.to_path_buf(), e))?;
-    eval_context_lua(&script)
-}
+
 
 

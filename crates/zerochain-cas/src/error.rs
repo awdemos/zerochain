@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use thiserror::Error;
+use zerochain_error::ZerochainError;
 
 /// Errors that can occur when interacting with the content-addressed store.
 #[derive(Error, Debug)]
@@ -54,3 +55,37 @@ impl CasError {
 }
 
 pub type Result<T> = std::result::Result<T, CasError>;
+
+impl From<CasError> for ZerochainError {
+    fn from(err: CasError) -> Self {
+        match err {
+            CasError::NotFound(msg) => ZerochainError::NotFound { message: msg },
+            CasError::Io { path, source } => ZerochainError::Io { path, source },
+            CasError::InvalidCid(msg) => ZerochainError::InvalidInput { message: msg },
+            CasError::S3(msg) => ZerochainError::Cas { message: msg },
+            CasError::Configuration(msg) => ZerochainError::Configuration { message: msg },
+            CasError::Serialization(e) => {
+                ZerochainError::Serialization { message: e.to_string() }
+            }
+            CasError::StoreDirectory { path, source } => ZerochainError::Io { path, source },
+            CasError::Unsupported(msg) => ZerochainError::Unsupported { message: msg },
+        }
+    }
+}
+
+impl From<ZerochainError> for CasError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::Io { path, source } => CasError::Io { path, source },
+            ZerochainError::NotFound { message } => CasError::NotFound(message),
+            ZerochainError::InvalidInput { message } => CasError::InvalidCid(message),
+            ZerochainError::Configuration { message } => CasError::Configuration(message),
+            ZerochainError::Unsupported { message } => CasError::Unsupported(message),
+            ZerochainError::Serialization { message } => {
+                CasError::Configuration(format!("serialization: {message}"))
+            }
+            ZerochainError::Cas { message } => CasError::S3(message),
+            other => CasError::Configuration(other.to_string()),
+        }
+    }
+}

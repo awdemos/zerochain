@@ -4,6 +4,7 @@ members = [
     "crates/zerochain-broker",
     "crates/zerochain-cas",
     "crates/zerochain-core",
+    "crates/zerochain-error",
     "crates/zerochain-fs",
     "crates/zerochain-llm",
     "crates/zerochain-engine",

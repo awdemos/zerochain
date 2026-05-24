@@ -1,5 +1,6 @@
 //! MCP server daemon for zerochain workflow execution.
 
+pub mod cli;
 pub mod mcp;
 
 // Re-export primary public API types from the engine crate so existing

@@ -10,6 +10,7 @@ repository.workspace = true
 description = "Content-addressed storage using Blake3 hashing"
 
 [dependencies]
+zerochain-error = { path = "../zerochain-error" }
 blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true

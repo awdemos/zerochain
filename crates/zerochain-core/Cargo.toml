@@ -10,14 +10,19 @@ repository.workspace = true
 description = "Core workflow model: stages, CONTEXT.md parsing, execution DAG"
 
 [dependencies]
+zerochain-error = { path = "../zerochain-error" }
 serde.workspace = true
 serde_json.workspace = true
 serde_yml.workspace = true
 tokio.workspace = true
+async-trait.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 toml = "0.8"
 mlua = { version = "0.11", features = ["lua54", "vendored", "send", "serde"] }
+
+[target.'cfg(windows)'.dependencies]
+junction = "1.2"
 
 [dev-dependencies]
 tempfile = "3.0"

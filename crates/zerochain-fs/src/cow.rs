@@ -6,7 +6,7 @@ use crate::error::{io_err, FsError, Result};
 pub trait CowPlatform: Send + Sync {
     async fn snapshot(&self, source_dir: &Path, target_dir: &Path) -> Result<()>;
 
-    fn is_available(&self) -> bool;
+    async fn is_available(&self) -> bool;
 
     fn name(&self) -> &str;
 }
@@ -24,7 +24,7 @@ impl CowPlatform for NoopCow {
         Ok(())
     }
 
-    fn is_available(&self) -> bool {
+    async fn is_available(&self) -> bool {
         false
     }
 
@@ -33,9 +33,9 @@ impl CowPlatform for NoopCow {
     }
 }
 
-pub fn detect_backend(workspace_path: &Path) -> Box<dyn CowPlatform> {
+pub async fn detect_backend(workspace_path: &Path) -> Box<dyn CowPlatform> {
     let btrfs = BtrfsCow;
-    if btrfs.is_available() && BtrfsCow::is_btrfs_filesystem(workspace_path) {
+    if btrfs.is_available().await && BtrfsCow::is_btrfs_filesystem(workspace_path).await {
         tracing::info!("CoW backend: btrfs (zero-copy snapshots)");
         Box::new(btrfs)
     } else {
@@ -167,12 +167,13 @@ impl BtrfsCow {
         Ok(())
     }
 
-    #[must_use] pub fn is_btrfs_filesystem(path: &Path) -> bool {
+    pub async fn is_btrfs_filesystem(path: &Path) -> bool {
         #[cfg(target_os = "linux")]
         {
-            std::process::Command::new("stat")
+            tokio::process::Command::new("stat")
                 .args(["-f", "--format", "%T", &path.to_string_lossy()])
                 .output()
+                .await
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "btrfs")
                 .unwrap_or(false)
         }
@@ -224,10 +225,20 @@ impl CowPlatform for BtrfsCow {
             })?;
 
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let lower = stderr.to_lowercase();
+            if lower.contains("not a subvolume") || lower.contains("not a btrfs") {
+                tracing::warn!(
+                    source = %source_dir.display(),
+                    target = %target_dir.display(),
+                    "btrfs snapshot failed: source is not a subvolume, falling back to directory copy"
+                );
+                return DirectoryCow.snapshot(source_dir, target_dir).await;
+            }
             return Err(FsError::SnapshotFailed {
                 src_path: source_dir.to_path_buf(),
                 target: target_dir.to_path_buf(),
-                reason: String::from_utf8_lossy(&output.stderr).to_string(),
+                reason: stderr.to_string(),
             });
         }
 
@@ -240,10 +251,11 @@ impl CowPlatform for BtrfsCow {
         Ok(())
     }
 
-    fn is_available(&self) -> bool {
-        std::process::Command::new("btrfs")
+    async fn is_available(&self) -> bool {
+        tokio::process::Command::new("btrfs")
             .arg("--version")
             .output()
+            .await
             .is_ok()
     }
 
@@ -288,7 +300,7 @@ impl CowPlatform for DirectoryCow {
         Ok(())
     }
 
-    fn is_available(&self) -> bool {
+    async fn is_available(&self) -> bool {
         true
     }
 
@@ -358,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn directory_cow_is_available() {
         let cow = DirectoryCow;
-        assert!(cow.is_available());
+        assert!(cow.is_available().await);
     }
 
     #[tokio::test]
@@ -458,23 +470,44 @@ mod tests {
         assert_eq!(cow.name(), "btrfs");
     }
 
-    #[test]
-    fn btrfs_is_not_available_on_non_linux() {
-        let cow = BtrfsCow;
+    #[tokio::test]
+    async fn btrfs_is_not_available_on_non_linux() {
+        let _cow = BtrfsCow;
         #[cfg(not(target_os = "linux"))]
-        assert!(!cow.is_available());
+        assert!(!_cow.is_available().await);
     }
 
-    #[test]
-    fn is_btrfs_filesystem_returns_false_on_tempdir() {
+    #[tokio::test]
+    async fn is_btrfs_filesystem_returns_false_on_tempdir() {
         let tmp = TempDir::new().unwrap();
-        assert!(!BtrfsCow::is_btrfs_filesystem(tmp.path()));
+        assert!(!BtrfsCow::is_btrfs_filesystem(tmp.path()).await);
     }
 
-    #[test]
-    fn detect_backend_returns_directory_on_non_btrfs() {
+    #[tokio::test]
+    async fn detect_backend_returns_directory_on_non_btrfs() {
         let tmp = TempDir::new().unwrap();
-        let backend = detect_backend(tmp.path());
+        let backend = detect_backend(tmp.path()).await;
         assert_eq!(backend.name(), "directory");
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn btrfs_snapshot_fallback_on_non_subvolume() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("source");
+        let target = tmp.path().join("target");
+
+        tokio::fs::create_dir_all(&source).await.unwrap();
+        tokio::fs::write(source.join("hello.txt"), b"world")
+            .await
+            .unwrap();
+
+        let cow = BtrfsCow;
+        cow.snapshot(&source, &target).await.unwrap();
+
+        let content = tokio::fs::read_to_string(target.join("hello.txt"))
+            .await
+            .unwrap();
+        assert_eq!(content, "world");
     }
 }
