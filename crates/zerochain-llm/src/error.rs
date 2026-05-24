@@ -1,4 +1,5 @@
 use thiserror::Error;
+use zerochain_error::ZerochainError;
 
 #[derive(Error, Debug)]
 pub enum LLMError {
@@ -51,5 +52,52 @@ impl LLMError {
 
     pub fn parse(msg: impl Into<String>) -> Self {
         Self::Parse(msg.into())
+    }
+}
+
+impl From<LLMError> for ZerochainError {
+    fn from(err: LLMError) -> Self {
+        match err {
+            LLMError::Http(e) => ZerochainError::Llm {
+                message: format!("HTTP request failed: {e}"),
+            },
+            LLMError::Api { status, message } => ZerochainError::Llm {
+                message: format!("API error {status}: {message}"),
+            },
+            LLMError::RateLimited { retry_after_ms } => {
+                ZerochainError::RateLimited { retry_after_ms }
+            }
+            LLMError::Auth(msg) => ZerochainError::Auth { message: msg },
+            LLMError::Config(msg) => ZerochainError::Configuration { message: msg },
+            LLMError::UnsupportedProvider(msg) => {
+                ZerochainError::Unsupported { message: msg }
+            }
+            LLMError::ContextExceeded { needed, available } => ZerochainError::Llm {
+                message: format!("context window exceeded: need {needed}, have {available}"),
+            },
+            LLMError::ToolCall(msg) => ZerochainError::Llm {
+                message: format!("tool call error: {msg}"),
+            },
+            LLMError::Parse(msg) => ZerochainError::InvalidInput { message: msg },
+            LLMError::Other(msg) => ZerochainError::Other { message: msg },
+        }
+    }
+}
+
+impl From<ZerochainError> for LLMError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::RateLimited { retry_after_ms } => {
+                LLMError::RateLimited { retry_after_ms }
+            }
+            ZerochainError::Auth { message } => LLMError::Auth(message),
+            ZerochainError::Configuration { message } => LLMError::Config(message),
+            ZerochainError::Unsupported { message } => {
+                LLMError::UnsupportedProvider(message)
+            }
+            ZerochainError::InvalidInput { message } => LLMError::Parse(message),
+            ZerochainError::Llm { message } => LLMError::Other(message),
+            other => LLMError::Other(other.to_string()),
+        }
     }
 }

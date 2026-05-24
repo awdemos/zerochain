@@ -17,6 +17,7 @@ zerochain-cas = { path = "../zerochain-cas" }
 zerochain-core = { path = "../zerochain-core" }
 zerochain-fs = { path = "../zerochain-fs" }
 zerochain-llm = { path = "../zerochain-llm" }
+zerochain-error = { path = "../zerochain-error" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

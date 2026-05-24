@@ -4,14 +4,14 @@ use axum::response::IntoResponse;
 use axum::Json;
 use zerochain_core::jj;
 use zerochain_core::workflow::is_valid_workflow_name;
-use zerochain_engine::{InitWorkflowParams, InitWorkflowRequest};
+use zerochain_engine::InitWorkflowRequest;
 
 use crate::handlers::{SimpleMessage, StageStatus, WorkflowStatus};
 use crate::state::ServerState;
 
 pub async fn list(State(state): State<ServerState>) -> impl IntoResponse {
-    let inner = state.inner.lock().await;
-    let list = inner.list_workflows();
+    let registry = state.registry.read().await;
+    let list = registry.list_workflows().await;
     Json(list
         .into_iter()
         .map(|(id, status)| SimpleMessage {
@@ -35,14 +35,8 @@ pub async fn init(
         )
             .into_response();
     }
-    let mut inner = state.inner.lock().await;
-    match inner
-        .init_workflow(InitWorkflowParams {
-            name: &body.name,
-            path: None,
-            template: body.template.as_deref(),
-        })
-        .await
+    let mut registry = state.registry.write().await;
+    match registry.init_workflow(body.name, body.template).await
     {
         Ok(wf) => {
             jj::init_repo(&state.workspace);
@@ -64,8 +58,23 @@ pub async fn get(
     State(state): State<ServerState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let inner = state.inner.lock().await;
-    match inner.get_workflow(&id) {
+    let handle = {
+        let mut registry = state.registry.write().await;
+        match registry.get_or_create(&id).await {
+            Ok(h) => h,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(SimpleMessage {
+                        message: e.to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    match handle.get_workflow(id.clone()).await {
         Some(wf) => {
             let plan = wf.execution_plan();
             let status = if plan.is_complete() {

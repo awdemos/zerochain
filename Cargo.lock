@@ -1280,6 +1280,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3425,6 +3435,7 @@ dependencies = [
  "tokio",
  "tracing",
  "zerochain-cas",
+ "zerochain-error",
 ]
 
 [[package]]
@@ -3440,12 +3451,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "zerochain-error",
 ]
 
 [[package]]
 name = "zerochain-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
+ "junction",
  "mlua",
  "serde",
  "serde_json",
@@ -3455,6 +3469,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "zerochain-error",
 ]
 
 [[package]]
@@ -3495,8 +3510,17 @@ dependencies = [
  "tracing",
  "zerochain-cas",
  "zerochain-core",
+ "zerochain-error",
  "zerochain-fs",
  "zerochain-llm",
+]
+
+[[package]]
+name = "zerochain-error"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -3509,6 +3533,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "zerochain-error",
 ]
 
 [[package]]
@@ -3524,6 +3549,7 @@ dependencies = [
  "tokio",
  "tracing",
  "zerochain-core",
+ "zerochain-error",
 ]
 
 [[package]]

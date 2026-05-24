@@ -119,18 +119,7 @@ impl Workflow {
 
             let input_dir = stage_dir.join("input");
             if let Some(ref prev) = prev_output {
-                #[cfg(unix)]
-                {
-                    tokio::fs::symlink(prev, &input_dir)
-                        .await
-                        .map_err(|e| io_err(input_dir.clone(), e))?;
-                }
-                #[cfg(not(unix))]
-                {
-                    tokio::fs::create_dir_all(&input_dir)
-                        .await
-                        .map_err(|e| io_err(input_dir.clone(), e))?;
-                }
+                create_stage_input_link(prev, &input_dir).await?;
             } else {
                 tokio::fs::create_dir_all(&input_dir)
                     .await
@@ -253,6 +242,114 @@ impl Workflow {
     }
 }
 
+/// Creates a link from `input_dir` to `prev_output` so that a stage's input
+/// directory inherits the previous stage's output.
+///
+/// - On Unix: uses a symbolic link.
+/// - On Windows: tries a junction point first (no admin rights needed),
+///   falling back to a recursive directory copy if junction creation fails.
+async fn create_stage_input_link(prev_output: &Path, input_dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        tokio::fs::symlink(prev_output, input_dir)
+            .await
+            .map_err(|e| io_err(input_dir.to_path_buf(), e))?;
+        tracing::debug!(
+            source = %prev_output.display(),
+            target = %input_dir.display(),
+            method = "symlink",
+            "created stage input link"
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        let src = prev_output.to_path_buf();
+        let dst = input_dir.to_path_buf();
+        let src_display = src.display().to_string();
+        let dst_display = dst.display().to_string();
+
+        let junction_result = tokio::task::spawn_blocking(move || {
+            junction::create(&src, &dst)
+        }).await;
+
+        match junction_result {
+            Ok(Ok(())) => {
+                tracing::debug!(
+                    source = %src_display,
+                    target = %dst_display,
+                    method = "junction",
+                    "created stage input link"
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    error = %e,
+                    "junction creation failed, falling back to recursive copy"
+                );
+                copy_dir_recursive(prev_output, input_dir).await?;
+                tracing::debug!(
+                    source = %src_display,
+                    target = %dst_display,
+                    method = "copy",
+                    "created stage input link"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "junction task panicked, falling back to recursive copy"
+                );
+                copy_dir_recursive(prev_output, input_dir).await?;
+                tracing::debug!(
+                    source = %src_display,
+                    target = %dst_display,
+                    method = "copy",
+                    "created stage input link"
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(target)
+        .await
+        .map_err(|e| io_err(target.to_path_buf(), e))?;
+
+    let mut entries = tokio::fs::read_dir(source)
+        .await
+        .map_err(|e| io_err(source.to_path_buf(), e))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| io_err(source.to_path_buf(), e))?
+    {
+        let src_path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = target.join(&file_name);
+
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|e| io_err(&src_path, e))?;
+
+        if file_type.is_dir() {
+            Box::pin(copy_dir_recursive(&src_path, &dst_path)).await?;
+        } else if file_type.is_file() {
+            tokio::fs::copy(&src_path, &dst_path)
+                .await
+                .map_err(|e| io_err(&src_path, e))?;
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +452,52 @@ mod tests {
         let stage = wf.stage_by_name("analyze").unwrap();
         assert_eq!(stage.id.raw, "01_analyze");
         assert!(wf.stage_by_name("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn init_links_stage_input_to_previous_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = Task {
+            id: "TASK-200".to_string(),
+            title: "Link test".to_string(),
+            status: "todo".to_string(),
+            priority: None,
+            execution: Some(crate::task::TaskExecution {
+                stages: vec![
+                    "00_first".to_string(),
+                    "01_second".to_string(),
+                ],
+                strategy: None,
+            }),
+            acceptance_criteria: vec![],
+            description: "Link test".to_string(),
+            source_path: None,
+        };
+
+        let wf = Workflow::init(&task, tmp.path()).await.unwrap();
+        assert_eq!(wf.stages.len(), 2);
+
+        let first_input = wf.stages[0].path.join("input");
+        assert!(tokio::fs::try_exists(&first_input).await.unwrap());
+
+        let first_output = wf.stages[0].path.join("output");
+        let second_input = wf.stages[1].path.join("input");
+
+        #[cfg(unix)]
+        {
+            let link_target = tokio::fs::read_link(&second_input).await.unwrap();
+            assert_eq!(link_target, first_output);
+        }
+
+        #[cfg(windows)]
+        {
+            tokio::fs::write(first_output.join("test.txt"), "hello")
+                .await
+                .unwrap();
+            let content = tokio::fs::read_to_string(second_input.join("test.txt"))
+                .await
+                .unwrap();
+            assert_eq!(content, "hello");
+        }
     }
 }

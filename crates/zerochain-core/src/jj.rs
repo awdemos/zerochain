@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 
 use crate::error::{io_err, Error, Result};
@@ -22,11 +23,40 @@ pub struct CommitEntry {
     pub timestamp: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct JjManager;
+/// Abstraction over version-control backends (jj, git, etc.).
+#[async_trait]
+pub trait VersionControl: Send + Sync {
+    async fn init(&self, path: &Path) -> Result<()>;
+    async fn commit(&self, path: &Path, message: &str) -> Result<()>;
+    async fn log(&self, path: &Path, limit: usize) -> Result<Vec<CommitEntry>>;
+    async fn export_bundle(&self, path: &Path, output_path: &Path) -> Result<()>;
+    async fn add_remote(&self, path: &Path, name: &str, url: &str) -> Result<()>;
+    async fn push_remote(&self, path: &Path, remote_name: &str) -> Result<()>;
+    async fn workspace_size(&self, path: &Path) -> Result<u64>;
+    async fn export_archive(&self, path: &Path, output_path: &Path) -> Result<()>;
+    async fn is_available(&self) -> bool;
+}
 
-impl JjManager {
-    pub async fn init(path: &Path) -> Result<()> {
+/// jj-backed implementation of [`VersionControl`].
+#[derive(Debug, Clone, Default)]
+pub struct JjVcs;
+
+impl JjVcs {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn require_jj() -> Result<()> {
+        if !is_jj_installed_sync() {
+            return Err(Error::JjNotInstalled);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl VersionControl for JjVcs {
+    async fn init(&self, path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("jj")
             .arg("init")
             .arg("--git")
@@ -44,7 +74,7 @@ impl JjManager {
         Ok(())
     }
 
-    pub async fn commit(path: &Path, message: &str) -> Result<()> {
+    async fn commit(&self, path: &Path, message: &str) -> Result<()> {
         Self::require_jj()?;
 
         let describe_output = tokio::process::Command::new("jj")
@@ -82,7 +112,7 @@ impl JjManager {
         Ok(())
     }
 
-    pub async fn log(path: &Path, limit: usize) -> Result<Vec<CommitEntry>> {
+    async fn log(&self, path: &Path, limit: usize) -> Result<Vec<CommitEntry>> {
         Self::require_jj()?;
 
         let template = r#"change_id ++ "\n" ++ commit_id ++ "\n" ++ author ++ "\n" ++ description ++ "\n" ++ committer.timestamp() ++ "\n---ENTRY---\n""#;
@@ -143,39 +173,7 @@ impl JjManager {
         Ok(entries)
     }
 
-    pub fn require_jj() -> Result<()> {
-        if !is_jj_installed_sync() {
-            return Err(Error::JjNotInstalled);
-        }
-        Ok(())
-    }
-}
-
-fn is_jj_installed_sync() -> bool {
-    std::process::Command::new("jj")
-        .arg("--version")
-        .output()
-        .is_ok()
-}
-
-pub async fn is_jj_installed() -> bool {
-    tokio::process::Command::new("jj")
-        .arg("--version")
-        .output()
-        .await
-        .is_ok()
-}
-
-pub struct JjWorkspace {
-    pub path: PathBuf,
-}
-
-impl JjWorkspace {
-    #[must_use] pub fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    pub async fn export_bundle(&self, output_path: &Path) -> Result<()> {
+    async fn export_bundle(&self, path: &Path, output_path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("git")
             .args([
                 "bundle",
@@ -183,7 +181,7 @@ impl JjWorkspace {
                 &output_path.to_string_lossy(),
                 "--all",
             ])
-            .current_dir(&self.path)
+            .current_dir(path)
             .output()
             .await
             .map_err(|e| Error::JjError {
@@ -201,10 +199,10 @@ impl JjWorkspace {
         Ok(())
     }
 
-    pub async fn add_remote(&self, name: &str, url: &str) -> Result<()> {
+    async fn add_remote(&self, path: &Path, name: &str, url: &str) -> Result<()> {
         let output = tokio::process::Command::new("git")
             .args(["remote", "add", name, url])
-            .current_dir(&self.path)
+            .current_dir(path)
             .output()
             .await
             .map_err(|e| Error::JjError {
@@ -222,10 +220,10 @@ impl JjWorkspace {
         Ok(())
     }
 
-    pub async fn push_remote(&self, remote_name: &str) -> Result<()> {
+    async fn push_remote(&self, path: &Path, remote_name: &str) -> Result<()> {
         let output = tokio::process::Command::new("jj")
             .args(["git", "push", "-r", "@", "--remote", remote_name])
-            .current_dir(&self.path)
+            .current_dir(path)
             .output()
             .await
             .map_err(|e| Error::JjError {
@@ -243,17 +241,19 @@ impl JjWorkspace {
         Ok(())
     }
 
-    pub async fn workspace_size(&self) -> Result<u64> {
+    async fn workspace_size(&self, path: &Path) -> Result<u64> {
         let mut total: u64 = 0;
-        Self::dir_size(&self.path, &mut total).await?;
+        dir_size(path, &mut total).await?;
         Ok(total)
     }
 
-    pub async fn export_archive(&self, output_path: &Path) -> Result<()> {
+    async fn export_archive(&self, path: &Path, output_path: &Path) -> Result<()> {
         let parent = output_path.parent().ok_or_else(|| Error::JjError {
             message: "output path has no parent directory".into(),
         })?;
-        tokio::fs::create_dir_all(parent).await.map_err(|e| io_err(parent.to_path_buf(), e))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| io_err(parent.to_path_buf(), e))?;
 
         let file_name = output_path
             .file_name()
@@ -264,13 +264,7 @@ impl JjWorkspace {
             .to_string();
 
         let output = tokio::process::Command::new("tar")
-            .args([
-                "cf",
-                &file_name,
-                "-C",
-                &self.path.to_string_lossy(),
-                ".",
-            ])
+            .args(["cf", &file_name, "-C", &path.to_string_lossy(), "."])
             .current_dir(parent)
             .output()
             .await
@@ -289,27 +283,103 @@ impl JjWorkspace {
         Ok(())
     }
 
-    fn dir_size<'a>(
-        dir: &'a Path,
-        total: &'a mut u64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            let mut entries = tokio::fs::read_dir(dir).await.map_err(|e| io_err(dir.to_path_buf(), e))?;
-
-            while let Some(entry) = entries.next_entry().await.map_err(|e| io_err(dir.to_path_buf(), e))? {
-                let meta = entry.metadata().await.map_err(|e| io_err(entry.path(), e))?;
-                if meta.is_dir() {
-                    Self::dir_size(&entry.path(), total).await?;
-                } else {
-                    *total += meta.len();
-                }
-            }
-            Ok(())
-        })
+    async fn is_available(&self) -> bool {
+        is_jj_installed().await
     }
 }
 
-// ── Sync convenience functions for non-async callers ──
+#[derive(Debug, Clone)]
+pub struct JjManager;
+
+impl JjManager {
+    pub async fn init(path: &Path) -> Result<()> {
+        JjVcs::new().init(path).await
+    }
+
+    pub async fn commit(path: &Path, message: &str) -> Result<()> {
+        JjVcs::new().commit(path, message).await
+    }
+
+    pub async fn log(path: &Path, limit: usize) -> Result<Vec<CommitEntry>> {
+        JjVcs::new().log(path, limit).await
+    }
+
+    pub fn require_jj() -> Result<()> {
+        JjVcs::require_jj()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JjWorkspace {
+    pub path: PathBuf,
+}
+
+impl JjWorkspace {
+    #[must_use]
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub async fn export_bundle(&self, output_path: &Path) -> Result<()> {
+        JjVcs::new().export_bundle(&self.path, output_path).await
+    }
+
+    pub async fn add_remote(&self, name: &str, url: &str) -> Result<()> {
+        JjVcs::new().add_remote(&self.path, name, url).await
+    }
+
+    pub async fn push_remote(&self, remote_name: &str) -> Result<()> {
+        JjVcs::new().push_remote(&self.path, remote_name).await
+    }
+
+    pub async fn workspace_size(&self) -> Result<u64> {
+        JjVcs::new().workspace_size(&self.path).await
+    }
+
+    pub async fn export_archive(&self, output_path: &Path) -> Result<()> {
+        JjVcs::new().export_archive(&self.path, output_path).await
+    }
+}
+
+fn is_jj_installed_sync() -> bool {
+    std::process::Command::new("jj")
+        .arg("--version")
+        .output()
+        .is_ok()
+}
+
+pub async fn is_jj_installed() -> bool {
+    tokio::process::Command::new("jj")
+        .arg("--version")
+        .output()
+        .await
+        .is_ok()
+}
+
+fn dir_size<'a>(
+    dir: &'a Path,
+    total: &'a mut u64,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        let mut entries = tokio::fs::read_dir(dir)
+            .await
+            .map_err(|e| io_err(dir.to_path_buf(), e))?;
+
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| io_err(dir.to_path_buf(), e))?
+        {
+            let meta = entry.metadata().await.map_err(|e| io_err(entry.path(), e))?;
+            if meta.is_dir() {
+                dir_size(&entry.path(), total).await?;
+            } else {
+                *total += meta.len();
+            }
+        }
+        Ok(())
+    })
+}
 
 use std::process::Command;
 

@@ -1,72 +1,8 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use zerochain_engine::AppState;
-use std::path::PathBuf;
 use zerochain_core::stage::StageId;
 use zerochain_core::template::TemplateRegistry;
-
-#[derive(Parser)]
-#[command(
-    name = "zerochain",
-    version,
-    about = "Filesystem-native workflow engine — build AI agents with mkdir",
-    after_long_help = "Stage config: CONTEXT.md (YAML) or CONTEXT.lua (Lua script)\n\
-                       Docs: https://github.com/awdemos/zerochain"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-
-    #[arg(long, env = "ZEROCHAIN_WORKSPACE", default_value = "./workspace")]
-    workspace: PathBuf,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    #[command(about = "Create a new workflow with numbered stages")]
-    Init {
-        #[arg(short, long, help = "Workflow name")]
-        name: String,
-        #[arg(short, long, help = "Path to workspace root")]
-        path: Option<PathBuf>,
-        #[arg(short, long, help = "Comma-separated stage names (e.g. \"research,design,implement\")")]
-        template: Option<String>,
-    },
-    #[command(about = "Execute the next pending stage (or a specific stage)")]
-    Run {
-        #[arg(help = "Workflow ID")]
-        workflow_id: String,
-        #[arg(short, long, help = "Specific stage to run (e.g. 02_design)")]
-        stage: Option<String>,
-    },
-    #[command(about = "Show workflow status and stage states")]
-    Status {
-        #[arg(help = "Workflow ID (omit to list all)")]
-        workflow_id: Option<String>,
-    },
-    #[command(about = "List all workflows")]
-    List,
-    #[command(about = "Approve a stage waiting at a human gate")]
-    Approve {
-        #[arg(help = "Workflow ID")]
-        workflow_id: String,
-        #[arg(help = "Stage ID (e.g. 03_review)")]
-        stage_id: String,
-    },
-    #[command(about = "Reject a stage and mark it as error")]
-    Reject {
-        #[arg(help = "Workflow ID")]
-        workflow_id: String,
-        #[arg(help = "Stage ID (e.g. 03_review)")]
-        stage_id: String,
-        #[arg(short, long, help = "Feedback for rejection")]
-        feedback: Option<String>,
-    },
-    #[command(about = "List available workflow templates")]
-    Templates,
-    #[command(about = "Start MCP server over stdio for AI tool integration")]
-    Mcp,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -75,12 +11,12 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
-    let mut state = AppState::new(&cli.workspace);
+    let cli = zerochain_daemon::cli::Cli::parse();
+    let mut state = AppState::new(&cli.workspace, None).await;
     state.load_workflows().await?;
 
     match cli.command {
-        Commands::Init {
+        zerochain_daemon::cli::Commands::Init {
             name,
             path,
             template,
@@ -94,7 +30,7 @@ async fn main() -> Result<()> {
                 .await?;
             println!("initialized workflow: {name}");
         }
-        Commands::Run {
+        zerochain_daemon::cli::Commands::Run {
             workflow_id,
             stage,
         } => {
@@ -128,7 +64,7 @@ async fn main() -> Result<()> {
 
             println!("stage complete: {}", stage_id.raw);
         }
-        Commands::Status { workflow_id: None } => {
+        zerochain_daemon::cli::Commands::Status { workflow_id: None } => {
             let workflows = state.list_workflows();
             if workflows.is_empty() {
                 println!("no workflows");
@@ -138,7 +74,7 @@ async fn main() -> Result<()> {
                 println!("{id}\t{status}");
             }
         }
-        Commands::Status {
+        zerochain_daemon::cli::Commands::Status {
             workflow_id: Some(wid),
         } => {
             let workflow = state
@@ -165,7 +101,7 @@ async fn main() -> Result<()> {
                 println!("  {} [{}]", stage.id.raw, marker);
             }
         }
-        Commands::List => {
+        zerochain_daemon::cli::Commands::List => {
             let workflows = state.list_workflows();
             if workflows.is_empty() {
                 println!("no workflows");
@@ -175,7 +111,7 @@ async fn main() -> Result<()> {
                 println!("{id}\t{status}");
             }
         }
-        Commands::Approve {
+        zerochain_daemon::cli::Commands::Approve {
             workflow_id,
             stage_id,
         } => {
@@ -184,7 +120,7 @@ async fn main() -> Result<()> {
                 .await?;
             println!("approved: {workflow_id} / {stage_id}");
         }
-        Commands::Reject {
+        zerochain_daemon::cli::Commands::Reject {
             workflow_id,
             stage_id,
             feedback,
@@ -194,7 +130,7 @@ async fn main() -> Result<()> {
                 .await?;
             println!("rejected: {workflow_id} / {stage_id}");
         }
-        Commands::Templates => {
+        zerochain_daemon::cli::Commands::Templates => {
             let registry = TemplateRegistry::new();
             let list = registry.list();
             if list.is_empty() {
@@ -209,7 +145,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Mcp => {
+        zerochain_daemon::cli::Commands::Mcp => {
             zerochain_daemon::mcp::run_stdio_server(cli.workspace).await?;
         }
     }

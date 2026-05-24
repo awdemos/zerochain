@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         "starting zerochaind"
     );
 
-    let mut server_state = state::ServerState::new(&cli.workspace);
+    let mut server_state = state::ServerState::new(&cli.workspace).await;
     if cli.no_auth {
         server_state = server_state.with_auth_disabled();
     }
@@ -89,6 +89,10 @@ async fn main() -> Result<()> {
         store
     };
     server_state = server_state.with_cas(cas.clone());
+    {
+        let mut guard = server_state.registry.write().await;
+        guard.set_cas(cas.clone());
+    }
 
     if cli.broker_enabled {
         let broker: Arc<dyn Broker> = match cli.broker_backend.as_str() {

@@ -1,18 +1,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use zerochain_broker::Broker;
 use zerochain_cas::CasStore;
-use zerochain_engine::{AppState, DaemonError};
+use zerochain_engine::{DaemonError, WorkflowRegistry};
 
 /// Shared server state, Clone-able for axum's State extractor.
 ///
-/// Inner `AppState` is behind `Arc<Mutex<...>>` because `execute_stage`
-/// requires `&mut self`.
+/// Workflows are managed by `WorkflowRegistry` behind `Arc<RwLock<...>>`.
 #[derive(Clone)]
 pub struct ServerState {
-    pub inner: Arc<Mutex<AppState>>,
+    pub registry: Arc<RwLock<WorkflowRegistry>>,
     pub workspace: PathBuf,
     pub cas: Option<CasStore>,
     pub broker: Option<Arc<dyn Broker>>,
@@ -21,10 +20,10 @@ pub struct ServerState {
 }
 
 impl ServerState {
-    #[must_use] pub fn new(workspace: &std::path::Path) -> Self {
-        let app_state = AppState::new(workspace);
+    pub async fn new(workspace: &std::path::Path) -> Self {
+        let registry = WorkflowRegistry::new(workspace.to_path_buf());
         Self {
-            inner: Arc::new(Mutex::new(app_state)),
+            registry: Arc::new(RwLock::new(registry)),
             workspace: workspace.to_path_buf(),
             cas: None,
             broker: None,
@@ -59,8 +58,8 @@ impl ServerState {
     ///
     /// Returns `DaemonError` if workflow loading fails.
     pub async fn refresh(&self) -> Result<(), DaemonError> {
-        let mut state = self.inner.lock().await;
-        state.load_workflows().await?;
+        let mut registry = self.registry.write().await;
+        registry.load_all().await?;
         Ok(())
     }
 

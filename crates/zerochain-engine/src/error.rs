@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use zerochain_error::ZerochainError;
 
 /// Errors produced by the zerochain daemon.
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +61,9 @@ pub enum DaemonError {
 
     #[error("filesystem error: {0}")]
     Fs(#[from] zerochain_fs::error::FsError),
+
+    #[error("CAS error: {0}")]
+    Cas(#[from] zerochain_cas::CasError),
 }
 
 impl DaemonError {
@@ -67,6 +71,77 @@ impl DaemonError {
         Self::Io {
             path: path.into(),
             source,
+        }
+    }
+}
+
+impl From<DaemonError> for ZerochainError {
+    fn from(err: DaemonError) -> Self {
+        match err {
+            DaemonError::WorkflowNotFound(msg) => ZerochainError::NotFound {
+                message: format!("workflow not found: {msg}"),
+            },
+            DaemonError::StageNotFound(msg) => ZerochainError::NotFound {
+                message: format!("stage not found: {msg}"),
+            },
+            DaemonError::InvalidStageId { stage_id, source } => ZerochainError::Stage {
+                message: format!("invalid stage id {stage_id}: {source}"),
+            },
+            DaemonError::Io { path, source } => ZerochainError::Io { path, source },
+            DaemonError::Workflow(e) => ZerochainError::from(e),
+            DaemonError::WorkflowLoadPartial(msg) => {
+                ZerochainError::Workflow { message: msg }
+            }
+            DaemonError::Llm(e) => ZerochainError::from(e),
+            DaemonError::ProfileValidation(e) => ZerochainError::Llm {
+                message: format!("profile validation: {e}"),
+            },
+            DaemonError::MissingEnv(var) => ZerochainError::MissingEnv { var },
+            DaemonError::CowSnapshot { stage, source } => ZerochainError::Fs {
+                message: format!("CoW snapshot for stage {stage}: {source}"),
+            },
+            DaemonError::CowRestore { stage, source } => ZerochainError::Fs {
+                message: format!("CoW restore for stage {stage}: {source}"),
+            },
+            DaemonError::ContainerSpawn(source) => ZerochainError::Container {
+                message: format!("container spawn: {source}"),
+            },
+            DaemonError::ContainerExec(msg) => ZerochainError::Container { message: msg },
+            DaemonError::ContainerImage { image, stderr } => ZerochainError::Container {
+                message: format!("container image {image}: {stderr}"),
+            },
+            DaemonError::ContainerRuntimeNotFound => ZerochainError::Container {
+                message: "no container runtime found (need docker or podman)".to_string(),
+            },
+            DaemonError::Fs(e) => ZerochainError::from(e),
+            DaemonError::Cas(e) => ZerochainError::from(e),
+        }
+    }
+}
+
+impl From<ZerochainError> for DaemonError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::NotFound { message } => {
+                DaemonError::WorkflowNotFound(message)
+            }
+            ZerochainError::Io { path, source } => DaemonError::Io { path, source },
+            ZerochainError::Workflow { message } => {
+                DaemonError::WorkflowLoadPartial(message)
+            }
+            ZerochainError::Stage { message } => DaemonError::StageNotFound(message),
+            ZerochainError::Llm { message } => {
+                DaemonError::Llm(zerochain_llm::error::LLMError::Other(message))
+            }
+            ZerochainError::Fs { message } => DaemonError::Fs(
+                zerochain_fs::error::FsError::SubvolumeError {
+                    path: PathBuf::new(),
+                    reason: message,
+                },
+            ),
+            ZerochainError::Container { message } => DaemonError::ContainerExec(message),
+            ZerochainError::MissingEnv { var } => DaemonError::MissingEnv(var),
+            other => DaemonError::WorkflowLoadPartial(other.to_string()),
         }
     }
 }

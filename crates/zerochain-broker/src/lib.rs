@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use zerochain_cas::Cid;
+use zerochain_error::ZerochainError;
 
 pub mod memory;
 #[cfg(feature = "nats")]
@@ -89,6 +90,41 @@ pub enum BrokerError {
 }
 
 pub type Result<T> = std::result::Result<T, BrokerError>;
+
+impl From<BrokerError> for ZerochainError {
+    fn from(err: BrokerError) -> Self {
+        match err {
+            BrokerError::Connection(msg) => ZerochainError::Broker {
+                message: format!("connection failed: {msg}"),
+            },
+            BrokerError::Publish(msg) => ZerochainError::Broker {
+                message: format!("publish failed: {msg}"),
+            },
+            BrokerError::Subscribe(msg) => ZerochainError::Broker {
+                message: format!("subscribe failed: {msg}"),
+            },
+            BrokerError::Serialization(e) => ZerochainError::Serialization {
+                message: e.to_string(),
+            },
+            BrokerError::Cas(msg) => ZerochainError::Cas {
+                message: format!("CAS error: {msg}"),
+            },
+        }
+    }
+}
+
+impl From<ZerochainError> for BrokerError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::Broker { message } => BrokerError::Connection(message),
+            ZerochainError::Serialization { message } => {
+                BrokerError::Cas(format!("serialization: {message}"))
+            }
+            ZerochainError::Cas { message } => BrokerError::Cas(message),
+            other => BrokerError::Connection(other.to_string()),
+        }
+    }
+}
 
 /// Abstraction over message broker backends.
 #[async_trait::async_trait]

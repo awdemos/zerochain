@@ -490,7 +490,7 @@ async fn execute_stage_writes_result_from_llm() {
         .await
         .expect("write input");
 
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     let mock = MockLLM::new("Mock analysis result from LLM.");
     state
         .execute_stage_with_llm("llm-test", stage1, &mock)
@@ -524,7 +524,7 @@ async fn execute_stage_passes_context_to_llm() {
         .expect("write input");
 
     let echo_mock = MockLLM::new(String::new());
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("ctx-test", stage, &echo_mock)
         .await
@@ -547,7 +547,7 @@ async fn execute_stage_handles_missing_context_gracefully() {
     tokio::fs::remove_file(&stage.context_path).await.expect("remove context");
 
     let mock = MockLLM::new("No context needed.");
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("no-ctx", stage, &mock)
         .await
@@ -578,7 +578,7 @@ async fn execute_stage_with_generic_profile_no_flags() {
     .expect("write context");
 
     let mock = MockLLM::new("done");
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("generic-profile", stage, &mock)
         .await
@@ -642,7 +642,7 @@ async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
         content: "The answer is 42.".into(),
         reasoning: "I considered multiple approaches...".into(),
     };
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("kimi-reasoning", stage, &mock)
         .await
@@ -700,7 +700,7 @@ async fn execute_stage_kimi_k2_no_capture_skips_reasoning_file() {
     .expect("write context");
 
     let mock = ReasoningMock;
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("kimi-no-reason", stage, &mock)
         .await
@@ -748,7 +748,7 @@ async fn execute_stage_default_profile_no_reasoning_file() {
     let stage = wf.stage_by_name("step").expect("stage 1");
 
     let mock = ReasoningMock;
-    let mut state = AppState::new(tmp.path());
+    let mut state = AppState::new(tmp.path(), None).await;
     state
         .execute_stage_with_llm("default-no-reason", stage, &mock)
         .await
@@ -759,4 +759,33 @@ async fn execute_stage_default_profile_no_reasoning_file() {
         !stage.output_path.join("reasoning.md").exists(),
         "default profile should never write reasoning.md"
     );
+}
+
+#[tokio::test]
+async fn execute_stage_stores_output_in_cas() {
+    let tmp = TempDir::new().expect("tempdir");
+    let cas_dir = tmp.path().join("cas");
+    let cas = CasStore::new(cas_dir).await.expect("create CAS store");
+
+    let task = make_task("cas-test", vec!["01_stage"]);
+    let (wf, _root) = init_workflow(tmp.path(), &task).await;
+    let stage = wf.stage_by_name("stage").expect("stage");
+
+    let mut state = AppState::new(tmp.path(), Some(cas.clone())).await;
+    let mock = MockLLM::new("CAS stored output");
+    state
+        .execute_stage_with_llm("cas-test", stage, &mock)
+        .await
+        .expect("execute stage");
+
+    let result_path = stage.output_path.join("result.md");
+    assert!(result_path.exists());
+    let content = tokio::fs::read_to_string(&result_path)
+        .await
+        .expect("read result");
+    assert_eq!(content, "MOCK RECEIVED: Execute the task described above.");
+
+    let expected_cid = zerochain_cas::Cid::from_bytes(content.as_bytes());
+    let retrieved = cas.get(&expected_cid).await.expect("retrieve from CAS");
+    assert_eq!(String::from_utf8_lossy(&retrieved), content);
 }

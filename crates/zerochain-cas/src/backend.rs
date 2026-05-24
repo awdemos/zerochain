@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::fs;
@@ -7,6 +8,8 @@ use tokio::io::AsyncRead;
 
 use crate::cid::Cid;
 use crate::error::{CasError, Result};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Abstraction over content-addressed storage backends.
 #[async_trait]
@@ -78,11 +81,6 @@ impl StorageBackend for LocalBackend {
         let cid = Cid::from_bytes(data);
         let path = self.path_for(&cid);
 
-        // Fast path: already stored
-        if path.exists() {
-            return Ok(cid);
-        }
-
         // Atomic write: temp file in same directory, then rename
         let parent = path
             .parent()
@@ -90,14 +88,26 @@ impl StorageBackend for LocalBackend {
         fs::create_dir_all(parent).await
             .map_err(|e| CasError::io(parent, e))?;
 
-        let temp_path = path.with_extension("tmp");
+        let pid = std::process::id();
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let hex = cid.as_hex();
+        let temp_path = parent.join(format!(".tmp.{hex}.{pid}.{unique}"));
+
         fs::write(&temp_path, data).await
             .map_err(|e| CasError::io(&temp_path, e))?;
-        fs::rename(&temp_path, &path).await
-            .map_err(|e| CasError::io(&path, e))?;
 
-        tracing::debug!(cid = %cid, "stored content");
-        Ok(cid)
+        match fs::rename(&temp_path, &path).await {
+            Ok(()) => {
+                tracing::debug!(cid = %cid, "stored content");
+                Ok(cid)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Another task won the race; clean up our temp file
+                let _ = fs::remove_file(&temp_path).await;
+                Ok(cid)
+            }
+            Err(e) => Err(CasError::io(&path, e)),
+        }
     }
 
     async fn get(&self, cid: &Cid) -> Result<Vec<u8>> {
@@ -198,5 +208,41 @@ impl StorageBackend for LocalBackend {
 
     fn location(&self) -> String {
         self.base_dir.display().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn concurrent_put_same_content_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().to_path_buf()).await.unwrap();
+
+        let content = b"concurrent stress test content";
+        let expected_cid = Cid::from_bytes(content);
+
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let backend = backend.clone();
+            let content = content.to_vec();
+            handles.push(tokio::spawn(async move {
+                backend.put(&content).await
+            }));
+        }
+
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(handle.await.unwrap());
+        }
+
+        for result in &results {
+            assert!(result.is_ok(), "concurrent put should succeed: {result:?}");
+            assert_eq!(result.as_ref().unwrap(), &expected_cid);
+        }
+
+        let stored = backend.get(&expected_cid).await.unwrap();
+        assert_eq!(stored, content);
     }
 }

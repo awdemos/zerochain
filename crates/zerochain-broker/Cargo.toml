@@ -11,6 +11,7 @@ description = "Message broker abstraction for cross-pod agent communication"
 
 [dependencies]
 zerochain-cas = { path = "../zerochain-cas" }
+zerochain-error = { path = "../zerochain-error" }
 async-trait.workspace = true
 tokio.workspace = true
 serde.workspace = true
