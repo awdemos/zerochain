@@ -164,6 +164,17 @@ impl AppState {
             .ok_or_else(|| DaemonError::StageNotFound(stage_raw.into()))?
             .clone();
 
+        if stage.human_gate {
+            return Err(DaemonError::Workflow(
+                zerochain_core::error::Error::PlanError {
+                    reason: format!(
+                        "stage {} is waiting at a human gate; use approve or reject",
+                        stage.id.raw
+                    ),
+                },
+            ));
+        }
+
         let _lock = acquire_lock(&stage.path).await?;
 
         if let Err(e) = clean_output(&stage.path).await {
@@ -467,7 +478,11 @@ impl AppState {
             return Ok(());
         }
 
-        entries.sort_by_key(tokio::fs::DirEntry::file_name);
+        entries.sort_by_key(|entry| {
+            std::fs::metadata(entry.path())
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH)
+        });
         let to_remove = entries.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
 
         for entry in entries.iter().take(to_remove) {
@@ -583,15 +598,14 @@ impl AppState {
             env_vars,
             command: vec![
                 "zerochain".into(),
-                "run-stage".into(),
-                "--workflow-id".into(),
+                "run".into(),
                 workflow_id.into(),
-                "--stage-id".into(),
+                "--stage".into(),
                 stage.id.raw.clone(),
-                "--workspace".into(),
-                "/workspace".into(),
             ],
             workspace_root: wf.root.clone(),
+            workflow_id: workflow_id.into(),
+            stage_id: stage.id.raw.clone(),
         };
 
         let result = executor.run_stage(&config).await?;
@@ -667,7 +681,7 @@ fn find_latest_snapshot(
     stage_id: &str,
 ) -> Result<Option<String>, std::io::Error> {
     let prefix = format!("{stage_id}.");
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<(std::time::SystemTime, String)> = Vec::new();
     for entry in std::fs::read_dir(snapshots_dir)? {
         let entry = entry?;
         if !entry.path().is_dir() {
@@ -677,12 +691,14 @@ fn find_latest_snapshot(
         let Some(name) = file_name.to_str() else {
             continue;
         };
-        if name.starts_with(&prefix) {
-            candidates.push(name.to_string());
+        if !name.starts_with(&prefix) {
+            continue;
         }
+        let modified = entry.metadata()?.modified()?;
+        candidates.push((modified, name.to_string()));
     }
-    candidates.sort();
-    Ok(candidates.into_iter().last())
+    candidates.sort_by_key(|a| a.0);
+    Ok(candidates.into_iter().last().map(|(_, name)| name))
 }
 
 #[cfg(test)]
@@ -1030,9 +1046,14 @@ mod tests {
     fn find_latest_snapshot_picks_newest() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
-        std::fs::create_dir_all(dir.join("00_spec.20250101T000000Z")).unwrap();
-        std::fs::create_dir_all(dir.join("00_spec.20250201T000000Z")).unwrap();
-        std::fs::create_dir_all(dir.join("00_spec.20250301T000000Z")).unwrap();
+        for name in [
+            "00_spec.20250101T000000Z",
+            "00_spec.20250201T000000Z",
+            "00_spec.20250301T000000Z",
+        ] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
 
         let latest = find_latest_snapshot(dir, "00_spec").unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250301T000000Z");
