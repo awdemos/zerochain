@@ -31,10 +31,7 @@ impl StageId {
             });
         }
 
-        let numeric_end = prefix
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .count();
+        let numeric_end = prefix.chars().take_while(char::is_ascii_digit).count();
 
         if numeric_end == 0 {
             return Err(Error::InvalidStageName {
@@ -50,7 +47,11 @@ impl StageId {
 
         let letter = &prefix[numeric_end..];
         if !letter.is_empty()
-            && (letter.len() != 1 || !letter.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
+            && (letter.len() != 1
+                || !letter
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase()))
         {
             return Err(Error::InvalidStageName {
                 name: dir_name.to_string(),
@@ -64,12 +65,9 @@ impl StageId {
         })
     }
 
-    #[must_use] pub fn parallel_group(&self) -> Option<String> {
-        let numeric_end = self
-            .raw
-            .chars()
-            .take_while(char::is_ascii_digit)
-            .count();
+    #[must_use]
+    pub fn parallel_group(&self) -> Option<String> {
+        let numeric_end = self.raw.chars().take_while(char::is_ascii_digit).count();
         let rest = &self.raw[numeric_end..];
         if rest.starts_with('_') {
             return None;
@@ -80,7 +78,8 @@ impl StageId {
             .map(|c| c.to_string())
     }
 
-    #[must_use] pub fn sort_key(&self) -> (u32, String) {
+    #[must_use]
+    pub fn sort_key(&self) -> (u32, String) {
         (
             self.sequence,
             self.raw.split('_').next().unwrap_or(&self.raw).to_string(),
@@ -148,17 +147,16 @@ impl Stage {
         let has_context = tokio::fs::try_exists(&context_path)
             .await
             .map_err(|e| crate::error::io_err(&context_path, e))?;
-        let (human_gate, container_image, command) =
-            if has_context {
-                let ctx = Context::from_md_file(&context_path).await?;
-                (
-                    ctx.frontmatter.human_gate,
-                    ctx.frontmatter.container,
-                    ctx.frontmatter.command,
-                )
-            } else {
-                (false, None, None)
-            };
+        let (human_gate, container_image, command) = if has_context {
+            let ctx = Context::from_md_file(&context_path).await?;
+            (
+                ctx.frontmatter.human_gate,
+                ctx.frontmatter.container,
+                ctx.frontmatter.command,
+            )
+        } else {
+            (false, None, None)
+        };
 
         Ok(Stage {
             id,

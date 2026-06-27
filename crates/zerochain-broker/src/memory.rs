@@ -16,7 +16,8 @@ pub struct MemoryBroker {
 
 impl MemoryBroker {
     /// Create a new in-memory broker.
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             channels: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -60,7 +61,7 @@ impl Broker for MemoryBroker {
                         }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {},
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                 }
             }
         });
@@ -132,8 +133,10 @@ mod tests {
 
         broker.publish("subject.b", dummy_msg()).await.unwrap();
 
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+                .await
+                .is_err()
+        );
     }
 }

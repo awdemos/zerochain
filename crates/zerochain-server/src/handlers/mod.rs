@@ -1,6 +1,6 @@
-use axum::Router;
-use axum::routing::{get, post};
 use axum::middleware;
+use axum::routing::{get, post};
+use axum::Router;
 use serde::{Deserialize, Serialize};
 
 use crate::auth;
@@ -11,8 +11,6 @@ pub mod health;
 pub mod prompt;
 pub mod stage;
 pub mod workflow;
-
-
 
 #[derive(Deserialize)]
 pub struct RejectRequest {
@@ -72,10 +70,7 @@ pub fn routes(state: ServerState) -> Router {
             "/v1/workflows/{id}/stages/{stage}/prompt",
             post(prompt::send),
         )
-        .route(
-            "/v1/workflows/{id}/stages/{stage}/poll",
-            get(prompt::poll),
-        )
+        .route("/v1/workflows/{id}/stages/{stage}/poll", get(prompt::poll))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,

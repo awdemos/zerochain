@@ -22,7 +22,11 @@ struct Cli {
     #[arg(long, env = "ZEROCHAIN_WORKSPACE", default_value = "/workspace")]
     workspace: PathBuf,
 
-    #[arg(long, env = "ZEROCHAIN_CAS_DIR", default_value = "/workspace/.zerochain/cas")]
+    #[arg(
+        long,
+        env = "ZEROCHAIN_CAS_DIR",
+        default_value = "/workspace/.zerochain/cas"
+    )]
     cas_dir: PathBuf,
 
     #[arg(long, env = "ZEROCHAIN_CAS_BACKEND", default_value = "local")]
@@ -37,7 +41,11 @@ struct Cli {
     #[arg(long, env = "ZEROCHAIN_API_KEY")]
     api_key: Option<String>,
 
-    #[arg(long, env = "ZEROCHAIN_NO_AUTH", help = "Explicitly disable API key authentication")]
+    #[arg(
+        long,
+        env = "ZEROCHAIN_NO_AUTH",
+        help = "Explicitly disable API key authentication"
+    )]
     no_auth: bool,
 }
 
@@ -81,7 +89,9 @@ async fn main() -> Result<()> {
         }
         #[cfg(not(feature = "s3"))]
         {
-            anyhow::bail!("S3 CAS backend requested but zerochain-cas was compiled without the 's3' feature");
+            anyhow::bail!(
+                "S3 CAS backend requested but zerochain-cas was compiled without the 's3' feature"
+            );
         }
     } else {
         let store = CasStore::new(cli.cas_dir).await?;

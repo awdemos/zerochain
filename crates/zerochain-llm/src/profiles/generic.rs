@@ -9,11 +9,7 @@ impl ProviderProfile for GenericProfile {
         "generic"
     }
 
-    fn validate_config(
-        &self,
-        _config: &LLMConfig,
-        _ctx: &StageContext,
-    ) -> Result<(), LLMError> {
+    fn validate_config(&self, _config: &LLMConfig, _ctx: &StageContext) -> Result<(), LLMError> {
         Ok(())
     }
 

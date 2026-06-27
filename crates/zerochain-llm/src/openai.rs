@@ -2,15 +2,14 @@ use crate::error::LLMError;
 use crate::profiles::{ProviderProfile, StageContext};
 use crate::trait_::LLM;
 use crate::types::{
-    CompleteResponse, Content, FinishReason, LLMConfig, Message, ProviderId,
-    Role, Tool, ToolCall, Usage,
+    CompleteResponse, Content, FinishReason, LLMConfig, Message, ProviderId, Role, Tool, ToolCall,
+    Usage,
 };
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::{debug, instrument, warn};
-
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -67,7 +66,6 @@ struct ApiErrorDetail {
     message: String,
 }
 
-
 pub struct OpenAICompatibleProvider {
     provider_id: crate::types::ProviderId,
     base_url: String,
@@ -119,7 +117,8 @@ impl OpenAICompatibleProvider {
 
     fn map_status_error(status: u16, body: &str) -> LLMError {
         if status == 401 || status == 403 {
-            let msg = Self::extract_error_message(body).unwrap_or_else(|| "authentication failed".into());
+            let msg =
+                Self::extract_error_message(body).unwrap_or_else(|| "authentication failed".into());
             return LLMError::Auth(msg);
         }
         if status == 429 {
@@ -135,11 +134,7 @@ impl OpenAICompatibleProvider {
     fn extract_error_message(body: &str) -> Option<String> {
         serde_json::from_str::<ApiErrorBody>(body)
             .ok()
-            .and_then(|b| {
-                b.error
-                    .map(|e| e.message)
-                    .or(b.message)
-            })
+            .and_then(|b| b.error.map(|e| e.message).or(b.message))
     }
 
     fn parse_retry_after(body: &str) -> Option<u64> {
@@ -184,15 +179,14 @@ impl OpenAICompatibleProvider {
         &self,
         params: ProfiledCompleteParams<'_>,
     ) -> Result<CompleteResponse, LLMError> {
-        params.profile.validate_config(params.config, params.stage_ctx)?;
+        params
+            .profile
+            .validate_config(params.config, params.stage_ctx)?;
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let message_values: Vec<serde_json::Value> = params
-            .messages
-            .iter()
-            .map(Self::message_to_json)
-            .collect();
+        let message_values: Vec<serde_json::Value> =
+            params.messages.iter().map(Self::message_to_json).collect();
 
         let chat_tools = params.tools.map(|t| {
             t.iter()
@@ -208,7 +202,9 @@ impl OpenAICompatibleProvider {
         });
 
         let mut extra_body = serde_json::Value::Object(serde_json::Map::new());
-        params.profile.augment_request(&mut extra_body, params.stage_ctx)?;
+        params
+            .profile
+            .augment_request(&mut extra_body, params.stage_ctx)?;
 
         let request = ChatRequest {
             model: params.config.model.clone(),
@@ -255,8 +251,8 @@ impl OpenAICompatibleProvider {
             .next()
             .ok_or_else(|| LLMError::parse("no choices in response"))?;
 
-        let choice: ChoiceHelper =
-            serde_json::from_value(choice_value.clone()).map_err(|e| LLMError::parse(e.to_string()))?;
+        let choice: ChoiceHelper = serde_json::from_value(choice_value.clone())
+            .map_err(|e| LLMError::parse(e.to_string()))?;
 
         let tool_calls: Vec<ToolCall> = choice
             .message
@@ -401,7 +397,6 @@ impl LLM for OpenAICompatibleProvider {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,10 +445,7 @@ mod tests {
 
     #[test]
     fn map_status_error_rate_limit() {
-        let err = OpenAICompatibleProvider::map_status_error(
-            429,
-            r#"{"retry_after_ms":5000}"#,
-        );
+        let err = OpenAICompatibleProvider::map_status_error(429, r#"{"retry_after_ms":5000}"#);
         assert!(matches!(err, LLMError::RateLimited { .. }));
     }
 
@@ -509,7 +501,10 @@ mod tests {
         };
         let j = OpenAICompatibleProvider::content_to_json(&c);
         assert_eq!(j["type"].as_str(), Some("image_url"));
-        assert_eq!(j["image_url"]["url"].as_str(), Some("https://example.com/img.png"));
+        assert_eq!(
+            j["image_url"]["url"].as_str(),
+            Some("https://example.com/img.png")
+        );
         assert_eq!(j["image_url"]["detail"].as_str(), Some("high"));
     }
 
@@ -524,10 +519,10 @@ mod tests {
     #[test]
     fn chat_request_serializes_extra_body() {
         let mut extra = serde_json::Value::Object(serde_json::Map::new());
-        extra.as_object_mut().unwrap().insert(
-            "thinking".to_string(),
-            json!({"type": "disabled"}),
-        );
+        extra
+            .as_object_mut()
+            .unwrap()
+            .insert("thinking".to_string(), json!({"type": "disabled"}));
 
         let req = ChatRequest {
             model: "test".into(),

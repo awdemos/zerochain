@@ -42,7 +42,8 @@ impl BrokerMessage {
     }
 
     /// Attach metadata to the message.
-    #[must_use] pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = metadata;
         self
     }

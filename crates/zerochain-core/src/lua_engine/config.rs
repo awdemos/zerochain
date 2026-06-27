@@ -1,7 +1,7 @@
 use mlua::{Lua, Table, Value};
 
-use crate::frontmatter::{ContextFrontmatter, MultimodalInput};
 use crate::error::{Error, Result};
+use crate::frontmatter::{ContextFrontmatter, MultimodalInput};
 
 fn lua_err(e: &mlua::Error) -> Error {
     Error::Lua {

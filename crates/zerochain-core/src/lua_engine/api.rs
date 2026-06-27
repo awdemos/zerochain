@@ -40,9 +40,7 @@ impl UserData for LuaContext {
             Ok(ctx.env_vars.get(&key).cloned())
         });
 
-        methods.add_method("read_output", |_, ctx, ()| {
-            Ok(ctx.output_content.clone())
-        });
+        methods.add_method("read_output", |_, ctx, ()| Ok(ctx.output_content.clone()));
 
         methods.add_method("token_usage", |_, ctx, ()| Ok(ctx.token_usage));
 
@@ -53,9 +51,8 @@ impl UserData for LuaContext {
 
         methods.add_method("list_stages", |_, ctx, ()| -> mlua::Result<Vec<String>> {
             let mut stages = Vec::new();
-            let entries = std::fs::read_dir(&ctx.workflow_root).map_err(|e| {
-                mlua::Error::runtime(format!("failed to read workflow dir: {e}"))
-            })?;
+            let entries = std::fs::read_dir(&ctx.workflow_root)
+                .map_err(|e| mlua::Error::runtime(format!("failed to read workflow dir: {e}")))?;
             for entry in entries {
                 let entry = entry.map_err(|e| mlua::Error::runtime(format!("dir entry: {e}")))?;
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -75,20 +72,23 @@ impl UserData for LuaContext {
             Ok(marker.exists())
         });
 
-        methods.add_method("stage_output", |_, ctx, stage: String| -> mlua::Result<Option<String>> {
-            let result_path = ctx
-                .workflow_root
-                .join(&stage)
-                .join("output")
-                .join("result.md");
-            if result_path.exists() {
-                Ok(Some(std::fs::read_to_string(&result_path).map_err(
-                    |e| mlua::Error::runtime(format!("failed to read stage output: {e}")),
-                )?))
-            } else {
-                Ok(None)
-            }
-        });
+        methods.add_method(
+            "stage_output",
+            |_, ctx, stage: String| -> mlua::Result<Option<String>> {
+                let result_path = ctx
+                    .workflow_root
+                    .join(&stage)
+                    .join("output")
+                    .join("result.md");
+                if result_path.exists() {
+                    Ok(Some(std::fs::read_to_string(&result_path).map_err(
+                        |e| mlua::Error::runtime(format!("failed to read stage output: {e}")),
+                    )?))
+                } else {
+                    Ok(None)
+                }
+            },
+        );
 
         methods.add_method_mut("insert_stage_after", |_, ctx, stage_name: String| {
             ctx.hooks.insert_after.push(stage_name);
@@ -102,17 +102,19 @@ impl UserData for LuaContext {
 
         methods.add_method("store", |_, ctx, (key, value): (String, mlua::Value)| {
             let json_val = lua_value_to_json(&value);
-            let mut store = ctx.shared_store.lock().map_err(|_| {
-                mlua::Error::runtime("shared store lock poisoned")
-            })?;
+            let mut store = ctx
+                .shared_store
+                .lock()
+                .map_err(|_| mlua::Error::runtime("shared store lock poisoned"))?;
             store.insert(key, json_val);
             Ok(())
         });
 
         methods.add_method("load", |lua, ctx, key: String| {
-            let store = ctx.shared_store.lock().map_err(|_| {
-                mlua::Error::runtime("shared store lock poisoned")
-            })?;
+            let store = ctx
+                .shared_store
+                .lock()
+                .map_err(|_| mlua::Error::runtime("shared store lock poisoned"))?;
             match store.get(&key) {
                 Some(v) => json_to_lua_value(lua, v),
                 None => Ok(Value::Nil),
@@ -178,7 +180,8 @@ fn json_to_lua_value(lua: &Lua, val: &serde_json::Value) -> mlua::Result<mlua::V
 }
 
 impl LuaContext {
-    #[must_use] pub fn new(stage_raw: &str, stage_path: &Path, workflow_root: &Path) -> Self {
+    #[must_use]
+    pub fn new(stage_raw: &str, stage_path: &Path, workflow_root: &Path) -> Self {
         let mut env_vars = HashMap::new();
         for key in &[
             "ZEROCHAIN_PROVIDER_PROFILE",
@@ -204,13 +207,15 @@ impl LuaContext {
         }
     }
 
-    #[must_use] pub fn with_output(mut self, content: &str, tokens: u64) -> Self {
+    #[must_use]
+    pub fn with_output(mut self, content: &str, tokens: u64) -> Self {
         self.output_content = Some(content.to_string());
         self.token_usage = Some(tokens);
         self
     }
 
-    #[must_use] pub fn with_shared_store(
+    #[must_use]
+    pub fn with_shared_store(
         mut self,
         store: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     ) -> Self {
@@ -219,12 +224,7 @@ impl LuaContext {
     }
 }
 
-pub fn run_hook(
-    lua: &Lua,
-    hook_name: &str,
-    ctx: &mut LuaContext,
-    script: &str,
-) -> Result<()> {
+pub fn run_hook(lua: &Lua, hook_name: &str, ctx: &mut LuaContext, script: &str) -> Result<()> {
     super::vm::reset_instruction_counter(lua)?;
 
     lua.globals()
@@ -257,13 +257,13 @@ pub fn load_shared_store(
             });
         }
     }
-    let content = std::fs::read_to_string(&store_path)
-        .map_err(|e| crate::error::Error::SharedStoreLoad {
+    let content =
+        std::fs::read_to_string(&store_path).map_err(|e| crate::error::Error::SharedStoreLoad {
             path: store_path.clone(),
             reason: format!("failed to read: {e}"),
         })?;
-    let map: HashMap<String, serde_json::Value> = serde_json::from_str(&content)
-        .map_err(|e| crate::error::Error::SharedStoreLoad {
+    let map: HashMap<String, serde_json::Value> =
+        serde_json::from_str(&content).map_err(|e| crate::error::Error::SharedStoreLoad {
             path: store_path.clone(),
             reason: format!("invalid JSON: {e}"),
         })?;
@@ -306,9 +306,8 @@ mod tests {
 
     #[test]
     fn lua_context_with_output() {
-        let ctx =
-            LuaContext::new("01_test", Path::new("/tmp"), Path::new("/tmp/wf"))
-                .with_output("result text", 500);
+        let ctx = LuaContext::new("01_test", Path::new("/tmp"), Path::new("/tmp/wf"))
+            .with_output("result text", 500);
         assert_eq!(ctx.output_content.as_deref(), Some("result text"));
         assert_eq!(ctx.token_usage, Some(500));
     }

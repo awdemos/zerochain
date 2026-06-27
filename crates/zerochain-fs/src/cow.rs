@@ -129,34 +129,36 @@ impl BtrfsCow {
                 reason: e.to_string(),
             })?;
 
-        let stdout = child_proc.stdout.take().ok_or_else(|| {
-            FsError::BtrfsCommandFailed {
+        let stdout = child_proc
+            .stdout
+            .take()
+            .ok_or_else(|| FsError::BtrfsCommandFailed {
                 command: "send".into(),
                 reason: "no stdout pipe".into(),
-            }
-        })?;
+            })?;
 
         let mut reader = tokio::io::BufReader::new(stdout);
-        let mut file = tokio::fs::File::create(output_path).await.map_err(|e| {
-            FsError::Io {
+        let mut file = tokio::fs::File::create(output_path)
+            .await
+            .map_err(|e| FsError::Io {
                 path: output_path.to_path_buf(),
                 source: e,
-            }
-        })?;
+            })?;
 
-        tokio::io::copy(&mut reader, &mut file).await.map_err(|e| {
-            FsError::BtrfsCommandFailed {
+        tokio::io::copy(&mut reader, &mut file)
+            .await
+            .map_err(|e| FsError::BtrfsCommandFailed {
                 command: "send".into(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
-        let status = child_proc.wait().await.map_err(|e| {
-            FsError::BtrfsCommandFailed {
+        let status = child_proc
+            .wait()
+            .await
+            .map_err(|e| FsError::BtrfsCommandFailed {
                 command: "send".into(),
                 reason: e.to_string(),
-            }
-        })?;
+            })?;
 
         if !status.success() {
             return Err(FsError::BtrfsCommandFailed {
@@ -322,19 +324,12 @@ fn copy_dir_recursive<'a>(
             .await
             .map_err(|e| io_err(source, e))?;
 
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|e| io_err(source, e))?
-        {
+        while let Some(entry) = entries.next_entry().await.map_err(|e| io_err(source, e))? {
             let src_path = entry.path();
             let file_name = entry.file_name();
             let dst_path = target.join(&file_name);
 
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(|e| io_err(&src_path, e))?;
+            let file_type = entry.file_type().await.map_err(|e| io_err(&src_path, e))?;
 
             if file_type.is_dir() {
                 copy_dir_recursive(&src_path, &dst_path).await?;

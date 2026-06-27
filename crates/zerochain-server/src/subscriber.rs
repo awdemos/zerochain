@@ -16,11 +16,7 @@ use zerochain_cas::CasStore;
 /// Spawn the background subscriber task.
 ///
 /// Runs until the broker subscription ends or an unrecoverable error occurs.
-pub async fn spawn(
-    cas: CasStore,
-    broker: Arc<dyn Broker>,
-    workspace: PathBuf,
-) {
+pub async fn spawn(cas: CasStore, broker: Arc<dyn Broker>, workspace: PathBuf) {
     tracing::info!("starting background broker subscriber");
 
     let subject = "zerochain.*.*";

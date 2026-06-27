@@ -32,12 +32,14 @@ impl ServerState {
         }
     }
 
-    #[must_use] pub fn with_cas(mut self, cas: CasStore) -> Self {
+    #[must_use]
+    pub fn with_cas(mut self, cas: CasStore) -> Self {
         self.cas = Some(cas);
         self
     }
 
-    #[must_use] pub fn with_broker(mut self, broker: Arc<dyn Broker>) -> Self {
+    #[must_use]
+    pub fn with_broker(mut self, broker: Arc<dyn Broker>) -> Self {
         self.broker = Some(broker);
         self
     }
@@ -63,11 +65,13 @@ impl ServerState {
         Ok(())
     }
 
-    #[must_use] pub fn cas(&self) -> Option<&CasStore> {
+    #[must_use]
+    pub fn cas(&self) -> Option<&CasStore> {
         self.cas.as_ref()
     }
 
-    #[must_use] pub fn broker(&self) -> Option<&Arc<dyn Broker>> {
+    #[must_use]
+    pub fn broker(&self) -> Option<&Arc<dyn Broker>> {
         self.broker.as_ref()
     }
 }

@@ -178,7 +178,10 @@ pub async fn approve(
         }
     };
 
-    match handle.mark_stage_complete(id.clone(), stage_raw.clone()).await {
+    match handle
+        .mark_stage_complete(id.clone(), stage_raw.clone())
+        .await
+    {
         Ok(()) => {
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after approve");

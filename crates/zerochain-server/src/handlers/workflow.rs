@@ -12,12 +12,13 @@ use crate::state::ServerState;
 pub async fn list(State(state): State<ServerState>) -> impl IntoResponse {
     let registry = state.registry.read().await;
     let list = registry.list_workflows().await;
-    Json(list
-        .into_iter()
-        .map(|(id, status)| SimpleMessage {
-            message: format!("{id}: {status}"),
-        })
-        .collect::<Vec<_>>())
+    Json(
+        list.into_iter()
+            .map(|(id, status)| SimpleMessage {
+                message: format!("{id}: {status}"),
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 pub async fn init(
@@ -29,15 +30,13 @@ pub async fn init(
         return (
             StatusCode::BAD_REQUEST,
             Json(SimpleMessage {
-                message: "invalid workflow name: must be 1-128 chars, alphanumeric plus -_."
-                    .into(),
+                message: "invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into(),
             }),
         )
             .into_response();
     }
     let mut registry = state.registry.write().await;
-    match registry.init_workflow(body.name, body.template).await
-    {
+    match registry.init_workflow(body.name, body.template).await {
         Ok(wf) => {
             jj::init_repo(&state.workspace);
             let id = wf.id.clone();
@@ -54,10 +53,7 @@ pub async fn init(
     }
 }
 
-pub async fn get(
-    State(state): State<ServerState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+pub async fn get(State(state): State<ServerState>, Path(id): Path<String>) -> impl IntoResponse {
     let handle = {
         let mut registry = state.registry.write().await;
         match registry.get_or_create(&id).await {

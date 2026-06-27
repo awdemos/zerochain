@@ -61,12 +61,14 @@ impl LocalBackend {
     }
 
     /// Full filesystem path for a given CID.
-    #[must_use] pub fn path_for(&self, cid: &Cid) -> PathBuf {
+    #[must_use]
+    pub fn path_for(&self, cid: &Cid) -> PathBuf {
         self.base_dir.join(cid.relative_path())
     }
 
     /// Return the base directory.
-    #[must_use] pub fn base_dir(&self) -> &Path {
+    #[must_use]
+    pub fn base_dir(&self) -> &Path {
         &self.base_dir
     }
 }
@@ -85,7 +87,8 @@ impl StorageBackend for LocalBackend {
         let parent = path
             .parent()
             .ok_or_else(|| CasError::InvalidCid("CID path has no parent directory".into()))?;
-        fs::create_dir_all(parent).await
+        fs::create_dir_all(parent)
+            .await
             .map_err(|e| CasError::io(parent, e))?;
 
         let pid = std::process::id();
@@ -93,7 +96,8 @@ impl StorageBackend for LocalBackend {
         let hex = cid.as_hex();
         let temp_path = parent.join(format!(".tmp.{hex}.{pid}.{unique}"));
 
-        fs::write(&temp_path, data).await
+        fs::write(&temp_path, data)
+            .await
             .map_err(|e| CasError::io(&temp_path, e))?;
 
         match fs::rename(&temp_path, &path).await {
@@ -126,7 +130,8 @@ impl StorageBackend for LocalBackend {
         if !path.exists() {
             return Err(CasError::NotFound(cid.to_string()));
         }
-        let file = fs::File::open(&path).await
+        let file = fs::File::open(&path)
+            .await
             .map_err(|e| CasError::io(&path, e))?;
         Ok(Box::new(tokio::io::BufReader::new(file)))
     }
@@ -151,7 +156,9 @@ impl StorageBackend for LocalBackend {
                 Ok(None) => break,
                 Err(e) => return Err(CasError::io(&self.base_dir, e)),
             };
-            let metadata = entry.metadata().await
+            let metadata = entry
+                .metadata()
+                .await
                 .map_err(|e| CasError::io(entry.path(), e))?;
             if !metadata.is_dir() {
                 continue;
@@ -164,7 +171,8 @@ impl StorageBackend for LocalBackend {
             }
 
             let subdir = entry.path();
-            let mut sub_entries = fs::read_dir(&subdir).await
+            let mut sub_entries = fs::read_dir(&subdir)
+                .await
                 .map_err(|e| CasError::io(&subdir, e))?;
             loop {
                 let sub_entry = match sub_entries.next_entry().await {
@@ -172,7 +180,9 @@ impl StorageBackend for LocalBackend {
                     Ok(None) => break,
                     Err(e) => return Err(CasError::io(&subdir, e)),
                 };
-                let meta = sub_entry.metadata().await
+                let meta = sub_entry
+                    .metadata()
+                    .await
                     .map_err(|e| CasError::io(sub_entry.path(), e))?;
                 if !meta.is_file() {
                     continue;
@@ -227,9 +237,7 @@ mod tests {
         for _ in 0..10 {
             let backend = backend.clone();
             let content = content.to_vec();
-            handles.push(tokio::spawn(async move {
-                backend.put(&content).await
-            }));
+            handles.push(tokio::spawn(async move { backend.put(&content).await }));
         }
 
         let mut results = Vec::new();

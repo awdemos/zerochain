@@ -25,7 +25,11 @@ pub enum Commands {
         name: String,
         #[arg(short, long, help = "Path to workspace root")]
         path: Option<PathBuf>,
-        #[arg(short, long, help = "Comma-separated stage names (e.g. \"research,design,implement\")")]
+        #[arg(
+            short,
+            long,
+            help = "Comma-separated stage names (e.g. \"research,design,implement\")"
+        )]
         template: Option<String>,
     },
     #[command(about = "Execute the next pending stage (or a specific stage)")]

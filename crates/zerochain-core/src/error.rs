@@ -68,16 +68,12 @@ impl From<Error> for ZerochainError {
     fn from(err: Error) -> Self {
         match err {
             Error::Io { path, source } => ZerochainError::Io { path, source },
-            Error::InvalidStageName { name } => {
-                ZerochainError::Stage {
-                    message: format!("invalid stage name: {name}"),
-                }
-            }
-            Error::InvalidWorkflowName { name } => {
-                ZerochainError::Workflow {
-                    message: format!("invalid workflow name: {name}"),
-                }
-            }
+            Error::InvalidStageName { name } => ZerochainError::Stage {
+                message: format!("invalid stage name: {name}"),
+            },
+            Error::InvalidWorkflowName { name } => ZerochainError::Workflow {
+                message: format!("invalid workflow name: {name}"),
+            },
             Error::YamlParse { path, source } => ZerochainError::YamlParse {
                 message: format!("{path:?}: {source}"),
             },

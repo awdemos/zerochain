@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use tokio::io::AsyncRead;
 
@@ -18,7 +18,8 @@ pub struct Metrics {
 }
 
 impl Metrics {
-    #[must_use] pub fn snapshot(&self) -> MetricsSnapshot {
+    #[must_use]
+    pub fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
             puts: self.puts.load(Ordering::Relaxed),
             gets: self.gets.load(Ordering::Relaxed),
@@ -86,7 +87,8 @@ impl CasStore {
     }
 
     /// Return a snapshot of the current operation metrics.
-    #[must_use] pub fn metrics(&self) -> MetricsSnapshot {
+    #[must_use]
+    pub fn metrics(&self) -> MetricsSnapshot {
         self.metrics.snapshot()
     }
 
@@ -120,7 +122,8 @@ impl CasStore {
         self.backend.delete(cid).await
     }
 
-    #[must_use] pub fn location(&self) -> String {
+    #[must_use]
+    pub fn location(&self) -> String {
         self.backend.location()
     }
 }

@@ -30,14 +30,8 @@ impl S3Backend {
         access_key: &str,
         secret_key: &str,
     ) -> Result<Self> {
-        let credentials = Credentials::new(
-            Some(access_key),
-            Some(secret_key),
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| CasError::Configuration(format!("s3 credentials: {e}")))?;
+        let credentials = Credentials::new(Some(access_key), Some(secret_key), None, None, None)
+            .map_err(|e| CasError::Configuration(format!("s3 credentials: {e}")))?;
 
         let region = if let Some(url) = endpoint {
             Region::Custom {
@@ -68,7 +62,8 @@ impl S3Backend {
     pub fn from_env() -> Result<Self> {
         let bucket_name = std::env::var("ZEROCHAIN_CAS_S3_BUCKET")
             .map_err(|_| CasError::Configuration("ZEROCHAIN_CAS_S3_BUCKET not set".into()))?;
-        let region = std::env::var("ZEROCHAIN_CAS_S3_REGION").unwrap_or_else(|_| "us-east-1".into());
+        let region =
+            std::env::var("ZEROCHAIN_CAS_S3_REGION").unwrap_or_else(|_| "us-east-1".into());
         let endpoint = std::env::var("ZEROCHAIN_CAS_S3_ENDPOINT").ok();
         let access_key = std::env::var("ZEROCHAIN_CAS_S3_ACCESS_KEY")
             .map_err(|_| CasError::Configuration("ZEROCHAIN_CAS_S3_ACCESS_KEY not set".into()))?;
@@ -168,7 +163,10 @@ impl StorageBackend for S3Backend {
 
     async fn list(&self) -> Result<Vec<Cid>> {
         let mut cids = Vec::new();
-        let result = self.bucket.list(String::new(), None).await
+        let result = self
+            .bucket
+            .list(String::new(), None)
+            .await
             .map_err(|e| CasError::S3(format!("s3 list failed: {e}")))?;
 
         for object in result {
@@ -185,7 +183,10 @@ impl StorageBackend for S3Backend {
 
     async fn delete(&self, cid: &Cid) -> Result<()> {
         let key = Self::key_for(cid);
-        let response = self.bucket.delete_object(&key).await
+        let response = self
+            .bucket
+            .delete_object(&key)
+            .await
             .map_err(|e| CasError::S3(format!("s3 delete failed: {e}")))?;
 
         if response.status_code() == 404 {

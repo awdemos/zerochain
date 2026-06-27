@@ -5,7 +5,8 @@ use crate::plan::ExecutionPlan;
 use crate::stage::{Stage, StageId};
 use crate::task::Task;
 
-#[must_use] pub fn is_valid_workflow_name(name: &str) -> bool {
+#[must_use]
+pub fn is_valid_workflow_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
         && name
@@ -30,22 +31,32 @@ impl Workflow {
     /// Returns an error if the directory does not exist, contains invalid stage definitions,
     /// or is missing required files (e.g. `CONTEXT.md`).
     pub async fn from_dir(path: &Path) -> Result<Self> {
-        let metadata = tokio::fs::metadata(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?;
         if !metadata.is_dir() {
             return Err(Error::WorkflowNotFound {
                 path: path.to_path_buf(),
             });
         }
 
-        let id = path
-            .file_name().map_or_else(|| "unknown".to_string(), |n| n.to_string_lossy().to_string());
+        let id = path.file_name().map_or_else(
+            || "unknown".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        );
 
         let task = Self::find_task(path).await?;
 
         let mut stages = Vec::new();
-        let mut entries = tokio::fs::read_dir(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
+        let mut entries = tokio::fs::read_dir(path)
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| io_err(path.to_path_buf(), e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?
+        {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') {
                 continue;
@@ -54,7 +65,10 @@ impl Workflow {
                 continue;
             }
             let stage_path = entry.path();
-            let stage_meta = entry.metadata().await.map_err(|e| io_err(stage_path.clone(), e))?;
+            let stage_meta = entry
+                .metadata()
+                .await
+                .map_err(|e| io_err(stage_path.clone(), e))?;
             if !stage_meta.is_dir() {
                 continue;
             }
@@ -77,7 +91,8 @@ impl Workflow {
         })
     }
 
-    #[must_use] pub fn execution_plan(&self) -> ExecutionPlan {
+    #[must_use]
+    pub fn execution_plan(&self) -> ExecutionPlan {
         ExecutionPlan::from_stages(&self.stages)
     }
 
@@ -138,15 +153,18 @@ impl Workflow {
         Workflow::from_dir(&workflow_dir).await
     }
 
-    #[must_use] pub fn stage_by_id(&self, id: &StageId) -> Option<&Stage> {
+    #[must_use]
+    pub fn stage_by_id(&self, id: &StageId) -> Option<&Stage> {
         self.stages.iter().find(|s| s.id == *id)
     }
 
-    #[must_use] pub fn stage_by_name(&self, name: &str) -> Option<&Stage> {
+    #[must_use]
+    pub fn stage_by_name(&self, name: &str) -> Option<&Stage> {
         self.stages.iter().find(|s| s.id.name == name)
     }
 
-    #[must_use] pub fn stage_index(&self, raw: &str) -> Option<usize> {
+    #[must_use]
+    pub fn stage_index(&self, raw: &str) -> Option<usize> {
         self.stages.iter().position(|s| s.id.raw == raw)
     }
 
@@ -218,9 +236,15 @@ impl Workflow {
             }
         }
 
-        let mut entries = tokio::fs::read_dir(path).await.map_err(|e| crate::error::io_err(path, e))?;
+        let mut entries = tokio::fs::read_dir(path)
+            .await
+            .map_err(|e| crate::error::io_err(path, e))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| crate::error::io_err(path, e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| crate::error::io_err(path, e))?
+        {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("00_spec") {
                 let task_path = entry.path().join("task.md");
@@ -269,9 +293,8 @@ async fn create_stage_input_link(prev_output: &Path, input_dir: &Path) -> Result
         let src_display = src.display().to_string();
         let dst_display = dst.display().to_string();
 
-        let junction_result = tokio::task::spawn_blocking(move || {
-            junction::create(&src, &dst)
-        }).await;
+        let junction_result =
+            tokio::task::spawn_blocking(move || junction::create(&src, &dst)).await;
 
         match junction_result {
             Ok(Ok(())) => {
@@ -333,10 +356,7 @@ async fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
         let file_name = entry.file_name();
         let dst_path = target.join(&file_name);
 
-        let file_type = entry
-            .file_type()
-            .await
-            .map_err(|e| io_err(&src_path, e))?;
+        let file_type = entry.file_type().await.map_err(|e| io_err(&src_path, e))?;
 
         if file_type.is_dir() {
             Box::pin(copy_dir_recursive(&src_path, &dst_path)).await?;
@@ -463,10 +483,7 @@ mod tests {
             status: "todo".to_string(),
             priority: None,
             execution: Some(crate::task::TaskExecution {
-                stages: vec![
-                    "00_first".to_string(),
-                    "01_second".to_string(),
-                ],
+                stages: vec!["00_first".to_string(), "01_second".to_string()],
                 strategy: None,
             }),
             acceptance_criteria: vec![],

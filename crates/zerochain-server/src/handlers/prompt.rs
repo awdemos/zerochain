@@ -2,8 +2,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use zerochain_core::stage::StageId;
 use zerochain_broker::BrokerMessage;
+use zerochain_core::stage::StageId;
 
 use crate::handlers::{PromptRequest, SimpleMessage};
 use crate::state::ServerState;

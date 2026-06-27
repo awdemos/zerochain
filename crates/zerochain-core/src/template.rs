@@ -18,7 +18,8 @@ pub struct StageDef {
 }
 
 impl StageDef {
-    #[must_use] pub fn to_context_md(&self) -> String {
+    #[must_use]
+    pub fn to_context_md(&self) -> String {
         let mut frontmatter = format!("---\nrole: {}", self.role);
         if self.human_gate {
             frontmatter.push_str("\nhuman_gate: true");
@@ -40,16 +41,19 @@ pub struct Template {
 }
 
 impl Template {
-    #[must_use] pub fn stage_names(&self) -> Vec<String> {
+    #[must_use]
+    pub fn stage_names(&self) -> Vec<String> {
         self.stages.iter().map(|s| s.name.clone()).collect()
     }
 
     /// Returns the source directory for a given stage name, if this is a
     /// filesystem-tree template.
-    #[must_use] pub fn stage_source_dir(&self, stage_name: &str) -> Option<&Path> {
-        self.stages.iter().find(|s| s.name == stage_name).and_then(|s| {
-            s.source_dir.as_deref()
-        })
+    #[must_use]
+    pub fn stage_source_dir(&self, stage_name: &str) -> Option<&Path> {
+        self.stages
+            .iter()
+            .find(|s| s.name == stage_name)
+            .and_then(|s| s.source_dir.as_deref())
     }
 }
 
@@ -77,17 +81,20 @@ struct StageToml {
 }
 
 impl TemplateRegistry {
-    #[must_use] pub fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         let mut registry = Self::default();
         registry.register_builtins();
         registry
     }
 
-    #[must_use] pub fn get(&self, name: &str) -> Option<&Template> {
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Template> {
         self.templates.get(name)
     }
 
-    #[must_use] pub fn list(&self) -> Vec<&Template> {
+    #[must_use]
+    pub fn list(&self) -> Vec<&Template> {
         let mut list: Vec<_> = self.templates.values().collect();
         list.sort_by(|a, b| a.name.cmp(&b.name));
         list
@@ -170,8 +177,8 @@ impl TemplateRegistry {
 
             let context_path = stage_path.join("CONTEXT.md");
             let (role, body, human_gate) = if context_path.exists() {
-                let content = std::fs::read_to_string(&context_path)
-                    .map_err(LoadFromDirError::Io)?;
+                let content =
+                    std::fs::read_to_string(&context_path).map_err(LoadFromDirError::Io)?;
                 match Context::parse(&content) {
                     Ok(ctx) => (
                         ctx.frontmatter.role.unwrap_or_default(),
@@ -230,8 +237,11 @@ impl TemplateRegistry {
             let mut has_tree_stages = false;
             for entry in std::fs::read_dir(&path).map_err(LoadFromDirError::Io)? {
                 let entry = entry.map_err(LoadFromDirError::Io)?;
-                if entry.path().is_dir() &&
-                    entry.file_name().to_str().is_some_and(|n| StageId::parse(n).is_ok())
+                if entry.path().is_dir()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| StageId::parse(n).is_ok())
                 {
                     has_tree_stages = true;
                     break;
@@ -354,19 +364,21 @@ impl TemplateRegistry {
                 StageDef {
                     name: "00_spec".into(),
                     role: "product engineer".into(),
-                    body: "Analyze the requirements in the input. Define clear acceptance criteria, \
+                    body:
+                        "Analyze the requirements in the input. Define clear acceptance criteria, \
                            edge cases, and constraints. Output the specification to result.md."
-                        .into(),
+                            .into(),
                     human_gate: false,
                     source_dir: None,
                 },
                 StageDef {
                     name: "01_design".into(),
                     role: "software architect".into(),
-                    body: "Design the solution based on the specification. Define the architecture, \
+                    body:
+                        "Design the solution based on the specification. Define the architecture, \
                            key data structures, interfaces, and error handling strategy. \
                            Output the design document to result.md."
-                        .into(),
+                            .into(),
                     human_gate: true,
                     source_dir: None,
                 },
@@ -461,10 +473,7 @@ mod tests {
     fn stage_names_method() {
         let reg = TemplateRegistry::new();
         let tpl = reg.get("code-review").unwrap();
-        assert_eq!(
-            tpl.stage_names(),
-            vec!["00_spec", "01_review", "02_report"]
-        );
+        assert_eq!(tpl.stage_names(), vec!["00_spec", "01_review", "02_report"]);
     }
 
     #[test]
@@ -534,7 +543,9 @@ human_gate = true
         let mut reg = TemplateRegistry::new();
         reg.load_from_dir(dir.path()).unwrap();
 
-        let tpl = reg.get("custom-task").expect("custom-task should be loaded");
+        let tpl = reg
+            .get("custom-task")
+            .expect("custom-task should be loaded");
         assert_eq!(tpl.description, "A custom task template");
         assert_eq!(tpl.stages.len(), 2);
         assert_eq!(tpl.stages[0].name, "00_analyze");
@@ -598,7 +609,10 @@ body = "Check things."
         let result = reg.load_from_dir(dir.path());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("parse error"), "expected parse error, got: {err}");
+        assert!(
+            err.contains("parse error"),
+            "expected parse error, got: {err}"
+        );
     }
 
     #[test]
@@ -712,7 +726,10 @@ body = "Middle step."
         reg.load_from_dir(dir.path()).unwrap();
 
         let tpl = reg.get("auto-tree").unwrap();
-        assert!(tpl.stages[0].source_dir.is_some(), "should detect tree layout");
+        assert!(
+            tpl.stages[0].source_dir.is_some(),
+            "should detect tree layout"
+        );
         assert!(tpl.source_root.is_some());
     }
 
@@ -765,9 +782,6 @@ body = "Middle step."
         reg.load_from_tree(dir.path()).unwrap();
 
         let tpl = reg.get("multi").unwrap();
-        assert_eq!(
-            tpl.stage_names(),
-            vec!["00_first", "01_mid", "02_last"]
-        );
+        assert_eq!(tpl.stage_names(), vec!["00_first", "01_mid", "02_last"]);
     }
 }

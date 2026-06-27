@@ -50,11 +50,7 @@ async fn app_with_key(workspace: &Path, key: &str) -> axum::Router {
 }
 
 async fn body_string(body: Body) -> String {
-    let bytes = body
-        .collect()
-        .await
-        .expect("collect body")
-        .to_bytes();
+    let bytes = body.collect().await.expect("collect body").to_bytes();
     String::from_utf8(bytes.to_vec()).expect("utf8 body")
 }
 
@@ -105,11 +101,7 @@ async fn init_workflow_creates_and_lists() {
     let tmp = TempDir::new().expect("tempdir");
     let state = ServerState::new(tmp.path()).await.with_auth_disabled();
 
-    let req = make_request(
-        "POST",
-        "/v1/workflows",
-        Some(r#"{"name": "test-wf"}"#),
-    );
+    let req = make_request("POST", "/v1/workflows", Some(r#"{"name": "test-wf"}"#));
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
@@ -222,11 +214,7 @@ async fn read_output_missing_returns_404() {
     let tmp = TempDir::new().expect("tempdir");
     let state = ServerState::new(tmp.path()).await.with_auth_disabled();
 
-    let req = make_request(
-        "POST",
-        "/v1/workflows",
-        Some(r#"{"name": "output-test"}"#),
-    );
+    let req = make_request("POST", "/v1/workflows", Some(r#"{"name": "output-test"}"#));
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
@@ -248,8 +236,17 @@ async fn read_output_returns_content() {
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let handle = state.registry.write().await.get_or_create("read-out").await.expect("handle");
-    let wf = handle.get_workflow("read-out".to_string()).await.expect("workflow");
+    let handle = state
+        .registry
+        .write()
+        .await
+        .get_or_create("read-out")
+        .await
+        .expect("handle");
+    let wf = handle
+        .get_workflow("read-out".to_string())
+        .await
+        .expect("workflow");
     let stage = wf.stage_by_name("spec").expect("stage");
     let result_path = stage.output_path.join("result.md");
     tokio::fs::write(&result_path, "hello world")
@@ -318,8 +315,17 @@ async fn read_reasoning_returns_content() {
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let handle = state.registry.write().await.get_or_create("reason-read").await.expect("handle");
-    let wf = handle.get_workflow("reason-read".to_string()).await.expect("workflow");
+    let handle = state
+        .registry
+        .write()
+        .await
+        .get_or_create("reason-read")
+        .await
+        .expect("handle");
+    let wf = handle
+        .get_workflow("reason-read".to_string())
+        .await
+        .expect("workflow");
     let stage = wf.stage_by_name("spec").expect("stage");
     let reasoning_path = stage.output_path.join("reasoning.md");
     tokio::fs::create_dir_all(&stage.output_path)
@@ -448,16 +454,21 @@ async fn run_next_returns_no_pending_when_complete() {
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
-    let req = make_request(
-        "POST",
-        "/v1/workflows/run-complete/approve/00_spec",
-        None,
-    );
+    let req = make_request("POST", "/v1/workflows/run-complete/approve/00_spec", None);
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let handle = state.registry.write().await.get_or_create("run-complete").await.expect("handle");
-    handle.reload_workflow("run-complete".to_string()).await.expect("reload");
+    let handle = state
+        .registry
+        .write()
+        .await
+        .get_or_create("run-complete")
+        .await
+        .expect("handle");
+    handle
+        .reload_workflow("run-complete".to_string())
+        .await
+        .expect("reload");
 
     let req = make_request("POST", "/v1/workflows/run-complete/run", None);
     let resp = send!(app_from_state(&state), req);
@@ -465,7 +476,10 @@ async fn run_next_returns_no_pending_when_complete() {
 
     let body: serde_json::Value =
         serde_json::from_str(&body_string(resp.into_body()).await).expect("json");
-    assert!(body["message"].as_str().unwrap().contains("no pending stages"));
+    assert!(body["message"]
+        .as_str()
+        .unwrap()
+        .contains("no pending stages"));
 }
 
 #[tokio::test]
@@ -493,11 +507,7 @@ async fn run_specific_stage_invalid_id_returns_400() {
     let tmp = TempDir::new().expect("tempdir");
     let state = ServerState::new(tmp.path()).await.with_auth_disabled();
 
-    let req = make_request(
-        "POST",
-        "/v1/workflows",
-        Some(r#"{"name": "bad-stage-id"}"#),
-    );
+    let req = make_request("POST", "/v1/workflows", Some(r#"{"name": "bad-stage-id"}"#));
     let resp = send!(app_from_state(&state), req);
     assert_eq!(resp.status(), StatusCode::CREATED);
 
@@ -629,23 +639,33 @@ mod e2e {
         let resp = send!(app_from_state(&state), req);
         let body: serde_json::Value =
             serde_json::from_str(&body_string(resp.into_body()).await).expect("json");
-        assert!(body["stages"].as_array().unwrap().iter().all(|s| s["complete"] == true));
+        assert!(body["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["complete"] == true));
 
         let req = make_request("POST", "/v1/workflows/e2e-run/run", None);
         let resp = send!(app_from_state(&state), req);
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value =
             serde_json::from_str(&body_string(resp.into_body()).await).expect("json");
-        assert!(body["message"].as_str().unwrap().contains("no pending stages"));
-
-
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("no pending stages"));
     }
 }
 
 mod auth {
     use super::*;
 
-    fn make_authed_request(method: &str, uri: &str, body: Option<&str>, key: &str) -> Request<Body> {
+    fn make_authed_request(
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+        key: &str,
+    ) -> Request<Body> {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)

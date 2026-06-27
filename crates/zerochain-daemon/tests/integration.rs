@@ -3,27 +3,28 @@
 //! Uses the underlying library crates (zerochain-core, zerochain-fs, zerochain-cas)
 //! directly since the daemon is a binary crate.
 
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 
 use tempfile::TempDir;
+use zerochain_cas::CasStore;
+use zerochain_core::context::Context;
 use zerochain_core::task::{Task, TaskExecution};
 use zerochain_core::workflow::Workflow;
-use zerochain_core::context::Context;
-use zerochain_fs::atomic::{
-    acquire_lock, clean_output, is_complete, is_error, is_locked,
-    mark_complete, mark_error, mark_executing,
-};
-use zerochain_cas::CasStore;
 use zerochain_engine::AppState;
-use zerochain_llm::{
-    CompleteResponse, LLM, LLMConfig, Message, ProviderId, Role,
+use zerochain_fs::atomic::{
+    acquire_lock, clean_output, is_complete, is_error, is_locked, mark_complete, mark_error,
+    mark_executing,
 };
+use zerochain_llm::{CompleteResponse, LLMConfig, Message, ProviderId, Role, LLM};
 
 fn make_task(id: &str, stages: Vec<&str>) -> Task {
     Task::builder(id, id)
         .execution(TaskExecution::new(
-            stages.into_iter().map(std::string::ToString::to_string).collect(),
+            stages
+                .into_iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             Some("sequential".to_string()),
         ))
         .build()
@@ -33,19 +34,20 @@ fn workflow_dir(workspace: &Path) -> std::path::PathBuf {
     workspace.join(".zerochain").join("workflows")
 }
 
-async fn init_workflow(
-    workspace: &Path,
-    task: &Task,
-) -> (Workflow, std::path::PathBuf) {
+async fn init_workflow(workspace: &Path, task: &Task) -> (Workflow, std::path::PathBuf) {
     let base = workflow_dir(workspace);
-    tokio::fs::create_dir_all(&base).await.expect("create workflow base dir");
+    tokio::fs::create_dir_all(&base)
+        .await
+        .expect("create workflow base dir");
     let wf = Workflow::init(task, &base).await.expect("workflow init");
     let root = wf.root.clone();
     (wf, root)
 }
 
 async fn reload_workflow(root: &Path) -> Workflow {
-    Workflow::from_dir(root).await.expect("reload workflow from disk")
+    Workflow::from_dir(root)
+        .await
+        .expect("reload workflow from disk")
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +64,20 @@ async fn workflow_init_creates_directory_structure() {
 
     let expected_stages = ["research", "design", "implement"];
     for name in &expected_stages {
-        let stage = wf.stage_by_name(name)
+        let stage = wf
+            .stage_by_name(name)
             .unwrap_or_else(|| panic!("stage {name} not found"));
-        assert!(stage.path.is_dir(), "stage dir {} missing", stage.path.display());
+        assert!(
+            stage.path.is_dir(),
+            "stage dir {} missing",
+            stage.path.display()
+        );
         assert!(stage.input_path.is_dir(), "input/ missing for {name}");
         assert!(stage.output_path.is_dir(), "output/ missing for {name}");
-        assert!(stage.context_path.is_file(), "CONTEXT.md missing for {name}");
+        assert!(
+            stage.context_path.is_file(),
+            "CONTEXT.md missing for {name}"
+        );
     }
 }
 
@@ -78,12 +88,10 @@ async fn workflow_init_creates_directory_structure() {
 #[tokio::test]
 async fn workflow_init_parallel_stages() {
     let tmp = TempDir::new().expect("tempdir");
-    let task = make_task("par-task", vec![
-        "01_research",
-        "02a_design",
-        "02b_prototype",
-        "03_review",
-    ]);
+    let task = make_task(
+        "par-task",
+        vec!["01_research", "02a_design", "02b_prototype", "03_review"],
+    );
     let (wf, _root) = init_workflow(tmp.path(), &task).await;
 
     assert_eq!(wf.stages.len(), 4);
@@ -98,11 +106,20 @@ async fn workflow_init_parallel_stages() {
     let parallel_group = &plan.groups[1];
     assert_eq!(parallel_group.stages.len(), 2);
     assert!(parallel_group.stages.iter().any(|s| s.raw == "02a_design"));
-    assert!(parallel_group.stages.iter().any(|s| s.raw == "02b_prototype"));
+    assert!(parallel_group
+        .stages
+        .iter()
+        .any(|s| s.raw == "02b_prototype"));
 
     let review_node = plan.stage_map.get("03_review").expect("review node");
-    assert!(review_node.dependencies.iter().any(|d| d.raw == "02a_design"));
-    assert!(review_node.dependencies.iter().any(|d| d.raw == "02b_prototype"));
+    assert!(review_node
+        .dependencies
+        .iter()
+        .any(|d| d.raw == "02a_design"));
+    assert!(review_node
+        .dependencies
+        .iter()
+        .any(|d| d.raw == "02b_prototype"));
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +133,9 @@ async fn stage_lifecycle_complete() {
     let (wf, root) = init_workflow(tmp.path(), &task).await;
 
     let stage1 = wf.stage_by_name("alpha").expect("stage 1");
-    mark_complete(&stage1.path, None).await.expect("mark complete");
+    mark_complete(&stage1.path, None)
+        .await
+        .expect("mark complete");
 
     let reloaded = reload_workflow(&root).await;
     let reloaded_s1 = reloaded.stage_by_name("alpha").expect("reloaded stage 1");
@@ -143,7 +162,9 @@ async fn stage_lifecycle_error_and_retry() {
 
     let stage1 = wf.stage_by_name("first").expect("stage 1");
 
-    mark_error(&stage1.path, "test error").await.expect("mark error");
+    mark_error(&stage1.path, "test error")
+        .await
+        .expect("mark error");
 
     assert!(is_error(&stage1.path).await);
     assert!(!is_complete(&stage1.path).await);
@@ -153,7 +174,9 @@ async fn stage_lifecycle_error_and_retry() {
     assert_eq!(err_content, "test error");
     assert!(!stage1.path.join(".complete").exists());
 
-    mark_complete(&stage1.path, None).await.expect("mark complete after error");
+    mark_complete(&stage1.path, None)
+        .await
+        .expect("mark complete after error");
 
     assert!(is_complete(&stage1.path).await);
     assert!(!is_error(&stage1.path).await);
@@ -167,7 +190,10 @@ async fn stage_lifecycle_error_and_retry() {
 #[tokio::test]
 async fn execution_plan_ordering() {
     let tmp = TempDir::new().expect("tempdir");
-    let task = make_task("ordering", vec!["01_research", "02_design", "03_implement", "04_review"]);
+    let task = make_task(
+        "ordering",
+        vec!["01_research", "02_design", "03_implement", "04_review"],
+    );
     let (wf, _root) = init_workflow(tmp.path(), &task).await;
 
     let mut plan = wf.execution_plan();
@@ -213,7 +239,9 @@ async fn human_gate_blocks_execution() {
     let reloaded_s2 = reloaded.stage_by_name("review").expect("reloaded stage 2");
     assert!(reloaded_s2.human_gate);
 
-    mark_complete(&reloaded_s2.path, None).await.expect("mark complete");
+    mark_complete(&reloaded_s2.path, None)
+        .await
+        .expect("mark complete");
     assert!(is_complete(&reloaded_s2.path).await);
 }
 
@@ -266,7 +294,9 @@ async fn output_cleanup_before_execution() {
     let tmp = TempDir::new().expect("tempdir");
     let stage_dir = tmp.path().join("01_stage");
     let output = stage_dir.join("output");
-    tokio::fs::create_dir_all(&output).await.expect("mkdir output");
+    tokio::fs::create_dir_all(&output)
+        .await
+        .expect("mkdir output");
     tokio::fs::write(output.join("file1.txt"), b"data1")
         .await
         .expect("write file1");
@@ -295,7 +325,9 @@ async fn marker_mutual_exclusivity() {
     let stage_dir = tmp.path().join("01_stage");
     tokio::fs::create_dir_all(&stage_dir).await.expect("mkdir");
 
-    mark_complete(&stage_dir, None).await.expect("mark complete");
+    mark_complete(&stage_dir, None)
+        .await
+        .expect("mark complete");
     assert!(stage_dir.join(".complete").exists());
     assert!(!stage_dir.join(".error").exists());
 
@@ -308,7 +340,9 @@ async fn marker_mutual_exclusivity() {
     assert!(stage_dir.join(".executing").exists());
     assert!(stage_dir.join(".error").exists());
 
-    mark_complete(&stage_dir, None).await.expect("mark complete final");
+    mark_complete(&stage_dir, None)
+        .await
+        .expect("mark complete final");
     assert!(stage_dir.join(".complete").exists());
     assert!(!stage_dir.join(".executing").exists());
     assert!(!stage_dir.join(".error").exists());
@@ -341,7 +375,9 @@ async fn workflow_status_listing() {
     assert_eq!(workflows.len(), 2);
 
     for stage in &wf1.stages {
-        mark_complete(&stage.path, None).await.expect("mark complete");
+        mark_complete(&stage.path, None)
+            .await
+            .expect("mark complete");
     }
 
     let alpha = Workflow::from_dir(&root1).await.expect("reload alpha");
@@ -357,12 +393,9 @@ async fn workflow_status_listing() {
 
 #[tokio::test]
 async fn context_inheritance() {
-    let parent_ctx = Context::parse(
-        "---\nrole: researcher\ntimeout: 60\n---\n# Stage 1\n",
-    ).expect("parse parent");
-    let child_ctx = Context::parse(
-        "---\n---\n# Stage 2\n",
-    ).expect("parse child");
+    let parent_ctx = Context::parse("---\nrole: researcher\ntimeout: 60\n---\n# Stage 1\n")
+        .expect("parse parent");
+    let child_ctx = Context::parse("---\n---\n# Stage 2\n").expect("parse child");
 
     let merged = child_ctx.flatten(Some(&parent_ctx));
     assert_eq!(merged.frontmatter.role.as_deref(), Some("researcher"));
@@ -405,7 +438,9 @@ async fn full_workflow_lifecycle() {
     for stage in &wf.stages {
         let guard = acquire_lock(&stage.path).await.expect("acquire lock");
         clean_output(&stage.path).await.expect("clean output");
-        mark_complete(&stage.path, None).await.expect("mark complete");
+        mark_complete(&stage.path, None)
+            .await
+            .expect("mark complete");
         drop(guard);
     }
 
@@ -420,8 +455,16 @@ async fn full_workflow_lifecycle() {
     assert!(final_wf.execution_plan().is_complete());
 
     for stage in &final_wf.stages {
-        assert!(!stage.path.join(".lock").exists(), "stale .lock in {}", stage.id.raw);
-        assert!(!stage.path.join(".executing").exists(), "stale .executing in {}", stage.id.raw);
+        assert!(
+            !stage.path.join(".lock").exists(),
+            "stale .lock in {}",
+            stage.id.raw
+        );
+        assert!(
+            !stage.path.join(".executing").exists(),
+            "stale .executing in {}",
+            stage.id.raw
+        );
     }
 }
 
@@ -435,7 +478,9 @@ struct MockLLM {
 
 impl MockLLM {
     fn new(content: impl Into<String>) -> Self {
-        Self { response_content: content.into() }
+        Self {
+            response_content: content.into(),
+        }
     }
 }
 
@@ -472,10 +517,18 @@ impl LLM for MockLLM {
         Ok(CompleteResponse::new(content))
     }
 
-    fn supports_multimodal(&self) -> bool { false }
-    fn context_window(&self) -> usize { 128_000 }
-    async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn supports_multimodal(&self) -> bool {
+        false
+    }
+    fn context_window(&self) -> usize {
+        128_000
+    }
+    async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> {
+        Ok(())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[tokio::test]
@@ -486,9 +539,12 @@ async fn execute_stage_writes_result_from_llm() {
 
     let stage1 = wf.stage_by_name("analyze").expect("stage 1");
 
-    tokio::fs::write(stage1.input_path.join("data.md"), "Mock analysis result from LLM.")
-        .await
-        .expect("write input");
+    tokio::fs::write(
+        stage1.input_path.join("data.md"),
+        "Mock analysis result from LLM.",
+    )
+    .await
+    .expect("write input");
 
     let mut state = AppState::new(tmp.path(), None).await;
     let mock = MockLLM::new("Mock analysis result from LLM.");
@@ -502,7 +558,10 @@ async fn execute_stage_writes_result_from_llm() {
     let content = tokio::fs::read_to_string(&result_path)
         .await
         .expect("read result.md");
-    assert_eq!(content, "MOCK RECEIVED: --- data.md ---\nMock analysis result from LLM.");
+    assert_eq!(
+        content,
+        "MOCK RECEIVED: --- data.md ---\nMock analysis result from LLM."
+    );
 }
 
 #[tokio::test]
@@ -519,9 +578,12 @@ async fn execute_stage_passes_context_to_llm() {
     .await
     .expect("write context");
 
-    tokio::fs::write(stage.input_path.join("previous.md"), "Here is the prior output.")
-        .await
-        .expect("write input");
+    tokio::fs::write(
+        stage.input_path.join("previous.md"),
+        "Here is the prior output.",
+    )
+    .await
+    .expect("write input");
 
     let echo_mock = MockLLM::new(String::new());
     let mut state = AppState::new(tmp.path(), None).await;
@@ -534,7 +596,10 @@ async fn execute_stage_passes_context_to_llm() {
     let content = tokio::fs::read_to_string(&result_path)
         .await
         .expect("read result");
-    assert!(content.contains("Here is the prior output."), "should pass input files to LLM");
+    assert!(
+        content.contains("Here is the prior output."),
+        "should pass input files to LLM"
+    );
 }
 
 #[tokio::test]
@@ -544,7 +609,9 @@ async fn execute_stage_handles_missing_context_gracefully() {
     let (wf, _root) = init_workflow(tmp.path(), &task).await;
 
     let stage = wf.stage_by_name("step").expect("stage 1");
-    tokio::fs::remove_file(&stage.context_path).await.expect("remove context");
+    tokio::fs::remove_file(&stage.context_path)
+        .await
+        .expect("remove context");
 
     let mock = MockLLM::new("No context needed.");
     let mut state = AppState::new(tmp.path(), None).await;
@@ -620,10 +687,18 @@ async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
             Ok(resp)
         }
 
-        fn supports_multimodal(&self) -> bool { false }
-        fn context_window(&self) -> usize { 128_000 }
-        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn supports_multimodal(&self) -> bool {
+            false
+        }
+        fn context_window(&self) -> usize {
+            128_000
+        }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> {
+            Ok(())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     let tmp = TempDir::new().expect("tempdir");
@@ -681,10 +756,18 @@ async fn execute_stage_kimi_k2_no_capture_skips_reasoning_file() {
             Ok(resp)
         }
 
-        fn supports_multimodal(&self) -> bool { false }
-        fn context_window(&self) -> usize { 128_000 }
-        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn supports_multimodal(&self) -> bool {
+            false
+        }
+        fn context_window(&self) -> usize {
+            128_000
+        }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> {
+            Ok(())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     let tmp = TempDir::new().expect("tempdir");
@@ -735,10 +818,18 @@ async fn execute_stage_default_profile_no_reasoning_file() {
             Ok(resp)
         }
 
-        fn supports_multimodal(&self) -> bool { false }
-        fn context_window(&self) -> usize { 128_000 }
-        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> { Ok(()) }
-        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn supports_multimodal(&self) -> bool {
+            false
+        }
+        fn context_window(&self) -> usize {
+            128_000
+        }
+        async fn health_check(&self) -> Result<(), zerochain_llm::LLMError> {
+            Ok(())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
     }
 
     let tmp = TempDir::new().expect("tempdir");
