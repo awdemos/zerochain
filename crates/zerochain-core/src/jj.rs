@@ -425,28 +425,37 @@ pub fn init_repo(workspace: &Path) -> bool {
     }
 }
 
-/// Commit current changes with the given message.
-pub fn auto_commit(workspace: &Path, message: &str) {
-    let result = Command::new("jj")
+fn run_jj_commit(workspace: &Path, message: &str) -> Result<()> {
+    let output = Command::new("jj")
         .args(["commit", "-m", message])
         .current_dir(workspace)
-        .output();
+        .output()
+        .map_err(|e| Error::JjError {
+            message: format!("failed to spawn jj commit: {e}"),
+        })?;
 
-    match result {
-        Ok(output) if output.status.success() => {
-            tracing::debug!(message, "jj auto-commit");
-        }
-        Ok(output) => {
-            tracing::warn!(
-                stderr = %String::from_utf8_lossy(&output.stderr),
-                message,
-                "jj commit failed"
-            );
-        }
-        Err(e) => {
-            tracing::debug!("jj not available for commit: {e}");
-        }
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::JjError {
+            message: format!(
+                "jj commit failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        })
     }
+}
+
+/// Commit current changes with the given message.
+pub fn auto_commit(workspace: &Path, message: &str) {
+    if let Err(e) = run_jj_commit(workspace, message) {
+        tracing::warn!(error = %e, message, "jj auto-commit failed");
+    }
+}
+
+/// Commit current changes with the given message, returning an error on failure.
+pub fn auto_commit_result(workspace: &Path, message: &str) -> Result<()> {
+    run_jj_commit(workspace, message)
 }
 
 /// Commit with a stage-complete message.
@@ -457,12 +466,36 @@ pub fn commit_stage_complete(workspace: &Path, workflow_id: &str, stage_raw: &st
     );
 }
 
+/// Commit with a stage-complete message, returning an error on failure.
+pub fn commit_stage_complete_result(
+    workspace: &Path,
+    workflow_id: &str,
+    stage_raw: &str,
+) -> Result<()> {
+    auto_commit_result(
+        workspace,
+        &format!("stage {stage_raw} complete: {workflow_id}"),
+    )
+}
+
 /// Commit with a stage-error message.
 pub fn commit_stage_error(workspace: &Path, workflow_id: &str, stage_raw: &str) {
     auto_commit(
         workspace,
         &format!("stage {stage_raw} error: {workflow_id}"),
     );
+}
+
+/// Commit with a stage-error message, returning an error on failure.
+pub fn commit_stage_error_result(
+    workspace: &Path,
+    workflow_id: &str,
+    stage_raw: &str,
+) -> Result<()> {
+    auto_commit_result(
+        workspace,
+        &format!("stage {stage_raw} error: {workflow_id}"),
+    )
 }
 
 #[cfg(test)]
