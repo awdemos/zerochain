@@ -128,14 +128,18 @@ async fn run_stage_by_id(
 
     match result {
         Ok(()) => {
-            jj::commit_stage_complete(&state.workspace, id, &stage_raw);
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, id, &stage_raw) {
+                tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after stage completion");
+            }
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} complete"),
             })
             .into_response()
         }
         Err(e) => {
-            jj::commit_stage_error(&state.workspace, id, &stage_raw);
+            if let Err(e2) = jj::commit_stage_error_result(&state.workspace, id, &stage_raw) {
+                tracing::warn!(error = %e2, workflow = %id, stage = %stage_raw, "jj commit failed after stage error");
+            }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(SimpleMessage {
@@ -186,7 +190,9 @@ pub async fn approve(
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after approve");
             }
-            jj::commit_stage_complete(&state.workspace, &id, &stage_raw);
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw) {
+                tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after approve");
+            }
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} approved"),
             })
@@ -242,7 +248,9 @@ pub async fn reject(
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after reject");
             }
-            jj::commit_stage_error(&state.workspace, &id, &stage_raw);
+            if let Err(e) = jj::commit_stage_error_result(&state.workspace, &id, &stage_raw) {
+                tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after reject");
+            }
             Json(SimpleMessage {
                 message: format!("stage {stage_raw} rejected"),
             })
