@@ -219,6 +219,79 @@ impl Workflow {
         Ok(())
     }
 
+    /// Refresh a single stage from disk and reconcile any stages that were
+    /// added or removed by a Lua hook. This avoids the cost of re-reading every
+    /// stage directory via `Workflow::from_dir` when only one stage mutated.
+    #[tracing::instrument(skip(self), fields(stage = %stage_raw))]
+    pub async fn refresh_stage(&mut self, stage_raw: &str) -> Result<()> {
+        let start = std::time::Instant::now();
+        let sid = StageId::parse(stage_raw).map_err(|_| Error::InvalidStageName {
+            name: stage_raw.to_string(),
+        })?;
+        let mut target_path = None;
+        if let Some(idx) = self.stage_index(stage_raw) {
+            let path = self.stages[idx].path.clone();
+            target_path = Some((idx, path));
+        }
+
+        // Remove in-memory stages whose directories no longer exist.
+        let mut i = 0;
+        while i < self.stages.len() {
+            let path = &self.stages[i].path;
+            match tokio::fs::metadata(path).await {
+                Ok(m) if m.is_dir() => i += 1,
+                _ => {
+                    tracing::debug!(stage = %self.stages[i].id.raw, "removing stage that no longer exists on disk");
+                    self.stages.remove(i);
+                }
+            }
+        }
+
+        // Add any new stage directories not currently loaded.
+        let mut entries = tokio::fs::read_dir(&self.root)
+            .await
+            .map_err(|e| io_err(self.root.clone(), e))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| io_err(self.root.clone(), e))?
+        {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || StageId::parse(&name).is_err() {
+                continue;
+            }
+            let path = entry.path();
+            let is_dir = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+            if !is_dir {
+                continue;
+            }
+            if self.stage_index(&name).is_none() {
+                let new_stage = Stage::from_dir(&path).await?;
+                self.stages.push(new_stage);
+            }
+        }
+
+        // Refresh the executed stage's marker state.
+        let refreshed_idx = target_path
+            .and_then(|(old_idx, _)| {
+                self.stages
+                    .get(old_idx)
+                    .map(|s| s.id.raw.clone())
+                    .and_then(|raw| self.stage_index(&raw))
+            })
+            .or_else(|| self.stage_index(&sid.raw));
+        if let Some(idx) = refreshed_idx {
+            self.stages[idx].refresh_markers().await?;
+        }
+
+        self.stages.sort_by(|a, b| a.id.cmp(&b.id));
+        tracing::info!(stage = %stage_raw, stages = self.stages.len(), elapsed_ms = start.elapsed().as_millis(), "refreshed stage");
+        Ok(())
+    }
+
     async fn find_task(path: &Path) -> Result<Option<Task>> {
         let candidates = ["task.md", "TASK.md", "Backlog.md", "backlog.md"];
         for candidate in candidates {
