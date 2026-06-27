@@ -10,6 +10,8 @@ pub struct ContainerConfig {
     pub env_vars: Vec<(String, String)>,
     pub command: Vec<String>,
     pub workspace_root: PathBuf,
+    pub workflow_id: String,
+    pub stage_id: String,
 }
 
 #[non_exhaustive]
@@ -263,6 +265,8 @@ mod tests {
             env_vars: vec![("KEY".into(), "VALUE".into())],
             command: vec!["echo".into(), "hello".into()],
             workspace_root: PathBuf::from("/tmp/workspace"),
+            workflow_id: "wf".into(),
+            stage_id: "00_spec".into(),
         };
         assert_eq!(config.image, "test:latest");
         assert_eq!(config.env_vars.len(), 1);
