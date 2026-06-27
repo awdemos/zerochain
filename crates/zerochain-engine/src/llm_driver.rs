@@ -224,21 +224,29 @@ async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
         .map_err(|e| DaemonError::io(input_path, e))?
     {
         let path = entry.path();
-        if path.is_file() {
-            match tokio::fs::read_to_string(&path).await {
-                Ok(content) => {
-                    if let Some(name) = path.file_name() {
-                        parts.push(format!("--- {} ---\n{}", name.to_string_lossy(), content));
-                        files_read += 1;
-                    }
+        let is_file = match entry.metadata().await {
+            Ok(m) => m.is_file(),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "skipping entry with unreadable metadata");
+                continue;
+            }
+        };
+        if !is_file {
+            continue;
+        }
+        match tokio::fs::read_to_string(&path).await {
+            Ok(content) => {
+                if let Some(name) = path.file_name() {
+                    parts.push(format!("--- {} ---\n{}", name.to_string_lossy(), content));
+                    files_read += 1;
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "skipping non-text input file"
-                    );
-                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "skipping non-text input file"
+                );
             }
         }
     }
