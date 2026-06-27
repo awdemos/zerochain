@@ -24,6 +24,7 @@ pub struct LLMStageDriver<'a> {
 }
 
 impl<'a> LLMStageDriver<'a> {
+    #[tracing::instrument(skip(self, workflows), fields(workflow_id, stage_id = %self.stage.id.raw))]
     pub async fn execute(
         &self,
         workflows: &mut HashMap<String, Workflow>,
@@ -204,6 +205,7 @@ fn resolve_capture_reasoning(ctx: &StageContext) -> bool {
 }
 
 async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
+    let start = std::time::Instant::now();
     match tokio::fs::metadata(input_path).await {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
@@ -214,6 +216,7 @@ async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
         .await
         .map_err(|e| DaemonError::io(input_path, e))?;
     let mut parts = Vec::new();
+    let mut files_read = 0usize;
 
     while let Some(entry) = entries
         .next_entry()
@@ -226,6 +229,7 @@ async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
                 Ok(content) => {
                     if let Some(name) = path.file_name() {
                         parts.push(format!("--- {} ---\n{}", name.to_string_lossy(), content));
+                        files_read += 1;
                     }
                 }
                 Err(e) => {
@@ -239,6 +243,12 @@ async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
         }
     }
 
+    tracing::info!(
+        path = %input_path.display(),
+        files_read,
+        elapsed_ms = start.elapsed().as_millis(),
+        "read stage input files"
+    );
     Ok(parts.join("\n\n"))
 }
 
@@ -247,6 +257,7 @@ async fn assemble_messages(
     input_content: &str,
     stage: &Stage,
 ) -> Vec<Message> {
+    let start = std::time::Instant::now();
     let mut messages = Vec::new();
 
     let mut system_prompt = String::new();
@@ -316,6 +327,13 @@ async fn assemble_messages(
         ));
     }
 
+    tracing::info!(
+        stage = %stage.id.raw,
+        messages = messages.len(),
+        elapsed_ms = start.elapsed().as_millis(),
+        "assembled LLM messages"
+    );
+
     messages
 }
 
@@ -324,6 +342,7 @@ async fn write_stage_output(
     response: &zerochain_llm::CompleteResponse,
     stage_ctx: &LlmStageContext,
 ) -> Result<PathBuf, DaemonError> {
+    let start = std::time::Instant::now();
     let content = response.content.clone().unwrap_or_default();
 
     tokio::fs::create_dir_all(&stage.output_path)
@@ -354,6 +373,7 @@ async fn write_stage_output(
         stage = %stage.id.raw,
         path = %result_path.display(),
         bytes = content.len(),
+        elapsed_ms = start.elapsed().as_millis(),
         "wrote LLM output"
     );
 
@@ -369,6 +389,7 @@ async fn run_post_completion_hooks(
     completion_tokens: u64,
     shared_store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Result<(), DaemonError> {
+    let start = std::time::Instant::now();
     let lua = create_sandboxed_vm().map_err(DaemonError::Workflow)?;
     let wf_root = workflows
         .get(workflow_id)
@@ -397,6 +418,13 @@ async fn run_post_completion_hooks(
             }
         }
     }
+    tracing::info!(
+        stage = %stage.id.raw,
+        inserted = lua_ctx.hooks.insert_after.len(),
+        removed = lua_ctx.hooks.remove_stages.len(),
+        elapsed_ms = start.elapsed().as_millis(),
+        "ran post-completion hooks"
+    );
     Ok(())
 }
 
