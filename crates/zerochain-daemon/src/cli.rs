@@ -10,11 +10,11 @@ use std::path::PathBuf;
                        Docs: https://github.com/awdemos/zerochain"
 )]
 pub struct Cli {
-    #[command(subcommand)]
-    pub command: Commands,
-
     #[arg(long, env = "ZEROCHAIN_WORKSPACE", default_value = "./workspace")]
     pub workspace: PathBuf,
+
+    #[command(subcommand)]
+    pub command: Commands,
 }
 
 #[derive(Subcommand)]
