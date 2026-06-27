@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProviderId {
     OpenAI,
@@ -14,16 +13,16 @@ pub enum ProviderId {
     },
 }
 
-
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingMode {
     #[default]
     Default,
     Disabled,
-    Extended { budget_tokens: usize },
+    Extended {
+        budget_tokens: usize,
+    },
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -40,7 +39,8 @@ impl Message {
         }
     }
 
-    #[must_use] pub fn with_content(role: Role, content: Content) -> Self {
+    #[must_use]
+    pub fn with_content(role: Role, content: Content) -> Self {
         Self { role, content }
     }
 }
@@ -72,14 +72,16 @@ pub struct ImageUrlContent {
 }
 
 impl Content {
-    #[must_use] pub fn text(&self) -> Option<&str> {
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
         match self {
             Content::Text(s) => Some(s),
             _ => None,
         }
     }
 
-    #[must_use] pub fn is_text(&self) -> bool {
+    #[must_use]
+    pub fn is_text(&self) -> bool {
         matches!(self, Content::Text(_))
     }
 }
@@ -96,7 +98,6 @@ impl From<&str> for Content {
     }
 }
 
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Tool {
@@ -112,7 +113,6 @@ pub struct ToolCall {
     pub name: String,
     pub arguments: serde_json::Value,
 }
-
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -138,7 +138,6 @@ pub struct Usage {
     pub prompt_tokens: usize,
     pub completion_tokens: usize,
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -178,36 +177,40 @@ impl LLMConfig {
         }
     }
 
-    #[must_use] pub fn deterministic(mut self, content_cid: &str) -> Self {
+    #[must_use]
+    pub fn deterministic(mut self, content_cid: &str) -> Self {
         let hash = blake3::hash(content_cid.as_bytes());
-        self.seed = Some(u64::from_le_bytes(
-            hash.as_bytes()[0..8].try_into().unwrap(),
-        ));
+        self.seed = Some(u64::from_le_bytes(hash.as_bytes()[0..8].try_into().expect(
+            "blake3 hash is 32 bytes, so slicing the first 8 bytes always yields a valid u64 array",
+        )));
         self.temperature = 0.0;
         self.top_p = Some(1.0);
         self
     }
 
-    #[must_use] pub fn is_reproducible(&self) -> bool {
+    #[must_use]
+    pub fn is_reproducible(&self) -> bool {
         self.temperature == 0.0 && self.seed.is_some()
     }
 
-    #[must_use] pub fn with_temperature(mut self, t: f32) -> Self {
+    #[must_use]
+    pub fn with_temperature(mut self, t: f32) -> Self {
         self.temperature = t;
         self
     }
 
-    #[must_use] pub fn with_max_tokens(mut self, n: usize) -> Self {
+    #[must_use]
+    pub fn with_max_tokens(mut self, n: usize) -> Self {
         self.max_tokens = n;
         self
     }
 
-    #[must_use] pub fn with_context_window(mut self, n: usize) -> Self {
+    #[must_use]
+    pub fn with_context_window(mut self, n: usize) -> Self {
         self.context_window = n;
         self
     }
 }
-
 
 #[cfg(test)]
 mod tests {
