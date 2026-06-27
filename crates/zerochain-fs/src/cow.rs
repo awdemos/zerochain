@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::{io_err, FsError, Result};
 
@@ -33,14 +34,14 @@ impl CowPlatform for NoopCow {
     }
 }
 
-pub async fn detect_backend(workspace_path: &Path) -> Box<dyn CowPlatform> {
+pub async fn detect_backend(workspace_path: &Path) -> Arc<dyn CowPlatform + Send + Sync> {
     let btrfs = BtrfsCow;
     if btrfs.is_available().await && BtrfsCow::is_btrfs_filesystem(workspace_path).await {
         tracing::info!("CoW backend: btrfs (zero-copy snapshots)");
-        Box::new(btrfs)
+        Arc::new(btrfs)
     } else {
         tracing::info!("CoW backend: directory (file-level copy)");
-        Box::new(DirectoryCow)
+        Arc::new(DirectoryCow)
     }
 }
 

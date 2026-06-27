@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
@@ -29,14 +30,16 @@ pub struct AppState {
     pub workspace_root: PathBuf,
     pub workflows: HashMap<String, Workflow>,
     pub cas: Option<CasStore>,
-    cow_backend: Box<dyn zerochain_fs::CowPlatform>,
+    cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
 }
 
 fn workflow_dir(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".zerochain").join("workflows")
 }
 
-async fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::CowPlatform> {
+async fn resolve_cow_backend(
+    workspace_root: &Path,
+) -> Arc<dyn zerochain_fs::CowPlatform + Send + Sync> {
     let env_val = std::env::var("ZEROCHAIN_COW_BACKEND")
         .unwrap_or_default()
         .to_lowercase();
@@ -46,7 +49,7 @@ async fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::Cow
             let btrfs = zerochain_fs::BtrfsCow;
             if btrfs.is_available().await {
                 tracing::info!("CoW backend: btrfs (forced by ZEROCHAIN_COW_BACKEND)");
-                return Box::new(btrfs);
+                return Arc::new(btrfs);
             }
             tracing::warn!(
                 "ZEROCHAIN_COW_BACKEND=btrfs but btrfs unavailable, falling back to auto"
@@ -55,11 +58,11 @@ async fn resolve_cow_backend(workspace_root: &Path) -> Box<dyn zerochain_fs::Cow
         }
         "directory" => {
             tracing::info!("CoW backend: directory (forced by ZEROCHAIN_COW_BACKEND)");
-            Box::new(zerochain_fs::DirectoryCow)
+            Arc::new(zerochain_fs::DirectoryCow)
         }
         "none" | "disabled" => {
-            tracing::info!("CoW backend: disabled by ZEROCHAIN_COW_BACKEND");
-            Box::new(zerochain_fs::NoopCow)
+            tracing::info!("CoW backend: disabled by ZEROCHAIN_COW_BACKEND)");
+            Arc::new(zerochain_fs::NoopCow)
         }
         _ => zerochain_fs::detect_backend(workspace_root).await,
     }
@@ -143,7 +146,11 @@ impl AppState {
         let root = wf.root.clone();
         let reloaded = Workflow::from_dir(&root).await?;
         self.workflows.insert(id.to_string(), reloaded);
-        tracing::info!(workflow_id = id, elapsed_ms = start.elapsed().as_millis(), "reloaded workflow");
+        tracing::info!(
+            workflow_id = id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "reloaded workflow"
+        );
         Ok(())
     }
 
@@ -326,7 +333,12 @@ impl AppState {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(DaemonError::io(&err_marker, e)),
         }
-        tracing::info!(workflow_id, stage_id, elapsed_ms = start.elapsed().as_millis(), "marked stage complete");
+        tracing::info!(
+            workflow_id,
+            stage_id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "marked stage complete"
+        );
         Ok(())
     }
 
@@ -337,10 +349,6 @@ impl AppState {
         feedback: Option<&str>,
     ) -> Result<(), DaemonError> {
         let start = std::time::Instant::now();
-        let wf = self
-            .workflows
-            .get(workflow_id)
-            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
         let wf = self
             .workflows
             .get(workflow_id)
@@ -357,7 +365,12 @@ impl AppState {
         tokio::fs::write(&marker, feedback.unwrap_or(""))
             .await
             .map_err(|e| DaemonError::io(&marker, e))?;
-        tracing::info!(workflow_id, stage_id, elapsed_ms = start.elapsed().as_millis(), "marked stage error");
+        tracing::info!(
+            workflow_id,
+            stage_id,
+            elapsed_ms = start.elapsed().as_millis(),
+            "marked stage error"
+        );
         Ok(())
     }
 
@@ -367,7 +380,6 @@ impl AppState {
         workflow_id: &str,
         stage_id: &str,
     ) -> Result<PathBuf, DaemonError> {
-        let start = std::time::Instant::now();
         let span = tracing::Span::current();
         span.record("workflow_id", workflow_id);
         span.record("stage_id", stage_id);
@@ -383,36 +395,65 @@ impl AppState {
             .stage_by_id(&sid)
             .ok_or_else(|| DaemonError::StageNotFound(stage_id.into()))?;
 
+        Self::snapshot_stage_at_path(
+            workflow_id,
+            stage_id,
+            &stage.path,
+            &wf.root,
+            self.cow_backend.clone(),
+            self.cas.as_ref(),
+        )
+        .await
+    }
+
+    async fn snapshot_stage_at_path(
+        workflow_id: &str,
+        stage_id: &str,
+        stage_path: &Path,
+        workflow_root: &Path,
+        cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
+        cas: Option<&CasStore>,
+    ) -> Result<PathBuf, DaemonError> {
+        let start = std::time::Instant::now();
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .subsec_nanos();
-        let snap_name = format!("{}.{}.{nonce}", &stage.id.raw, timestamp);
-        let snapshots_dir = wf.root.join(".snapshots");
+        let stage_dir_name = stage_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| stage_id.into());
+        let snap_name = format!("{}.{}.{nonce}", stage_dir_name, timestamp);
+        let snapshots_dir = workflow_root.join(".snapshots");
         let snap_dir = snapshots_dir.join(&snap_name);
 
         tokio::fs::create_dir_all(&snapshots_dir)
             .await
             .map_err(|e| DaemonError::io(&snapshots_dir, e))?;
 
-        self.cow_backend
-            .snapshot(&stage.path, &snap_dir)
+        cow_backend
+            .snapshot(stage_path, &snap_dir)
             .await
             .map_err(|e| DaemonError::CowSnapshot {
-                stage: stage.id.raw.clone(),
+                stage: stage_dir_name.clone(),
                 source: e,
             })?;
 
+        if let Some(c) = cas {
+            tracing::debug!(workflow_id, stage_id, cas_metrics = ?c.metrics(), "snapshot metrics");
+        }
+
         tracing::info!(
-            stage = %stage.id.raw,
-            backend = %self.cow_backend.name(),
+            workflow_id,
+            stage_id,
+            backend = %cow_backend.name(),
             snapshot = %snap_dir.display(),
             elapsed_ms = start.elapsed().as_millis(),
             "stage snapshot created"
         );
 
-        self.cleanup_old_snapshots(&wf.root).await?;
+        Self::cleanup_old_snapshots_static(&snapshots_dir).await?;
 
         Ok(snap_dir)
     }
@@ -488,23 +529,16 @@ impl AppState {
         Ok(())
     }
 
-    async fn cleanup_old_snapshots(&self, workflow_root: &Path) -> Result<(), DaemonError> {
-        let snapshots_dir = workflow_root.join(".snapshots");
-        match tokio::fs::metadata(&snapshots_dir).await {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(DaemonError::io(&snapshots_dir, e)),
-        }
-
-        let mut rd = tokio::fs::read_dir(&snapshots_dir)
+    async fn cleanup_old_snapshots_static(snapshots_dir: &Path) -> Result<(), DaemonError> {
+        let mut rd = tokio::fs::read_dir(snapshots_dir)
             .await
-            .map_err(|e| DaemonError::io(&snapshots_dir, e))?;
+            .map_err(|e| DaemonError::io(snapshots_dir, e))?;
 
         let mut entries = Vec::new();
         while let Some(entry) = rd
             .next_entry()
             .await
-            .map_err(|e| DaemonError::io(&snapshots_dir, e))?
+            .map_err(|e| DaemonError::io(snapshots_dir, e))?
         {
             let path = entry.path();
             if path.is_dir() {
@@ -549,7 +583,6 @@ impl AppState {
         out
     }
 
-    #[tracing::instrument(skip(self), fields(workflow_id, stage_id = %stage.id.raw))]
     pub async fn execute_stage(
         &mut self,
         workflow_id: &str,
@@ -590,11 +623,49 @@ impl AppState {
             cas: self.cas.clone(),
         };
 
-        let snapshot_taken = self.snapshot_stage(workflow_id, &stage.id.raw).await.ok();
+        // Snapshot the stage in the background while the LLM request is in flight.
+        // The stage directory is not mutated by the LLM path (writes go to
+        // stage.output_path), so the copy and the network call can safely overlap.
+        let workflow_root = self
+            .workflows
+            .get(workflow_id)
+            .map(|wf| wf.root.clone())
+            .or_else(|| stage.path.parent().map(|p| p.to_path_buf()))
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let snapshot_task = {
+            let workflow_id = workflow_id.to_string();
+            let stage_id = stage.id.raw.clone();
+            let stage_path = stage.path.clone();
+            let cow_backend = self.cow_backend.clone();
+            let cas = self.cas.clone();
+            tokio::spawn(async move {
+                Self::snapshot_stage_at_path(
+                    &workflow_id,
+                    &stage_id,
+                    &stage_path,
+                    &workflow_root,
+                    cow_backend,
+                    cas.as_ref(),
+                )
+                .await
+            })
+        };
 
-        let output = driver.execute(&mut self.workflows).await.map_err(|e| {
+        let output = driver.execute(&mut self.workflows).await;
+
+        let snap_result = snapshot_task.await.map_err(|e| {
+            DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+                reason: format!("snapshot task panicked: {e}"),
+            })
+        })?;
+
+        if let Err(ref e) = snap_result {
+            tracing::warn!(error = %e, "stage snapshot failed during LLM execution");
+        }
+
+        let output = output.map_err(|e| {
             tracing::error!(stage = %stage.id.raw, error = %e, "LLM call failed");
-            if snapshot_taken.is_some() {
+            if snap_result.is_ok() {
                 tracing::info!(
                     stage = %stage.id.raw,
                     "snapshot available for restore via restore_stage()"
