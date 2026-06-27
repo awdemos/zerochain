@@ -36,7 +36,8 @@ pub struct ExecutionPlan {
 }
 
 impl ExecutionPlan {
-    #[must_use] pub fn from_stages(stages: &[Stage]) -> Self {
+    #[must_use]
+    pub fn from_stages(stages: &[Stage]) -> Self {
         let mut groups: BTreeMap<String, Vec<StageId>> = BTreeMap::new();
         let mut stage_map = BTreeMap::new();
 
@@ -130,11 +131,12 @@ impl ExecutionPlan {
         }
     }
 
-    #[must_use] pub fn next_stage(&self) -> Option<&StageId> {
+    #[must_use]
+    pub fn next_stage(&self) -> Option<&StageId> {
         for group in &self.groups {
             match group.state {
                 StageState::Error => return None,
-                StageState::Complete => {},
+                StageState::Complete => {}
                 _ => {
                     for stage_id in &group.stages {
                         let node = &self.stage_map[&stage_id.raw];
@@ -153,7 +155,8 @@ impl ExecutionPlan {
         None
     }
 
-    #[must_use] pub fn is_complete(&self) -> bool {
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
         self.groups
             .iter()
             .all(|g| matches!(g.state, StageState::Complete))

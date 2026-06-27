@@ -13,11 +13,7 @@ pub struct StageContext {
 pub trait ProviderProfile: Send + Sync {
     fn name(&self) -> &str;
 
-    fn validate_config(
-        &self,
-        _config: &LLMConfig,
-        _ctx: &StageContext,
-    ) -> Result<(), LLMError> {
+    fn validate_config(&self, _config: &LLMConfig, _ctx: &StageContext) -> Result<(), LLMError> {
         Ok(())
     }
 
@@ -40,7 +36,8 @@ pub trait ProviderProfile: Send + Sync {
     }
 }
 
-#[must_use] pub fn resolve_profile(name: &str) -> Box<dyn ProviderProfile> {
+#[must_use]
+pub fn resolve_profile(name: &str) -> Box<dyn ProviderProfile> {
     match name {
         "kimi-k2" => Box::new(kimi_k2::KimiK2Profile),
         _ => Box::new(generic::GenericProfile),

@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
-use zerochain_engine::AppState;
 use zerochain_core::stage::StageId;
 use zerochain_core::template::TemplateRegistry;
+use zerochain_engine::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,10 +30,7 @@ async fn main() -> Result<()> {
                 .await?;
             println!("initialized workflow: {name}");
         }
-        zerochain_daemon::cli::Commands::Run {
-            workflow_id,
-            stage,
-        } => {
+        zerochain_daemon::cli::Commands::Run { workflow_id, stage } => {
             let workflow = state
                 .get_workflow(&workflow_id)
                 .ok_or_else(|| anyhow::anyhow!("workflow not found: {workflow_id}"))?;
@@ -44,7 +41,9 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let stage_id = if let Some(s) = &stage { StageId::parse(s).map_err(|e| anyhow::anyhow!("{e}"))? } else {
+            let stage_id = if let Some(s) = &stage {
+                StageId::parse(s).map_err(|e| anyhow::anyhow!("{e}"))?
+            } else {
                 let next = plan
                     .next_stage()
                     .ok_or_else(|| anyhow::anyhow!("no pending stages"))?;
@@ -115,9 +114,7 @@ async fn main() -> Result<()> {
             workflow_id,
             stage_id,
         } => {
-            state
-                .mark_stage_complete(&workflow_id, &stage_id)
-                .await?;
+            state.mark_stage_complete(&workflow_id, &stage_id).await?;
             println!("approved: {workflow_id} / {stage_id}");
         }
         zerochain_daemon::cli::Commands::Reject {

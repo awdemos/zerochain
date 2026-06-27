@@ -69,9 +69,7 @@ impl From<LLMError> for ZerochainError {
             }
             LLMError::Auth(msg) => ZerochainError::Auth { message: msg },
             LLMError::Config(msg) => ZerochainError::Configuration { message: msg },
-            LLMError::UnsupportedProvider(msg) => {
-                ZerochainError::Unsupported { message: msg }
-            }
+            LLMError::UnsupportedProvider(msg) => ZerochainError::Unsupported { message: msg },
             LLMError::ContextExceeded { needed, available } => ZerochainError::Llm {
                 message: format!("context window exceeded: need {needed}, have {available}"),
             },
@@ -92,9 +90,7 @@ impl From<ZerochainError> for LLMError {
             }
             ZerochainError::Auth { message } => LLMError::Auth(message),
             ZerochainError::Configuration { message } => LLMError::Config(message),
-            ZerochainError::Unsupported { message } => {
-                LLMError::UnsupportedProvider(message)
-            }
+            ZerochainError::Unsupported { message } => LLMError::UnsupportedProvider(message),
             ZerochainError::InvalidInput { message } => LLMError::Parse(message),
             ZerochainError::Llm { message } => LLMError::Other(message),
             other => LLMError::Other(other.to_string()),

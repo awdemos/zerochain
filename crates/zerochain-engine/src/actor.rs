@@ -127,7 +127,10 @@ impl WorkflowActor {
                 stage_id,
                 respond,
             } => {
-                let result = self.state.mark_stage_complete(&workflow_id, &stage_id).await;
+                let result = self
+                    .state
+                    .mark_stage_complete(&workflow_id, &stage_id)
+                    .await;
                 let _ = respond.send(result);
             }
             ActorMessage::MarkStageError {
@@ -279,10 +282,7 @@ impl WorkflowHandle {
         .await?
     }
 
-    pub async fn reload_workflow(
-        &self,
-        workflow_id: String,
-    ) -> Result<(), DaemonError> {
+    pub async fn reload_workflow(&self, workflow_id: String) -> Result<(), DaemonError> {
         self.call(|respond| ActorMessage::ReloadWorkflow {
             workflow_id,
             respond,

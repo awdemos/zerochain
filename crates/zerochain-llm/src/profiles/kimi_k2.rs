@@ -9,17 +9,14 @@ impl ProviderProfile for KimiK2Profile {
         "kimi-k2"
     }
 
-    fn validate_config(
-        &self,
-        config: &LLMConfig,
-        ctx: &StageContext,
-    ) -> Result<(), LLMError> {
+    fn validate_config(&self, config: &LLMConfig, ctx: &StageContext) -> Result<(), LLMError> {
         if !matches!(ctx.thinking_mode, ThinkingMode::Disabled)
-            && (config.temperature - 1.0).abs() > f32::EPSILON {
-                return Err(LLMError::Config(
-                    "Kimi K2.5 thinking mode requires temperature=1.0".into(),
-                ));
-            }
+            && (config.temperature - 1.0).abs() > f32::EPSILON
+        {
+            return Err(LLMError::Config(
+                "Kimi K2.5 thinking mode requires temperature=1.0".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -127,7 +124,9 @@ mod tests {
     fn validate_rejects_thinking_extended_with_wrong_temp() {
         let config = default_config().with_temperature(0.7);
         let ctx = StageContext {
-            thinking_mode: ThinkingMode::Extended { budget_tokens: 8192 },
+            thinking_mode: ThinkingMode::Extended {
+                budget_tokens: 8192,
+            },
             capture_reasoning: false,
         };
         assert!(profile().validate_config(&config, &ctx).is_err());
@@ -137,7 +136,9 @@ mod tests {
     fn validate_ok_thinking_extended_with_temp_1() {
         let config = default_config().with_temperature(1.0);
         let ctx = StageContext {
-            thinking_mode: ThinkingMode::Extended { budget_tokens: 16384 },
+            thinking_mode: ThinkingMode::Extended {
+                budget_tokens: 16384,
+            },
             capture_reasoning: false,
         };
         assert!(profile().validate_config(&config, &ctx).is_ok());
@@ -158,7 +159,9 @@ mod tests {
     fn augment_thinking_extended() {
         let mut extra = serde_json::Value::Object(serde_json::Map::new());
         let ctx = StageContext {
-            thinking_mode: ThinkingMode::Extended { budget_tokens: 4096 },
+            thinking_mode: ThinkingMode::Extended {
+                budget_tokens: 4096,
+            },
             capture_reasoning: false,
         };
         profile().augment_request(&mut extra, &ctx).unwrap();
@@ -191,7 +194,10 @@ mod tests {
             capture_reasoning: true,
         };
         profile().parse_response(&raw, &mut response, &ctx);
-        assert_eq!(response.reasoning.as_deref(), Some("I thought about this carefully"));
+        assert_eq!(
+            response.reasoning.as_deref(),
+            Some("I thought about this carefully")
+        );
     }
 
     #[test]

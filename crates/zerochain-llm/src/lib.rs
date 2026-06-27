@@ -10,11 +10,11 @@ pub mod types;
 pub use error::LLMError;
 pub use factory::LLMFactory;
 pub use openai::OpenAICompatibleProvider;
-pub use profiles::{ProviderProfile, StageContext, resolve_profile};
+pub use profiles::{resolve_profile, ProviderProfile, StageContext};
 pub use trait_::LLM;
 pub use types::{
-    CompleteResponse, Content, FinishReason, ImageUrlContent, LLMConfig, Message,
-    ProviderId, Role, ThinkingMode, Tool, ToolCall, Usage,
+    CompleteResponse, Content, FinishReason, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
+    ThinkingMode, Tool, ToolCall, Usage,
 };
 
 pub use zerochain_core::context::MultimodalInput;

@@ -45,20 +45,25 @@ impl ContainerExecutor {
         }
     }
 
-    #[must_use] pub fn runtime_name(&self) -> &str {
+    #[must_use]
+    pub fn runtime_name(&self) -> &str {
         match self.runtime {
             ContainerRuntime::Docker => "docker",
             ContainerRuntime::Podman => "podman",
         }
     }
 
-    pub async fn run_stage(&self, config: &ContainerConfig) -> Result<ContainerResult, DaemonError> {
+    pub async fn run_stage(
+        &self,
+        config: &ContainerConfig,
+    ) -> Result<ContainerResult, DaemonError> {
         let runtime = self.runtime_name();
         let container_name = format!(
             "zerochain-stage-{}",
             config
                 .stage_dir
-                .file_name().map_or_else(|| "unknown".into(), |n| n.to_string_lossy().to_string())
+                .file_name()
+                .map_or_else(|| "unknown".into(), |n| n.to_string_lossy().to_string())
         );
 
         let mut args = vec![
@@ -69,22 +74,13 @@ impl ContainerExecutor {
         ];
 
         args.push("-v".to_string());
-        args.push(format!(
-            "{}:/stage:rw",
-            config.stage_dir.display()
-        ));
+        args.push(format!("{}:/stage:rw", config.stage_dir.display()));
 
         args.push("-v".to_string());
-        args.push(format!(
-            "{}:/output:rw",
-            config.output_dir.display()
-        ));
+        args.push(format!("{}:/output:rw", config.output_dir.display()));
 
         args.push("-v".to_string());
-        args.push(format!(
-            "{}:/workspace:rw",
-            config.workspace_root.display()
-        ));
+        args.push(format!("{}:/workspace:rw", config.workspace_root.display()));
 
         for (key, value) in &config.env_vars {
             args.push("-e".to_string());
@@ -217,12 +213,14 @@ fn which_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[must_use] pub fn default_stage_image() -> String {
+#[must_use]
+pub fn default_stage_image() -> String {
     std::env::var("ZEROCHAIN_STAGE_IMAGE")
         .unwrap_or_else(|_| "cgr.dev/chainguard/wolfi-base:latest".into())
 }
 
-#[must_use] pub fn generate_stage_dockerfile(base_image: &str) -> String {
+#[must_use]
+pub fn generate_stage_dockerfile(base_image: &str) -> String {
     format!(
         r#"FROM {base_image}
 RUN apk add --no-cache ca-certificates curl

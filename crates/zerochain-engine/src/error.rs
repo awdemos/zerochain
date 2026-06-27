@@ -33,8 +33,6 @@ pub enum DaemonError {
     #[error("LLM error: {0}")]
     Llm(#[from] zerochain_llm::error::LLMError),
 
-
-
     #[error("profile validation failed: {0}")]
     ProfileValidation(zerochain_llm::error::LLMError),
 
@@ -42,10 +40,18 @@ pub enum DaemonError {
     MissingEnv(String),
 
     #[error("CoW snapshot error for stage {stage}: {source}")]
-    CowSnapshot { stage: String, #[source] source: zerochain_fs::error::FsError },
+    CowSnapshot {
+        stage: String,
+        #[source]
+        source: zerochain_fs::error::FsError,
+    },
 
     #[error("CoW restore error for stage {stage}: {source}")]
-    CowRestore { stage: String, #[source] source: zerochain_fs::error::FsError },
+    CowRestore {
+        stage: String,
+        #[source]
+        source: zerochain_fs::error::FsError,
+    },
 
     #[error("container spawn error: {0}")]
     ContainerSpawn(#[source] std::io::Error),
@@ -89,9 +95,7 @@ impl From<DaemonError> for ZerochainError {
             },
             DaemonError::Io { path, source } => ZerochainError::Io { path, source },
             DaemonError::Workflow(e) => ZerochainError::from(e),
-            DaemonError::WorkflowLoadPartial(msg) => {
-                ZerochainError::Workflow { message: msg }
-            }
+            DaemonError::WorkflowLoadPartial(msg) => ZerochainError::Workflow { message: msg },
             DaemonError::Llm(e) => ZerochainError::from(e),
             DaemonError::ProfileValidation(e) => ZerochainError::Llm {
                 message: format!("profile validation: {e}"),
@@ -122,23 +126,19 @@ impl From<DaemonError> for ZerochainError {
 impl From<ZerochainError> for DaemonError {
     fn from(err: ZerochainError) -> Self {
         match err {
-            ZerochainError::NotFound { message } => {
-                DaemonError::WorkflowNotFound(message)
-            }
+            ZerochainError::NotFound { message } => DaemonError::WorkflowNotFound(message),
             ZerochainError::Io { path, source } => DaemonError::Io { path, source },
-            ZerochainError::Workflow { message } => {
-                DaemonError::WorkflowLoadPartial(message)
-            }
+            ZerochainError::Workflow { message } => DaemonError::WorkflowLoadPartial(message),
             ZerochainError::Stage { message } => DaemonError::StageNotFound(message),
             ZerochainError::Llm { message } => {
                 DaemonError::Llm(zerochain_llm::error::LLMError::Other(message))
             }
-            ZerochainError::Fs { message } => DaemonError::Fs(
-                zerochain_fs::error::FsError::SubvolumeError {
+            ZerochainError::Fs { message } => {
+                DaemonError::Fs(zerochain_fs::error::FsError::SubvolumeError {
                     path: PathBuf::new(),
                     reason: message,
-                },
-            ),
+                })
+            }
             ZerochainError::Container { message } => DaemonError::ContainerExec(message),
             ZerochainError::MissingEnv { var } => DaemonError::MissingEnv(var),
             other => DaemonError::WorkflowLoadPartial(other.to_string()),

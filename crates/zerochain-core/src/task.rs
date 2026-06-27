@@ -48,7 +48,9 @@ struct TaskFrontmatter {
 
 impl Task {
     pub async fn from_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?;
 
         let mut task = Self::parse(&content)?;
         task.source_path = Some(path.to_path_buf());
@@ -91,7 +93,8 @@ impl Task {
         })
     }
 
-    #[must_use] pub fn stage_names(&self) -> Vec<String> {
+    #[must_use]
+    pub fn stage_names(&self) -> Vec<String> {
         self.execution
             .as_ref()
             .map(|e| e.stages.clone())
@@ -100,14 +103,16 @@ impl Task {
 }
 
 impl TaskExecution {
-    #[must_use] pub fn new(stages: Vec<String>, strategy: Option<String>) -> Self {
+    #[must_use]
+    pub fn new(stages: Vec<String>, strategy: Option<String>) -> Self {
         Self { stages, strategy }
     }
 }
 
 impl Task {
     #[allow(clippy::too_many_arguments)]
-    #[must_use] pub fn new(
+    #[must_use]
+    pub fn new(
         id: String,
         title: String,
         status: String,
@@ -161,32 +166,38 @@ impl TaskBuilder {
         }
     }
 
-    #[must_use] pub fn status(mut self, status: impl Into<String>) -> Self {
+    #[must_use]
+    pub fn status(mut self, status: impl Into<String>) -> Self {
         self.status = status.into();
         self
     }
 
-    #[must_use] pub fn priority(mut self, priority: impl Into<String>) -> Self {
+    #[must_use]
+    pub fn priority(mut self, priority: impl Into<String>) -> Self {
         self.priority = Some(priority.into());
         self
     }
 
-    #[must_use] pub fn execution(mut self, execution: TaskExecution) -> Self {
+    #[must_use]
+    pub fn execution(mut self, execution: TaskExecution) -> Self {
         self.execution = Some(execution);
         self
     }
 
-    #[must_use] pub fn stages(mut self, stages: Vec<String>) -> Self {
+    #[must_use]
+    pub fn stages(mut self, stages: Vec<String>) -> Self {
         self.execution = Some(TaskExecution::new(stages, Some("sequential".into())));
         self
     }
 
-    #[must_use] pub fn acceptance_criteria(mut self, criteria: Vec<String>) -> Self {
+    #[must_use]
+    pub fn acceptance_criteria(mut self, criteria: Vec<String>) -> Self {
         self.acceptance_criteria = criteria;
         self
     }
 
-    #[must_use] pub fn description(mut self, description: impl Into<String>) -> Self {
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
     }
@@ -196,7 +207,8 @@ impl TaskBuilder {
         self
     }
 
-    #[must_use] pub fn build(self) -> Task {
+    #[must_use]
+    pub fn build(self) -> Task {
         Task {
             id: self.id,
             title: self.title,

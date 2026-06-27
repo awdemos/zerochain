@@ -49,7 +49,8 @@ impl CasError {
 
 impl CasError {
     /// Returns true if this error indicates the requested content was not found.
-    #[must_use] pub fn is_not_found(&self) -> bool {
+    #[must_use]
+    pub fn is_not_found(&self) -> bool {
         matches!(self, CasError::NotFound(_))
     }
 }
@@ -64,9 +65,9 @@ impl From<CasError> for ZerochainError {
             CasError::InvalidCid(msg) => ZerochainError::InvalidInput { message: msg },
             CasError::S3(msg) => ZerochainError::Cas { message: msg },
             CasError::Configuration(msg) => ZerochainError::Configuration { message: msg },
-            CasError::Serialization(e) => {
-                ZerochainError::Serialization { message: e.to_string() }
-            }
+            CasError::Serialization(e) => ZerochainError::Serialization {
+                message: e.to_string(),
+            },
             CasError::StoreDirectory { path, source } => ZerochainError::Io { path, source },
             CasError::Unsupported(msg) => ZerochainError::Unsupported { message: msg },
         }

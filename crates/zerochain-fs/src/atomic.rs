@@ -25,12 +25,10 @@ pub async fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
         .await
         .map_err(|e| io_err(parent, e))?;
 
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| FsError::AtomicWriteFailed {
-            path: path.to_path_buf(),
-            reason: "path has no file name".into(),
-        })?;
+    let file_name = path.file_name().ok_or_else(|| FsError::AtomicWriteFailed {
+        path: path.to_path_buf(),
+        reason: "path has no file name".into(),
+    })?;
 
     let tmp_name = format!(
         ".tmp.{}.{}",
@@ -157,9 +155,7 @@ fn epoch_secs() -> u64 {
 async fn is_pid_alive(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
-        PathBuf::from("/proc")
-            .join(pid.to_string())
-            .exists()
+        PathBuf::from("/proc").join(pid.to_string()).exists()
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -463,7 +459,11 @@ mod tests {
         drop(guard);
 
         let mut attempts = 0;
-        while tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap() && attempts < 50 {
+        while tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap()
+            && attempts < 50
+        {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             attempts += 1;
         }
@@ -489,9 +489,7 @@ mod tests {
 
         // Write a lock file with a PID that doesn't exist
         let stale_content = "PID:999999999\nTIMESTAMP:0\n";
-        tokio::fs::write(&lock_path, &stale_content)
-            .await
-            .unwrap();
+        tokio::fs::write(&lock_path, &stale_content).await.unwrap();
 
         // Should succeed because the PID is dead
         let _guard = acquire_lock(tmp.path()).await.unwrap();
@@ -546,11 +544,17 @@ mod tests {
             .expect("spawned task panicked");
 
         let mut attempts = 0;
-        while tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap() && attempts < 50 {
+        while tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap()
+            && attempts < 50
+        {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
             attempts += 1;
         }
-        assert!(!tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
+        assert!(!tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -558,11 +562,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let guard = acquire_lock(tmp.path()).await.unwrap();
 
-        assert!(tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
+        assert!(tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap());
 
         guard.release().await;
 
-        assert!(!tokio::fs::try_exists(tmp.path().join(".lock")).await.unwrap());
+        assert!(!tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -586,9 +594,7 @@ mod tests {
         assert!(!tokio::fs::try_exists(output.join("file1.txt"))
             .await
             .unwrap());
-        assert!(!tokio::fs::try_exists(output.join("subdir"))
-            .await
-            .unwrap());
+        assert!(!tokio::fs::try_exists(output.join("subdir")).await.unwrap());
     }
 
     #[tokio::test]

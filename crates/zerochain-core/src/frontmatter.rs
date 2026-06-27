@@ -30,7 +30,8 @@ pub struct ContextFrontmatter {
 
 impl ContextFrontmatter {
     /// Merge `self` over `base`, taking child's values when present.
-    #[must_use] pub fn merge(&self, base: &ContextFrontmatter) -> ContextFrontmatter {
+    #[must_use]
+    pub fn merge(&self, base: &ContextFrontmatter) -> ContextFrontmatter {
         ContextFrontmatter {
             role: self.role.clone().or_else(|| base.role.clone()),
             container: self.container.clone().or_else(|| base.container.clone()),
@@ -38,9 +39,18 @@ impl ContextFrontmatter {
             human_gate: self.human_gate || base.human_gate,
             timeout: self.timeout.or(base.timeout),
             network: self.network.clone().or_else(|| base.network.clone()),
-            definition_of_done: self.definition_of_done.clone().or_else(|| base.definition_of_done.clone()),
-            provider_profile: self.provider_profile.clone().or_else(|| base.provider_profile.clone()),
-            thinking_mode: self.thinking_mode.clone().or_else(|| base.thinking_mode.clone()),
+            definition_of_done: self
+                .definition_of_done
+                .clone()
+                .or_else(|| base.definition_of_done.clone()),
+            provider_profile: self
+                .provider_profile
+                .clone()
+                .or_else(|| base.provider_profile.clone()),
+            thinking_mode: self
+                .thinking_mode
+                .clone()
+                .or_else(|| base.thinking_mode.clone()),
             capture_reasoning: self.capture_reasoning || base.capture_reasoning,
             multimodal_input: if self.multimodal_input.is_empty() {
                 base.multimodal_input.clone()

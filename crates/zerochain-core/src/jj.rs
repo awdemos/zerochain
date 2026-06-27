@@ -133,10 +133,7 @@ impl VersionControl for JjVcs {
 
         if !output.status.success() {
             return Err(Error::JjError {
-                message: format!(
-                    "jj log failed: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ),
+                message: format!("jj log failed: {}", String::from_utf8_lossy(&output.stderr)),
             });
         }
 
@@ -175,12 +172,7 @@ impl VersionControl for JjVcs {
 
     async fn export_bundle(&self, path: &Path, output_path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("git")
-            .args([
-                "bundle",
-                "create",
-                &output_path.to_string_lossy(),
-                "--all",
-            ])
+            .args(["bundle", "create", &output_path.to_string_lossy(), "--all"])
             .current_dir(path)
             .output()
             .await
@@ -370,7 +362,10 @@ fn dir_size<'a>(
             .await
             .map_err(|e| io_err(dir.to_path_buf(), e))?
         {
-            let meta = entry.metadata().await.map_err(|e| io_err(entry.path(), e))?;
+            let meta = entry
+                .metadata()
+                .await
+                .map_err(|e| io_err(entry.path(), e))?;
             if meta.is_dir() {
                 dir_size(&entry.path(), total).await?;
             } else {
@@ -456,12 +451,18 @@ pub fn auto_commit(workspace: &Path, message: &str) {
 
 /// Commit with a stage-complete message.
 pub fn commit_stage_complete(workspace: &Path, workflow_id: &str, stage_raw: &str) {
-    auto_commit(workspace, &format!("stage {stage_raw} complete: {workflow_id}"));
+    auto_commit(
+        workspace,
+        &format!("stage {stage_raw} complete: {workflow_id}"),
+    );
 }
 
 /// Commit with a stage-error message.
 pub fn commit_stage_error(workspace: &Path, workflow_id: &str, stage_raw: &str) {
-    auto_commit(workspace, &format!("stage {stage_raw} error: {workflow_id}"));
+    auto_commit(
+        workspace,
+        &format!("stage {stage_raw} error: {workflow_id}"),
+    );
 }
 
 #[cfg(test)]

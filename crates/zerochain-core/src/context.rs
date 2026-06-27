@@ -20,7 +20,9 @@ impl Context {
     ///
     /// Returns an error if the file cannot be read or if the Markdown frontmatter is invalid.
     pub async fn from_md_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?;
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
         Ok(ctx)
@@ -32,7 +34,9 @@ impl Context {
     ///
     /// Returns an error if the file cannot be read or if the Lua script evaluation fails.
     pub async fn from_lua_file(path: &Path) -> Result<Self> {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| io_err(path.to_path_buf(), e))?;
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| io_err(path.to_path_buf(), e))?;
         let frontmatter = crate::lua_engine::eval_context_lua(&content)?;
         Ok(Context {
             frontmatter,
@@ -75,7 +79,8 @@ impl Context {
         })
     }
 
-    #[must_use] pub fn flatten(&self, parent: Option<&Context>) -> Context {
+    #[must_use]
+    pub fn flatten(&self, parent: Option<&Context>) -> Context {
         let base = match parent {
             Some(p) => p.frontmatter.clone(),
             None => ContextFrontmatter::default(),
@@ -178,7 +183,10 @@ Review the code.
 ";
         let ctx = Context::parse(input).unwrap();
         assert_eq!(ctx.frontmatter.provider_profile.as_deref(), Some("kimi-k2"));
-        assert_eq!(ctx.frontmatter.role.as_deref(), Some("senior code reviewer"));
+        assert_eq!(
+            ctx.frontmatter.role.as_deref(),
+            Some("senior code reviewer")
+        );
         assert_eq!(ctx.frontmatter.thinking_mode.as_deref(), Some("disabled"));
         assert!(ctx.frontmatter.capture_reasoning);
     }
@@ -196,8 +204,14 @@ Check the wireframe.
         let ctx = Context::parse(input).unwrap();
         assert_eq!(ctx.frontmatter.multimodal_input.len(), 1);
         assert_eq!(ctx.frontmatter.multimodal_input[0].input_type, "image");
-        assert_eq!(ctx.frontmatter.multimodal_input[0].path, "./wireframes/auth.png");
-        assert_eq!(ctx.frontmatter.multimodal_input[0].detail.as_deref(), Some("high"));
+        assert_eq!(
+            ctx.frontmatter.multimodal_input[0].path,
+            "./wireframes/auth.png"
+        );
+        assert_eq!(
+            ctx.frontmatter.multimodal_input[0].detail.as_deref(),
+            Some("high")
+        );
     }
 
     #[test]
@@ -215,7 +229,10 @@ Check the wireframe.
         let parent = Context::parse("---\nprovider_profile: kimi-k2\n---\n").unwrap();
         let child = Context::parse("---\n---\nChild").unwrap();
         let merged = child.flatten(Some(&parent));
-        assert_eq!(merged.frontmatter.provider_profile.as_deref(), Some("kimi-k2"));
+        assert_eq!(
+            merged.frontmatter.provider_profile.as_deref(),
+            Some("kimi-k2")
+        );
     }
 
     #[test]
@@ -223,7 +240,10 @@ Check the wireframe.
         let parent = Context::parse("---\nprovider_profile: kimi-k2\n---\n").unwrap();
         let child = Context::parse("---\nprovider_profile: generic\n---\n").unwrap();
         let merged = child.flatten(Some(&parent));
-        assert_eq!(merged.frontmatter.provider_profile.as_deref(), Some("generic"));
+        assert_eq!(
+            merged.frontmatter.provider_profile.as_deref(),
+            Some("generic")
+        );
     }
 
     #[test]
@@ -231,7 +251,10 @@ Check the wireframe.
         let parent = Context::parse("---\nthinking_mode: extended\n---\n").unwrap();
         let child = Context::parse("---\n---\n").unwrap();
         let merged = child.flatten(Some(&parent));
-        assert_eq!(merged.frontmatter.thinking_mode.as_deref(), Some("extended"));
+        assert_eq!(
+            merged.frontmatter.thinking_mode.as_deref(),
+            Some("extended")
+        );
     }
 
     #[test]
@@ -249,19 +272,25 @@ Check the wireframe.
 
     #[test]
     fn flatten_multimodal_input_child_takes_precedence() {
-        let parent = Context::parse(r"---
+        let parent = Context::parse(
+            r"---
 multimodal_input:
   - type: image
     path: parent.png
 ---
-").unwrap();
-        let child = Context::parse(r"---
+",
+        )
+        .unwrap();
+        let child = Context::parse(
+            r"---
 multimodal_input:
   - type: image
     path: child.png
     detail: low
 ---
-").unwrap();
+",
+        )
+        .unwrap();
         let merged = child.flatten(Some(&parent));
         assert_eq!(merged.frontmatter.multimodal_input.len(), 1);
         assert_eq!(merged.frontmatter.multimodal_input[0].path, "child.png");
@@ -269,12 +298,15 @@ multimodal_input:
 
     #[test]
     fn flatten_multimodal_input_inherits_when_child_empty() {
-        let parent = Context::parse(r"---
+        let parent = Context::parse(
+            r"---
 multimodal_input:
   - type: image
     path: parent.png
 ---
-").unwrap();
+",
+        )
+        .unwrap();
         let child = Context::parse("---\n---\n").unwrap();
         let merged = child.flatten(Some(&parent));
         assert_eq!(merged.frontmatter.multimodal_input.len(), 1);

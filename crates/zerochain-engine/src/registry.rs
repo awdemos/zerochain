@@ -27,10 +27,7 @@ impl WorkflowRegistry {
         self.cas = Some(cas);
     }
 
-    pub async fn get_or_create(
-        &mut self,
-        id: &str,
-    ) -> Result<WorkflowHandle, DaemonError> {
+    pub async fn get_or_create(&mut self, id: &str) -> Result<WorkflowHandle, DaemonError> {
         if let Some(handle) = self.handles.get(id) {
             return Ok(handle.clone());
         }

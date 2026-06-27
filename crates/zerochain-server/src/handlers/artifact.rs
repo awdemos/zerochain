@@ -8,10 +8,7 @@ use zerochain_cas::Cid;
 use crate::handlers::{ArtifactResponse, SimpleMessage};
 use crate::state::ServerState;
 
-pub async fn upload(
-    State(state): State<ServerState>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn upload(State(state): State<ServerState>, body: Bytes) -> impl IntoResponse {
     let Some(cas) = state.cas() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -24,7 +21,9 @@ pub async fn upload(
     match cas.put(&body).await {
         Ok(cid) => (
             StatusCode::CREATED,
-            Json(ArtifactResponse { cid: cid.to_string() }),
+            Json(ArtifactResponse {
+                cid: cid.to_string(),
+            }),
         )
             .into_response(),
         Err(e) => (

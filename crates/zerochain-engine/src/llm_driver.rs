@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use zerochain_cas::{CasStore, Cid};
 use zerochain_core::context::Context as StageContext;
-use zerochain_core::{
-    create_sandboxed_vm, run_hook, load_shared_store, save_shared_store, LuaContext,
-};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
+use zerochain_core::{
+    create_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext,
+};
 use zerochain_llm::{
-    Content, ImageUrlContent, LLM, LLMConfig, Message, ProviderId, Role,
-    StageContext as LlmStageContext, ThinkingMode, resolve_profile,
+    resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
+    StageContext as LlmStageContext, ThinkingMode, LLM,
 };
 
 use crate::error::DaemonError;
@@ -37,8 +37,11 @@ impl<'a> LLMStageDriver<'a> {
 
         let lua_path = self.stage.path.join("CONTEXT.lua");
         let lua_script = match tokio::fs::metadata(&lua_path).await {
-            Ok(_) => Some(tokio::fs::read_to_string(&lua_path).await
-                .map_err(|e| DaemonError::io(&lua_path, e))?),
+            Ok(_) => Some(
+                tokio::fs::read_to_string(&lua_path)
+                    .await
+                    .map_err(|e| DaemonError::io(&lua_path, e))?,
+            ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(DaemonError::io(&lua_path, e)),
         };
@@ -46,16 +49,12 @@ impl<'a> LLMStageDriver<'a> {
         let input_content = read_input_files(&self.stage.input_path).await?;
 
         let profile_name = ctx
-            .as_ref().map_or_else(|| "generic".to_string(), resolve_profile_name);
-
-        let thinking_mode = ctx
             .as_ref()
-            .map(resolve_thinking_mode)
-            .unwrap_or_default();
+            .map_or_else(|| "generic".to_string(), resolve_profile_name);
 
-        let capture_reasoning = ctx
-            .as_ref()
-            .is_some_and(resolve_capture_reasoning);
+        let thinking_mode = ctx.as_ref().map(resolve_thinking_mode).unwrap_or_default();
+
+        let capture_reasoning = ctx.as_ref().is_some_and(resolve_capture_reasoning);
 
         let profile = resolve_profile(&profile_name);
 
@@ -63,7 +62,10 @@ impl<'a> LLMStageDriver<'a> {
         let mut config = LLMConfig::new(ProviderId::OpenAI, &model);
 
         if profile_name == "kimi-k2"
-            || matches!(&thinking_mode, ThinkingMode::Disabled | ThinkingMode::Extended { .. })
+            || matches!(
+                &thinking_mode,
+                ThinkingMode::Disabled | ThinkingMode::Extended { .. }
+            )
         {
             config = config.with_temperature(1.0);
         }
@@ -73,7 +75,9 @@ impl<'a> LLMStageDriver<'a> {
             capture_reasoning,
         };
 
-        profile.validate_config(&config, &stage_ctx).map_err(DaemonError::ProfileValidation)?;
+        profile
+            .validate_config(&config, &stage_ctx)
+            .map_err(DaemonError::ProfileValidation)?;
 
         let shared_store = match workflows.get(self.workflow_id) {
             Some(wf) => load_shared_store(&wf.root).map_err(DaemonError::Workflow)?,
@@ -81,15 +85,16 @@ impl<'a> LLMStageDriver<'a> {
         };
 
         if let Some(ref script) = lua_script {
-            let lua = create_sandboxed_vm()
-                .map_err(DaemonError::Workflow)?;
+            let lua = create_sandboxed_vm().map_err(DaemonError::Workflow)?;
             let mut lua_ctx = LuaContext::new(
                 &self.stage.id.raw,
                 &self.stage.path,
-                &workflows.get(self.workflow_id).map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone()),
-            ).with_shared_store(shared_store.clone());
-            run_hook(&lua, "on_validate", &mut lua_ctx, script)
-                .map_err(DaemonError::Workflow)?;
+                &workflows
+                    .get(self.workflow_id)
+                    .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone()),
+            )
+            .with_shared_store(shared_store.clone());
+            run_hook(&lua, "on_validate", &mut lua_ctx, script).map_err(DaemonError::Workflow)?;
             if lua_ctx.skip {
                 tracing::info!(stage = %self.stage.id.raw, "skipped by on_validate hook");
                 return Ok(String::new());
@@ -107,7 +112,8 @@ impl<'a> LLMStageDriver<'a> {
             "calling LLM"
         );
 
-        let response = self.llm
+        let response = self
+            .llm
             .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
             .await
             .map_err(DaemonError::Llm)?;
@@ -125,7 +131,8 @@ impl<'a> LLMStageDriver<'a> {
                 &output,
                 response.usage.completion_tokens as u64,
                 &shared_store,
-            ).await?;
+            )
+            .await?;
         }
 
         Ok(output)
@@ -156,7 +163,9 @@ fn parse_thinking_mode(val: &str) -> ThinkingMode {
                 .nth(1)
                 .and_then(|n| n.parse::<usize>().ok())
                 .unwrap_or(8192);
-            ThinkingMode::Extended { budget_tokens: budget }
+            ThinkingMode::Extended {
+                budget_tokens: budget,
+            }
         }
         _ => ThinkingMode::Default,
     }
@@ -201,22 +210,22 @@ async fn read_input_files(input_path: &Path) -> Result<String, DaemonError> {
         Err(e) => return Err(DaemonError::io(input_path, e)),
     }
 
-    let mut entries = tokio::fs::read_dir(input_path).await
+    let mut entries = tokio::fs::read_dir(input_path)
+        .await
         .map_err(|e| DaemonError::io(input_path, e))?;
     let mut parts = Vec::new();
 
-    while let Some(entry) = entries.next_entry().await
-        .map_err(|e| DaemonError::io(input_path, e))? {
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| DaemonError::io(input_path, e))?
+    {
         let path = entry.path();
         if path.is_file() {
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => {
                     if let Some(name) = path.file_name() {
-                        parts.push(format!(
-                            "--- {} ---\n{}",
-                            name.to_string_lossy(),
-                            content
-                        ));
+                        parts.push(format!("--- {} ---\n{}", name.to_string_lossy(), content));
                     }
                 }
                 Err(e) => {
@@ -269,9 +278,8 @@ async fn assemble_messages(
                         let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
                         let media_type = match mm.input_type.as_str() {
                             "image" => {
-                                let ext = path.extension()
-                                    .and_then(|e| e.to_str())
-                                    .unwrap_or("png");
+                                let ext =
+                                    path.extension().and_then(|e| e.to_str()).unwrap_or("png");
                                 format!("image/{ext}")
                             }
                             _ => "application/octet-stream".to_string(),
@@ -302,7 +310,10 @@ async fn assemble_messages(
     if !input_content.is_empty() {
         messages.push(Message::new(Role::User, input_content.to_string()));
     } else if !messages.is_empty() {
-        messages.push(Message::new(Role::User, "Execute the task described above."));
+        messages.push(Message::new(
+            Role::User,
+            "Execute the task described above.",
+        ));
     }
 
     messages
@@ -315,17 +326,20 @@ async fn write_stage_output(
 ) -> Result<PathBuf, DaemonError> {
     let content = response.content.clone().unwrap_or_default();
 
-    tokio::fs::create_dir_all(&stage.output_path).await
+    tokio::fs::create_dir_all(&stage.output_path)
+        .await
         .map_err(|e| DaemonError::io(&stage.output_path, e))?;
 
     let result_path = stage.output_path.join("result.md");
-    tokio::fs::write(&result_path, &content).await
+    tokio::fs::write(&result_path, &content)
+        .await
         .map_err(|e| DaemonError::io(&result_path, e))?;
 
     if let Some(ref reasoning) = response.reasoning {
         if stage_ctx.capture_reasoning {
             let reasoning_path = stage.output_path.join("reasoning.md");
-            tokio::fs::write(&reasoning_path, reasoning).await
+            tokio::fs::write(&reasoning_path, reasoning)
+                .await
                 .map_err(|e| DaemonError::io(&reasoning_path, e))?;
             tracing::info!(
                 stage = %stage.id.raw,
@@ -355,16 +369,13 @@ async fn run_post_completion_hooks(
     completion_tokens: u64,
     shared_store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Result<(), DaemonError> {
-    let lua = create_sandboxed_vm()
-        .map_err(DaemonError::Workflow)?;
-    let wf_root = workflows.get(workflow_id).map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
-    let mut lua_ctx = LuaContext::new(
-        &stage.id.raw,
-        &stage.path,
-        &wf_root,
-    )
-    .with_output(content, completion_tokens)
-    .with_shared_store(shared_store.clone());
+    let lua = create_sandboxed_vm().map_err(DaemonError::Workflow)?;
+    let wf_root = workflows
+        .get(workflow_id)
+        .map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
+    let mut lua_ctx = LuaContext::new(&stage.id.raw, &stage.path, &wf_root)
+        .with_output(content, completion_tokens)
+        .with_shared_store(shared_store.clone());
     if let Err(e) = run_hook(&lua, "on_complete", &mut lua_ctx, script) {
         tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
     } else {
@@ -395,13 +406,24 @@ mod tests {
 
     #[test]
     fn parse_thinking_mode_variants() {
-        assert!(matches!(parse_thinking_mode("disabled"), ThinkingMode::Disabled));
-        assert!(matches!(parse_thinking_mode("extended"), ThinkingMode::Extended { .. }));
+        assert!(matches!(
+            parse_thinking_mode("disabled"),
+            ThinkingMode::Disabled
+        ));
+        assert!(matches!(
+            parse_thinking_mode("extended"),
+            ThinkingMode::Extended { .. }
+        ));
         assert!(matches!(
             parse_thinking_mode("extended:4096"),
-            ThinkingMode::Extended { budget_tokens: 4096 }
+            ThinkingMode::Extended {
+                budget_tokens: 4096
+            }
         ));
-        assert!(matches!(parse_thinking_mode("default"), ThinkingMode::Default));
+        assert!(matches!(
+            parse_thinking_mode("default"),
+            ThinkingMode::Default
+        ));
         assert!(matches!(parse_thinking_mode(""), ThinkingMode::Default));
     }
 }

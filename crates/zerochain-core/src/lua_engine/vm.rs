@@ -113,7 +113,9 @@ mod tests {
         let lua = sandbox();
         // loadfile is a base function (always loaded). It can read real files,
         // but the loaded chunk still runs inside the sandbox — os/io remain blocked.
-        let result = lua.load("local f = loadfile('/etc/hostname'); if f then f() end").exec();
+        let result = lua
+            .load("local f = loadfile('/etc/hostname'); if f then f() end")
+            .exec();
         // Either loadfile returns nil (file not found) or the chunk runs but sandbox
         // restrictions still apply. Either way, no sandbox escape.
         if let Ok(()) = result {
@@ -140,13 +142,17 @@ mod tests {
     #[test]
     fn string_library_works() {
         let lua = sandbox();
-        lua.load("assert(string.upper('hello') == 'HELLO')").exec().unwrap();
+        lua.load("assert(string.upper('hello') == 'HELLO')")
+            .exec()
+            .unwrap();
     }
 
     #[test]
     fn table_library_works() {
         let lua = sandbox();
-        lua.load("local t = {}; table.insert(t, 1); assert(#t == 1)").exec().unwrap();
+        lua.load("local t = {}; table.insert(t, 1); assert(#t == 1)")
+            .exec()
+            .unwrap();
     }
 
     #[test]
@@ -171,53 +177,75 @@ mod tests {
     fn infinite_loop_hits_instruction_limit() {
         let lua = sandbox();
         let result = lua.load("while true do end").exec();
-        assert!(result.is_err(), "infinite loop should hit instruction limit");
+        assert!(
+            result.is_err(),
+            "infinite loop should hit instruction limit"
+        );
         let msg = format!("{result:?}");
-        assert!(msg.contains("instruction limit"), "error should mention instruction limit, got: {msg}");
+        assert!(
+            msg.contains("instruction limit"),
+            "error should mention instruction limit, got: {msg}"
+        );
     }
 
     #[test]
     fn expensive_computation_hits_limit() {
         let lua = sandbox();
-        let result = lua.load(r"
+        let result = lua
+            .load(
+                r"
             local x = 0
             for i = 1, 10000000 do
                 x = x + 1
             end
-        ").exec();
+        ",
+            )
+            .exec();
         assert!(result.is_err(), "should hit instruction limit");
     }
 
     #[test]
     fn memory_limit_enforced() {
         let lua = sandbox();
-        let result = lua.load(r#"
+        let result = lua
+            .load(
+                r#"
             local s = string.rep("A", 1024 * 1024)
             for i = 1, 20 do
                 s = s .. s
             end
-        "#).exec();
+        "#,
+            )
+            .exec();
         assert!(result.is_err(), "should hit memory limit");
     }
 
     #[test]
     fn memory_limit_table_allocation() {
         let lua = sandbox();
-        let result = lua.load(r#"
+        let result = lua
+            .load(
+                r#"
             local t = {}
             for i = 1, 5000000 do
                 t[i] = string.rep("x", 100)
             end
-        "#).exec();
+        "#,
+            )
+            .exec();
         assert!(result.is_err(), "table allocation should hit memory limit");
     }
 
     #[test]
     fn cannot_set_global_to_bypass_sandbox() {
         let lua = sandbox();
-        let _result = lua.load(r#"
+        let _result = lua
+            .load(
+                r#"
             _G["io"] = nil
-        "#).exec();
+        "#,
+            )
+            .exec();
         let result2 = lua.load("io.open('/tmp/x')").exec();
         assert!(result2.is_err());
     }
@@ -226,7 +254,9 @@ mod tests {
     fn metatable_tampering_does_not_escape() {
         let lua = sandbox();
         // getmetatable("") returns nil in this sandbox — string metatables are protected
-        let _result = lua.load(r#"
+        let _result = lua
+            .load(
+                r#"
             local mt = getmetatable("")
             if mt then
                 mt.__index = function(_, key)
@@ -235,23 +265,35 @@ mod tests {
                     end
                 end
             end
-        "#).exec();
+        "#,
+            )
+            .exec();
         // Script succeeds (mt is nil, nothing happens). Verify os is still blocked.
         let check = lua.load("os.execute('id')").exec();
-        assert!(check.is_err(), "os should remain blocked regardless of metatable access");
+        assert!(
+            check.is_err(),
+            "os should remain blocked regardless of metatable access"
+        );
     }
 
     #[test]
     fn load_with_bytecode_restricted() {
         let lua = sandbox();
-        let result = lua.load("local f = load('os.execute(\"id\")'); if f then f() end").exec();
-        assert!(result.is_err(), "load() should not bypass sandbox restrictions");
+        let result = lua
+            .load("local f = load('os.execute(\"id\")'); if f then f() end")
+            .exec();
+        assert!(
+            result.is_err(),
+            "load() should not bypass sandbox restrictions"
+        );
     }
 
     #[test]
     fn coroutine_cannot_bypass_instruction_limit() {
         let lua = sandbox();
-        let result = lua.load(r"
+        let result = lua
+            .load(
+                r"
             local function infinite()
                 while true do coroutine.yield() end
             end
@@ -259,24 +301,37 @@ mod tests {
             for i = 1, 1000000 do
                 coroutine.resume(co)
             end
-        ").exec();
-        assert!(result.is_err(), "coroutines should still respect instruction limit");
+        ",
+            )
+            .exec();
+        assert!(
+            result.is_err(),
+            "coroutines should still respect instruction limit"
+        );
     }
 
     #[test]
     fn reset_instruction_counter_allows_fresh_execution() {
         let lua = sandbox();
-        lua.load(r"
+        lua.load(
+            r"
             local x = 0
             for i = 1, 50000 do x = x + 1 end
-        ").exec().unwrap();
+        ",
+        )
+        .exec()
+        .unwrap();
 
         reset_instruction_counter(&lua).unwrap();
 
-        lua.load(r"
+        lua.load(
+            r"
             local y = 0
             for i = 1, 50000 do y = y + 1 end
             assert(y == 50000)
-        ").exec().unwrap();
+        ",
+        )
+        .exec()
+        .unwrap();
     }
 }

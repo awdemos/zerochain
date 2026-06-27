@@ -81,10 +81,18 @@ impl ZerochainMcpServer {
     )]
     async fn init_workflow(
         &self,
-        rmcp::handler::server::wrapper::Parameters(zerochain_engine::InitWorkflowRequest { name, template, .. }): rmcp::handler::server::wrapper::Parameters<zerochain_engine::InitWorkflowRequest>,
+        rmcp::handler::server::wrapper::Parameters(zerochain_engine::InitWorkflowRequest {
+            name,
+            template,
+            ..
+        }): rmcp::handler::server::wrapper::Parameters<
+            zerochain_engine::InitWorkflowRequest,
+        >,
     ) -> rmcp::model::CallToolResult {
         if !is_valid_workflow_name(&name) {
-            return tool_error("invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into());
+            return tool_error(
+                "invalid workflow name: must be 1-128 chars, alphanumeric plus -_.".into(),
+            );
         }
         let name_for_msg = name.clone();
         let mut registry = self.state.write().await;
@@ -165,8 +173,7 @@ impl ZerochainMcpServer {
                 format!("complete: {}", plan.is_complete()),
                 format!(
                     "next:     {}",
-                    plan.next_stage()
-                        .map_or("none", |s| s.raw.as_str())
+                    plan.next_stage().map_or("none", |s| s.raw.as_str())
                 ),
             ];
             for stage in &workflow.stages {
@@ -219,14 +226,20 @@ impl ZerochainMcpServer {
     )]
     async fn approve_stage(
         &self,
-        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+        rmcp::handler::server::wrapper::Parameters(StageParams {
+            workflow_id,
+            stage_id,
+        }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
         let mut registry = self.state.write().await;
         let handle = match registry.get_or_create(&workflow_id).await {
             Ok(h) => h,
             Err(e) => return tool_error(format!("failed to get handle: {e}")),
         };
-        match handle.mark_stage_complete(workflow_id.clone(), stage_id.clone()).await {
+        match handle
+            .mark_stage_complete(workflow_id.clone(), stage_id.clone())
+            .await
+        {
             Ok(()) => {
                 if let Err(e) = handle.reload_workflow(workflow_id.clone()).await {
                     tracing::warn!(error = %e, "failed to reload workflow after approve");
@@ -243,14 +256,21 @@ impl ZerochainMcpServer {
     )]
     async fn reject_stage(
         &self,
-        rmcp::handler::server::wrapper::Parameters(RejectParams { workflow_id, stage_id, feedback }): rmcp::handler::server::wrapper::Parameters<RejectParams>,
+        rmcp::handler::server::wrapper::Parameters(RejectParams {
+            workflow_id,
+            stage_id,
+            feedback,
+        }): rmcp::handler::server::wrapper::Parameters<RejectParams>,
     ) -> rmcp::model::CallToolResult {
         let mut registry = self.state.write().await;
         let handle = match registry.get_or_create(&workflow_id).await {
             Ok(h) => h,
             Err(e) => return tool_error(format!("failed to get handle: {e}")),
         };
-        match handle.mark_stage_error(workflow_id.clone(), stage_id.clone(), feedback).await {
+        match handle
+            .mark_stage_error(workflow_id.clone(), stage_id.clone(), feedback)
+            .await
+        {
             Ok(()) => {
                 if let Err(e) = handle.reload_workflow(workflow_id.clone()).await {
                     tracing::warn!(error = %e, "failed to reload workflow after reject");
@@ -267,7 +287,10 @@ impl ZerochainMcpServer {
     )]
     async fn snapshot_stage(
         &self,
-        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+        rmcp::handler::server::wrapper::Parameters(StageParams {
+            workflow_id,
+            stage_id,
+        }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
         let mut registry = self.state.write().await;
         let handle = match registry.get_or_create(&workflow_id).await {
@@ -286,7 +309,10 @@ impl ZerochainMcpServer {
     )]
     async fn restore_stage(
         &self,
-        rmcp::handler::server::wrapper::Parameters(StageParams { workflow_id, stage_id }): rmcp::handler::server::wrapper::Parameters<StageParams>,
+        rmcp::handler::server::wrapper::Parameters(StageParams {
+            workflow_id,
+            stage_id,
+        }): rmcp::handler::server::wrapper::Parameters<StageParams>,
     ) -> rmcp::model::CallToolResult {
         let mut registry = self.state.write().await;
         let handle = match registry.get_or_create(&workflow_id).await {
@@ -314,15 +340,15 @@ pub async fn run_stdio_server(workspace: PathBuf) -> Result<(), zerochain_engine
     server.load().await?;
 
     let transport = (tokio::io::stdin(), tokio::io::stdout());
-    let service = server
-        .serve(transport)
-        .await
-        .map_err(|e| zerochain_engine::DaemonError::Llm(zerochain_llm::error::LLMError::Config(
-            format!("MCP server error: {e}")
-        )))?;
-    service.waiting().await
-        .map_err(|e| zerochain_engine::DaemonError::Llm(zerochain_llm::error::LLMError::Config(
-            format!("MCP transport error: {e}")
-        )))?;
+    let service = server.serve(transport).await.map_err(|e| {
+        zerochain_engine::DaemonError::Llm(zerochain_llm::error::LLMError::Config(format!(
+            "MCP server error: {e}"
+        )))
+    })?;
+    service.waiting().await.map_err(|e| {
+        zerochain_engine::DaemonError::Llm(zerochain_llm::error::LLMError::Config(format!(
+            "MCP transport error: {e}"
+        )))
+    })?;
     Ok(())
 }
