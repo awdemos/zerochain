@@ -85,6 +85,7 @@ impl AppState {
     /// Returns an error if the workflow directory cannot be read or if any
     /// workflow definition fails to parse. Partial failures are reported via
     /// [`DaemonError::WorkflowLoadPartial`].
+    #[tracing::instrument(skip(self), err, fields(dir = %self.workspace_root.display()))]
     pub async fn load_workflows(&mut self) -> Result<(), DaemonError> {
         let dir = workflow_dir(&self.workspace_root);
         match tokio::fs::metadata(&dir).await {
@@ -134,6 +135,7 @@ impl AppState {
     }
 
     pub async fn reload_workflow(&mut self, id: &str) -> Result<(), DaemonError> {
+        let start = std::time::Instant::now();
         let wf = self
             .workflows
             .get(id)
@@ -141,11 +143,13 @@ impl AppState {
         let root = wf.root.clone();
         let reloaded = Workflow::from_dir(&root).await?;
         self.workflows.insert(id.to_string(), reloaded);
+        tracing::info!(workflow_id = id, elapsed_ms = start.elapsed().as_millis(), "reloaded workflow");
         Ok(())
     }
 
     /// Run a single stage through its full lifecycle: acquire lock, clean output,
     /// execute, mark complete or error, and reload the workflow.
+    #[tracing::instrument(skip(self), fields(workflow_id, stage_id = %stage_raw))]
     pub async fn run_stage(
         &mut self,
         workflow_id: &str,
@@ -275,6 +279,7 @@ impl AppState {
         workflow_id: &str,
         stage_id: &str,
     ) -> Result<(), DaemonError> {
+        let start = std::time::Instant::now();
         let wf = self
             .workflows
             .get(workflow_id)
@@ -301,6 +306,7 @@ impl AppState {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(DaemonError::io(&err_marker, e)),
         }
+        tracing::info!(workflow_id, stage_id, elapsed_ms = start.elapsed().as_millis(), "marked stage complete");
         Ok(())
     }
 
@@ -310,6 +316,11 @@ impl AppState {
         stage_id: &str,
         feedback: Option<&str>,
     ) -> Result<(), DaemonError> {
+        let start = std::time::Instant::now();
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
         let wf = self
             .workflows
             .get(workflow_id)
@@ -326,14 +337,20 @@ impl AppState {
         tokio::fs::write(&marker, feedback.unwrap_or(""))
             .await
             .map_err(|e| DaemonError::io(&marker, e))?;
+        tracing::info!(workflow_id, stage_id, elapsed_ms = start.elapsed().as_millis(), "marked stage error");
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(workflow_id, stage_id))]
     pub async fn snapshot_stage(
         &self,
         workflow_id: &str,
         stage_id: &str,
     ) -> Result<PathBuf, DaemonError> {
+        let start = std::time::Instant::now();
+        let span = tracing::Span::current();
+        span.record("workflow_id", workflow_id);
+        span.record("stage_id", stage_id);
         let wf = self
             .workflows
             .get(workflow_id)
@@ -371,6 +388,7 @@ impl AppState {
             stage = %stage.id.raw,
             backend = %self.cow_backend.name(),
             snapshot = %snap_dir.display(),
+            elapsed_ms = start.elapsed().as_millis(),
             "stage snapshot created"
         );
 
@@ -511,6 +529,7 @@ impl AppState {
         out
     }
 
+    #[tracing::instrument(skip(self), fields(workflow_id, stage_id = %stage.id.raw))]
     pub async fn execute_stage(
         &mut self,
         workflow_id: &str,
@@ -537,6 +556,7 @@ impl AppState {
         }
     }
 
+    #[tracing::instrument(skip(self, stage, llm), fields(workflow_id, stage_id = %stage.id.raw))]
     pub async fn execute_stage_with_llm(
         &mut self,
         workflow_id: &str,
@@ -570,6 +590,7 @@ impl AppState {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, stage), fields(workflow_id, stage_id = %stage.id.raw))]
     pub async fn execute_stage_in_container(
         &mut self,
         workflow_id: &str,
