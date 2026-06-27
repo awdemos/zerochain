@@ -147,6 +147,23 @@ impl AppState {
         Ok(())
     }
 
+    async fn refresh_single_stage(
+        &mut self,
+        workflow_id: &str,
+        stage_raw: &str,
+    ) -> Result<(), DaemonError> {
+        let start = std::time::Instant::now();
+        let wf = self
+            .workflows
+            .get_mut(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        wf.refresh_stage(stage_raw)
+            .await
+            .map_err(DaemonError::Workflow)?;
+        tracing::info!(workflow_id, stage = %stage_raw, elapsed_ms = start.elapsed().as_millis(), "refreshed single stage");
+        Ok(())
+    }
+
     /// Run a single stage through its full lifecycle: acquire lock, clean output,
     /// execute, mark complete or error, and reload the workflow.
     #[tracing::instrument(skip(self), fields(workflow_id, stage_id = %stage_raw))]
@@ -209,8 +226,11 @@ impl AppState {
             }
         }
 
-        if let Err(e) = self.reload_workflow(workflow_id).await {
-            tracing::warn!(error = %e, "failed to reload workflow");
+        if let Err(e) = self.refresh_single_stage(workflow_id, stage_raw).await {
+            tracing::warn!(error = %e, "failed to refresh stage; falling back to full reload");
+            if let Err(e) = self.reload_workflow(workflow_id).await {
+                tracing::warn!(error = %e, "failed to reload workflow");
+            }
         }
 
         result

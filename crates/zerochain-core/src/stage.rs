@@ -171,6 +171,18 @@ impl Stage {
             command,
         })
     }
+
+    /// Reload marker state from disk. This is cheaper than a full
+    /// `Stage::from_dir` because it skips re-parsing CONTEXT.md.
+    pub async fn refresh_markers(&mut self) -> Result<()> {
+        self.is_complete = tokio::fs::try_exists(self.path.join(".complete"))
+            .await
+            .map_err(|e| crate::error::io_err(&self.path, e))?;
+        self.is_error = tokio::fs::try_exists(self.path.join(".error"))
+            .await
+            .map_err(|e| crate::error::io_err(&self.path, e))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
