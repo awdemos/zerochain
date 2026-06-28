@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
@@ -9,6 +9,7 @@ use tokio::runtime::Runtime;
 use zerochain_core::task::{Task, TaskExecution};
 use zerochain_core::workflow::Workflow;
 use zerochain_engine::AppState;
+use zerochain_fs::clean_output;
 use zerochain_llm::{CompleteResponse, Content, LLMConfig, Message, ProviderId, Role, LLM};
 
 struct MockLLM {
@@ -67,7 +68,7 @@ impl LLM for MockLLM {
     }
 }
 
-fn init_workflow(workspace: &Path) -> (Workflow, String) {
+fn init_workflow(workspace: &std::path::Path) -> Workflow {
     let rt = Runtime::new().expect("tokio runtime");
     let wf_base = workspace.join(".zerochain").join("workflows");
     std::fs::create_dir_all(&wf_base).expect("create workflows dir");
@@ -79,34 +80,35 @@ fn init_workflow(workspace: &Path) -> (Workflow, String) {
         ))
         .build();
 
-    let wf = rt
-        .block_on(Workflow::init(&task, &wf_base))
-        .expect("init workflow");
-    (wf, wf_base.to_string_lossy().to_string())
+    rt.block_on(Workflow::init(&task, &wf_base))
+        .expect("init workflow")
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
+    let rt = Runtime::new().expect("tokio runtime");
     let tmp = TempDir::new().expect("tempdir");
-    let (wf, _wf_base) = init_workflow(tmp.path());
+    let wf = init_workflow(tmp.path());
     let stage = wf.stage_by_name("analyze").expect("analyze stage");
 
     std::fs::write(stage.input_path.join("data.md"), "benchmark input data").expect("write input");
 
-    let rt = Runtime::new().expect("tokio runtime");
     let mock = MockLLM::new("benchmark response");
+    let state = RefCell::new(rt.block_on(AppState::new(tmp.path(), None)));
 
     c.bench_function("execute_stage_with_llm", |b| {
         b.to_async(&rt).iter(|| async {
-            let mut state = AppState::new(tmp.path(), None).await;
-            let _ = state
+            clean_output(&stage.path)
+                .await
+                .expect("clean output before iteration");
+            let mut state = state.borrow_mut();
+            let output = state
                 .execute_stage_with_llm("bench-wf", stage, &mock)
                 .await
                 .expect("execute stage");
-            black_box(state);
+            black_box(output);
         });
     });
 
-    // Sanity check that the benchmark actually produced output.
     let result_path = stage.output_path.join("result.md");
     assert!(
         result_path.exists(),

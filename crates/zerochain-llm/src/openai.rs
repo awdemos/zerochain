@@ -5,7 +5,9 @@ use crate::types::{
     CompleteResponse, FinishReason, LLMConfig, Message, ProviderId, Tool, ToolCall, Usage,
 };
 #[cfg(test)]
-use crate::types::{Content, ImageUrlContent, Role};
+use crate::types::{Content, Role};
+#[cfg(test)]
+use serde_json::json;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -133,7 +135,6 @@ impl OpenAICompatibleProvider {
             .ok()
             .and_then(|v| v.get("retry_after_ms")?.as_u64())
     }
-
 }
 
 pub struct ProfiledCompleteParams<'a> {
