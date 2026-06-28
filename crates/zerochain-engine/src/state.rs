@@ -73,8 +73,16 @@ async fn resolve_cow_backend(
 const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
 
 impl AppState {
+    #[tracing::instrument(skip(workspace_root, cas), fields(dir = %workspace_root.display()))]
     pub async fn new(workspace_root: &Path, cas: Option<CasStore>) -> AppState {
+        let start = std::time::Instant::now();
         let cow_backend = resolve_cow_backend(workspace_root).await;
+        tracing::info!(
+            dir = %workspace_root.display(),
+            backend = %cow_backend.name(),
+            elapsed_ms = start.elapsed().as_millis(),
+            "created AppState"
+        );
         AppState {
             workspace_root: workspace_root.to_path_buf(),
             workflows: HashMap::new(),
