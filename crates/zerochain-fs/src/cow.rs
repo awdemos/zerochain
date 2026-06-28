@@ -269,7 +269,11 @@ impl CowPlatform for BtrfsCow {
 
 #[async_trait::async_trait]
 impl CowPlatform for DirectoryCow {
-    async fn snapshot(&self, source_dir: &Path, target_dir: &Path) -> Result<()> {
+    async fn snapshot(
+        &self,
+        source_dir: &Path,
+        target_dir: &Path,
+    ) -> Result<()> {
         if !tokio::fs::try_exists(source_dir)
             .await
             .map_err(|e| io_err(source_dir, e))?
@@ -292,12 +296,44 @@ impl CowPlatform for DirectoryCow {
             });
         }
 
+        // Fast path: ask the system cp to use reflink clones when available.
+        // On Btrfs/XFS/APFS this produces a near-zero-copy snapshot; on other
+        // filesystems cp falls back to a normal copy. We only attempt this on
+        // platforms where cp supports --reflink=auto.
+        #[cfg(unix)]
+        if let Ok(output) = tokio::process::Command::new("cp")
+            .args([
+                "-a",
+                "--reflink=auto",
+                &source_dir.to_string_lossy(),
+                &target_dir.to_string_lossy(),
+            ])
+            .output()
+            .await
+        {
+            if output.status.success() {
+                tracing::debug!(
+                    source = %source_dir.display(),
+                    target = %target_dir.display(),
+                    "directory snapshot created via cp --reflink=auto"
+                );
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::debug!(
+                source = %source_dir.display(),
+                target = %target_dir.display(),
+                stderr = %stderr,
+                "cp --reflink=auto failed; falling back to recursive copy"
+            );
+        }
+
         copy_dir_recursive(source_dir, target_dir).await?;
 
         tracing::debug!(
             source = %source_dir.display(),
             target = %target_dir.display(),
-            "directory snapshot created"
+            "directory snapshot created via recursive copy"
         );
 
         Ok(())
