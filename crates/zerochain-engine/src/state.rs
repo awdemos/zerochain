@@ -39,8 +39,11 @@ fn workflow_dir(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".zerochain").join("workflows")
 }
 
-fn cow_backend_cache() -> &'static Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>>> = OnceLock::new();
+fn cow_backend_cache(
+) -> &'static Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>> {
+    static CACHE: OnceLock<
+        Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>>,
+    > = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -826,7 +829,7 @@ fn find_latest_snapshot(
     stage_id: &str,
 ) -> Result<Option<String>, std::io::Error> {
     let prefix = format!("{stage_id}.");
-    let mut candidates: Vec<(std::time::SystemTime, String)> = Vec::new();
+    let mut candidates: Vec<String> = Vec::new();
     for entry in std::fs::read_dir(snapshots_dir)? {
         let entry = entry?;
         if !entry.path().is_dir() {
@@ -839,11 +842,13 @@ fn find_latest_snapshot(
         if !name.starts_with(&prefix) {
             continue;
         }
-        let modified = entry.metadata()?.modified()?;
-        candidates.push((modified, name.to_string()));
+        candidates.push(name.to_string());
     }
-    candidates.sort_by_key(|a| a.0);
-    Ok(candidates.into_iter().last().map(|(_, name)| name))
+    // Snapshot names embed a UTC timestamp + nanosecond nonce, so lexicographic
+    // order is chronological order. Filesystem mtime is unreliable because copy
+    // utilities preserve the source directory's modification time.
+    candidates.sort();
+    Ok(candidates.into_iter().last())
 }
 
 #[cfg(test)]

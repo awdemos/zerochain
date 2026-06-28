@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
+use serde::{ser::SerializeStruct, Deserialize, Serialize, Serializer};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProviderId {
@@ -57,9 +57,7 @@ pub enum Role {
 #[derive(Clone, Debug, Deserialize)]
 pub enum Content {
     Text(String),
-    ImageUrl {
-        image_url: ImageUrlContent,
-    },
+    ImageUrl { image_url: ImageUrlContent },
 }
 
 impl Serialize for Content {

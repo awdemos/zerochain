@@ -55,10 +55,7 @@ impl Context {
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or if the Markdown frontmatter is invalid.
-    pub async fn from_md_file_cached(
-        path: &Path,
-        cache: Option<&ContextCache>,
-    ) -> Result<Self> {
+    pub async fn from_md_file_cached(path: &Path, cache: Option<&ContextCache>) -> Result<Self> {
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| io_err(path.to_path_buf(), e))?;

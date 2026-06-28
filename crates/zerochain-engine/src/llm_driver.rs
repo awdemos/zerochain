@@ -102,7 +102,8 @@ impl<'a> LLMStageDriver<'a> {
                     .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone()),
             )
             .with_shared_store(shared_store.clone());
-            run_hook(lua.get(), "on_validate", &mut lua_ctx, script).map_err(DaemonError::Workflow)?;
+            run_hook(lua.get(), "on_validate", &mut lua_ctx, script)
+                .map_err(DaemonError::Workflow)?;
             if lua_ctx.skip {
                 tracing::info!(stage = %self.stage.id.raw, "skipped by on_validate hook");
                 return Ok(String::new());
