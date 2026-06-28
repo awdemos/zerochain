@@ -7,7 +7,7 @@ use zerochain_core::context::{Context as StageContext, ContextCache};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
 use zerochain_core::{
-    create_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext,
+    acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext,
 };
 use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
@@ -93,7 +93,7 @@ impl<'a> LLMStageDriver<'a> {
         };
 
         if let Some(ref script) = lua_script {
-            let lua = create_sandboxed_vm().map_err(DaemonError::Workflow)?;
+            let lua = acquire_sandboxed_vm().map_err(DaemonError::Workflow)?;
             let mut lua_ctx = LuaContext::new(
                 &self.stage.id.raw,
                 &self.stage.path,
@@ -102,7 +102,7 @@ impl<'a> LLMStageDriver<'a> {
                     .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone()),
             )
             .with_shared_store(shared_store.clone());
-            run_hook(&lua, "on_validate", &mut lua_ctx, script).map_err(DaemonError::Workflow)?;
+            run_hook(lua.get(), "on_validate", &mut lua_ctx, script).map_err(DaemonError::Workflow)?;
             if lua_ctx.skip {
                 tracing::info!(stage = %self.stage.id.raw, "skipped by on_validate hook");
                 return Ok(String::new());
@@ -405,14 +405,14 @@ async fn run_post_completion_hooks(
     shared_store: &Arc<Mutex<HashMap<String, serde_json::Value>>>,
 ) -> Result<(), DaemonError> {
     let start = std::time::Instant::now();
-    let lua = create_sandboxed_vm().map_err(DaemonError::Workflow)?;
+    let lua = acquire_sandboxed_vm().map_err(DaemonError::Workflow)?;
     let wf_root = workflows
         .get(workflow_id)
         .map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
     let mut lua_ctx = LuaContext::new(&stage.id.raw, &stage.path, &wf_root)
         .with_output(content, completion_tokens)
         .with_shared_store(shared_store.clone());
-    if let Err(e) = run_hook(&lua, "on_complete", &mut lua_ctx, script) {
+    if let Err(e) = run_hook(lua.get(), "on_complete", &mut lua_ctx, script) {
         tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
     } else {
         if let Err(e) = save_shared_store(&wf_root, shared_store) {
