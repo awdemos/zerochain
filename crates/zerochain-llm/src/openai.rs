@@ -6,11 +6,11 @@ use crate::types::{
 };
 #[cfg(test)]
 use crate::types::{Content, Role};
-#[cfg(test)]
-use serde_json::json;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use serde_json::json;
 use tracing::{debug, instrument, warn};
 
 #[derive(Serialize)]

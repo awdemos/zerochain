@@ -269,11 +269,7 @@ impl CowPlatform for BtrfsCow {
 
 #[async_trait::async_trait]
 impl CowPlatform for DirectoryCow {
-    async fn snapshot(
-        &self,
-        source_dir: &Path,
-        target_dir: &Path,
-    ) -> Result<()> {
+    async fn snapshot(&self, source_dir: &Path, target_dir: &Path) -> Result<()> {
         if !tokio::fs::try_exists(source_dir)
             .await
             .map_err(|e| io_err(source_dir, e))?
