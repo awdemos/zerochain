@@ -1,9 +1,47 @@
+use std::sync::{Mutex, OnceLock};
+
 use mlua::{HookTriggers, Lua, LuaOptions, StdLib, VmState};
 
 use crate::error::Result;
 
 const MEMORY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
 const INSTRUCTION_LIMIT: i32 = 1_000_000;
+const VM_POOL_MAX_SIZE: usize = 16;
+
+static VM_POOL: OnceLock<Mutex<Vec<Lua>>> = OnceLock::new();
+
+fn vm_pool() -> &'static Mutex<Vec<Lua>> {
+    VM_POOL.get_or_init(|| Mutex::new(Vec::with_capacity(VM_POOL_MAX_SIZE)))
+}
+
+/// RAII guard around a pooled Lua VM. Returns the VM to the pool on drop.
+pub struct PooledLua {
+    lua: Option<Lua>,
+}
+
+impl PooledLua {
+    pub fn get(&self) -> &Lua {
+        self.lua.as_ref().expect("PooledLua already consumed")
+    }
+
+    pub fn into_inner(mut self) -> Lua {
+        self.lua.take().expect("PooledLua already consumed")
+    }
+}
+
+impl Drop for PooledLua {
+    fn drop(&mut self) {
+        if let Some(lua) = self.lua.take() {
+            if reset_vm_state(&lua).is_ok() {
+                if let Ok(mut pool) = vm_pool().lock() {
+                    if pool.len() < VM_POOL_MAX_SIZE {
+                        pool.push(lua);
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub fn create_sandboxed_vm() -> Result<Lua> {
     let lua = Lua::new_with(
@@ -49,6 +87,24 @@ pub fn reset_instruction_counter(lua: &Lua) -> Result<()> {
         .map_err(|e| crate::error::Error::Lua {
             message: format!("failed to reset instruction counter: {e}"),
         })
+}
+
+fn reset_vm_state(lua: &Lua) -> Result<()> {
+    reset_instruction_counter(lua)?;
+    let _ = lua.globals().set("ctx", mlua::Value::Nil);
+    Ok(())
+}
+
+pub fn acquire_sandboxed_vm() -> Result<PooledLua> {
+    if let Ok(mut pool) = vm_pool().lock() {
+        if let Some(lua) = pool.pop() {
+            reset_vm_state(&lua)?;
+            return Ok(PooledLua { lua: Some(lua) });
+        }
+    }
+    Ok(PooledLua {
+        lua: Some(create_sandboxed_vm()?),
+    })
 }
 
 #[cfg(test)]

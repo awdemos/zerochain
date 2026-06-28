@@ -14,7 +14,8 @@ pub mod workflow;
 pub use context::Context;
 pub use error::{Error, Result};
 pub use lua_engine::{
-    create_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext,
+    acquire_sandboxed_vm, create_sandboxed_vm, load_shared_store, run_hook, save_shared_store,
+    LuaContext, PooledLua,
 };
 pub use stage::{Stage, StageId};
 pub use task::Task;
