@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeStruct};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ProviderId {
@@ -54,14 +54,26 @@ pub enum Role {
     Tool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[derive(Clone, Debug, Deserialize)]
 pub enum Content {
     Text(String),
-    #[serde(rename = "image_url")]
     ImageUrl {
         image_url: ImageUrlContent,
     },
+}
+
+impl Serialize for Content {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Content::Text(s) => serializer.serialize_str(s),
+            Content::ImageUrl { image_url } => {
+                let mut state = serializer.serialize_struct("Content", 2)?;
+                state.serialize_field("type", "image_url")?;
+                state.serialize_field("image_url", image_url)?;
+                state.end()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

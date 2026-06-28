@@ -2,19 +2,19 @@ use crate::error::LLMError;
 use crate::profiles::{ProviderProfile, StageContext};
 use crate::trait_::LLM;
 use crate::types::{
-    CompleteResponse, Content, FinishReason, LLMConfig, Message, ProviderId, Role, Tool, ToolCall,
-    Usage,
+    CompleteResponse, FinishReason, LLMConfig, Message, ProviderId, Tool, ToolCall, Usage,
 };
+#[cfg(test)]
+use crate::types::{Content, ImageUrlContent, Role};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tracing::{debug, instrument, warn};
 
 #[derive(Serialize)]
 struct ChatRequest {
     model: String,
-    messages: Vec<serde_json::Value>,
+    messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,15 +93,6 @@ impl OpenAICompatibleProvider {
         })
     }
 
-    fn role_str(role: &Role) -> &'static str {
-        match role {
-            Role::System => "system",
-            Role::User => "user",
-            Role::Assistant => "assistant",
-            Role::Tool => "tool",
-        }
-    }
-
     fn parse_finish_reason(raw: Option<&str>) -> FinishReason {
         match raw {
             Some("stop") => FinishReason::Stop,
@@ -143,27 +134,6 @@ impl OpenAICompatibleProvider {
             .and_then(|v| v.get("retry_after_ms")?.as_u64())
     }
 
-    fn content_to_json(content: &Content) -> serde_json::Value {
-        match content {
-            Content::Text(s) => json!(s),
-            Content::ImageUrl { image_url } => {
-                json!({
-                    "type": "image_url",
-                    "image_url": {
-                        "url": image_url.url,
-                        "detail": image_url.detail
-                    }
-                })
-            }
-        }
-    }
-
-    fn message_to_json(msg: &Message) -> serde_json::Value {
-        json!({
-            "role": Self::role_str(&msg.role),
-            "content": Self::content_to_json(&msg.content),
-        })
-    }
 }
 
 pub struct ProfiledCompleteParams<'a> {
@@ -185,9 +155,6 @@ impl OpenAICompatibleProvider {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
-        let message_values: Vec<serde_json::Value> =
-            params.messages.iter().map(Self::message_to_json).collect();
-
         let chat_tools = params.tools.map(|t| {
             t.iter()
                 .map(|tool| ChatTool {
@@ -208,7 +175,7 @@ impl OpenAICompatibleProvider {
 
         let request = ChatRequest {
             model: params.config.model.clone(),
-            messages: message_values.clone(),
+            messages: params.messages.to_vec(),
             temperature: Some(params.config.temperature),
             seed: params.config.seed,
             max_tokens: if params.config.max_tokens > 0 {
@@ -485,21 +452,21 @@ mod tests {
     }
 
     #[test]
-    fn content_to_json_text() {
+    fn content_serializes_text() {
         let c = Content::Text("hello".into());
-        let j = OpenAICompatibleProvider::content_to_json(&c);
+        let j = serde_json::to_value(&c).unwrap();
         assert_eq!(j.as_str(), Some("hello"));
     }
 
     #[test]
-    fn content_to_json_image_url() {
+    fn content_serializes_image_url() {
         let c = Content::ImageUrl {
             image_url: ImageUrlContent {
                 url: "https://example.com/img.png".into(),
                 detail: Some("high".into()),
             },
         };
-        let j = OpenAICompatibleProvider::content_to_json(&c);
+        let j = serde_json::to_value(&c).unwrap();
         assert_eq!(j["type"].as_str(), Some("image_url"));
         assert_eq!(
             j["image_url"]["url"].as_str(),
@@ -509,9 +476,9 @@ mod tests {
     }
 
     #[test]
-    fn message_to_json_system_text() {
+    fn message_serializes_system_text() {
         let msg = Message::new(Role::System, "you are helpful");
-        let j = OpenAICompatibleProvider::message_to_json(&msg);
+        let j = serde_json::to_value(&msg).unwrap();
         assert_eq!(j["role"].as_str(), Some("system"));
         assert_eq!(j["content"].as_str(), Some("you are helpful"));
     }
