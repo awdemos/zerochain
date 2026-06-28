@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use crate::error::{io_err, Error, Result};
 
@@ -13,6 +15,31 @@ pub struct Context {
     pub source_path: Option<std::path::PathBuf>,
 }
 
+/// Thread-safe cache for parsed `Context` objects keyed by file contents.
+///
+/// Stages frequently reuse the same `CONTEXT.md` across multiple executions.
+/// Caching the parsed result avoids repeated YAML frontmatter parsing and Lua
+/// evaluation for identical content.
+#[derive(Clone, Default)]
+pub struct ContextCache {
+    inner: Arc<RwLock<HashMap<String, Context>>>,
+}
+
+impl ContextCache {
+    /// Return a cached `Context` if its source content matches `content`.
+    #[must_use]
+    pub fn get(&self, content: &str) -> Option<Context> {
+        self.inner.read().ok()?.get(content).cloned()
+    }
+
+    /// Insert a parsed `Context` keyed by its source content.
+    pub fn insert(&self, content: String, ctx: Context) {
+        if let Ok(mut guard) = self.inner.write() {
+            guard.insert(content, ctx);
+        }
+    }
+}
+
 impl Context {
     /// Load a context from a Markdown file at `path`.
     ///
@@ -20,11 +47,29 @@ impl Context {
     ///
     /// Returns an error if the file cannot be read or if the Markdown frontmatter is invalid.
     pub async fn from_md_file(path: &Path) -> Result<Self> {
+        Self::from_md_file_cached(path, None).await
+    }
+
+    /// Load a context from a Markdown file, optionally using a shared cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if the Markdown frontmatter is invalid.
+    pub async fn from_md_file_cached(
+        path: &Path,
+        cache: Option<&ContextCache>,
+    ) -> Result<Self> {
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| io_err(path.to_path_buf(), e))?;
+        if let Some(cached) = cache.and_then(|c| c.get(&content)) {
+            return Ok(cached);
+        }
         let mut ctx = Self::parse(&content)?;
         ctx.source_path = Some(path.to_path_buf());
+        if let Some(cache) = cache {
+            cache.insert(content, ctx.clone());
+        }
         Ok(ctx)
     }
 

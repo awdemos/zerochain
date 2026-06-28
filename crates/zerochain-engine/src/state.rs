@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
+use zerochain_core::context::ContextCache;
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
@@ -30,6 +31,7 @@ pub struct AppState {
     pub workspace_root: PathBuf,
     pub workflows: HashMap<String, Workflow>,
     pub cas: Option<CasStore>,
+    context_cache: ContextCache,
     cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
 }
 
@@ -77,6 +79,7 @@ impl AppState {
             workspace_root: workspace_root.to_path_buf(),
             workflows: HashMap::new(),
             cas,
+            context_cache: ContextCache::default(),
             cow_backend,
         }
     }
@@ -621,6 +624,7 @@ impl AppState {
             stage,
             llm,
             cas: self.cas.clone(),
+            context_cache: Some(self.context_cache.clone()),
         };
 
         // Snapshot the stage in the background while the LLM request is in flight.

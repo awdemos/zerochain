@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use zerochain_cas::{CasStore, Cid};
-use zerochain_core::context::Context as StageContext;
+use zerochain_core::context::{Context as StageContext, ContextCache};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
 use zerochain_core::{
@@ -21,6 +21,7 @@ pub struct LLMStageDriver<'a> {
     pub stage: &'a Stage,
     pub llm: &'a dyn LLM,
     pub cas: Option<CasStore>,
+    pub context_cache: Option<ContextCache>,
 }
 
 impl<'a> LLMStageDriver<'a> {
@@ -31,7 +32,13 @@ impl<'a> LLMStageDriver<'a> {
     ) -> Result<String, DaemonError> {
         let has_context = tokio::fs::metadata(&self.stage.context_path).await.is_ok();
         let ctx = if has_context {
-            Some(StageContext::from_md_file(&self.stage.context_path).await?)
+            Some(
+                StageContext::from_md_file_cached(
+                    &self.stage.context_path,
+                    self.context_cache.as_ref(),
+                )
+                .await?,
+            )
         } else {
             None
         };
