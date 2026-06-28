@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
@@ -39,24 +39,40 @@ fn workflow_dir(workspace_root: &Path) -> PathBuf {
     workspace_root.join(".zerochain").join("workflows")
 }
 
+fn cow_backend_cache() -> &'static Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[tracing::instrument(skip(workspace_root), fields(dir = %workspace_root.display()))]
 async fn resolve_cow_backend(
     workspace_root: &Path,
 ) -> Arc<dyn zerochain_fs::CowPlatform + Send + Sync> {
+    let cached = cow_backend_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(workspace_root).cloned());
+    if let Some(backend) = cached {
+        tracing::debug!(backend = %backend.name(), "using cached CoW backend");
+        return backend;
+    }
+
     let env_val = std::env::var("ZEROCHAIN_COW_BACKEND")
         .unwrap_or_default()
         .to_lowercase();
 
-    match env_val.as_str() {
+    let backend = match env_val.as_str() {
         "btrfs" => {
             let btrfs = zerochain_fs::BtrfsCow;
             if btrfs.is_available().await {
                 tracing::info!("CoW backend: btrfs (forced by ZEROCHAIN_COW_BACKEND)");
-                return Arc::new(btrfs);
+                Arc::new(btrfs)
+            } else {
+                tracing::warn!(
+                    "ZEROCHAIN_COW_BACKEND=btrfs but btrfs unavailable, falling back to auto"
+                );
+                zerochain_fs::detect_backend(workspace_root).await
             }
-            tracing::warn!(
-                "ZEROCHAIN_COW_BACKEND=btrfs but btrfs unavailable, falling back to auto"
-            );
-            zerochain_fs::detect_backend(workspace_root).await
         }
         "directory" => {
             tracing::info!("CoW backend: directory (forced by ZEROCHAIN_COW_BACKEND)");
@@ -67,7 +83,12 @@ async fn resolve_cow_backend(
             Arc::new(zerochain_fs::NoopCow)
         }
         _ => zerochain_fs::detect_backend(workspace_root).await,
+    };
+
+    if let Ok(mut cache) = cow_backend_cache().lock() {
+        cache.insert(workspace_root.to_path_buf(), backend.clone());
     }
+    backend
 }
 
 const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
