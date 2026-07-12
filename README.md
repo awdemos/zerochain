@@ -111,10 +111,27 @@ dagger call publish --registry ttl.sh/$USER-zerochaind:1h
 | `POST` | `/v1/workflows/{id}/run` | Run next pending stage |
 | `GET` | `/v1/workflows/{id}` | Workflow status |
 | `GET` | `/v1/workflows/{id}/output/{stage}` | Read result |
+| `GET` | `/v1/workflows/{id}/subvolumes` | List Btrfs subvolumes (Btrfs-only) |
 
 ### 🔍 Audit Trails
 
 Because zerochaind is filesystem-native, every workflow mutation is a file operation. `jj op log` gives you a complete, immutable timeline of every operation — no audit database, no extra infrastructure. The VCS *is* the audit log. We use the same jj workflow to develop ZeroChain itself; see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+---
+
+## 🧊 Btrfs Stage Isolation
+
+On Btrfs filesystems, zerochain can create each workflow and stage as an isolated subvolume. This enables true zero-copy snapshots and per-stage rollback.
+
+```bash
+# Workflow root is a subvolume; stages are plain directories inside it.
+ZEROCHAIN_BTRFS_SUBVOLUME_MODE=workflow zerochaind
+
+# Workflow root and every stage are independent subvolumes.
+ZEROCHAIN_BTRFS_SUBVOLUME_MODE=stage zerochaind
+```
+
+The effective mode is persisted to `{workflow_root}/.subvolume-mode` when the workflow is created, so the workflow keeps its isolation semantics even if the environment variable changes later. Use `GET /v1/workflows/{id}/subvolumes` to inspect the subvolumes for a workflow.
 
 ---
 
@@ -198,7 +215,7 @@ The module mounts cargo cache volumes for incremental builds, so repeated runs a
 ## 🗺️ Roadmap
 
 - [ ] Chainguard container execution for stage isolation
-- [ ] Btrfs copy-on-write snapshots (zero-copy isolation)
+- [x] Btrfs copy-on-write snapshots (zero-copy isolation)
 - [ ] OpenCode TypeScript plugin
 - [x] Dagger CI module
 - [x] Template registry for common workflow patterns
