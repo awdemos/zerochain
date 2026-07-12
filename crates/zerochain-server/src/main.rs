@@ -2,12 +2,38 @@ use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 use zerochain_broker::Broker;
 use zerochain_cas::CasStore;
 use zerochain_server::routes;
 use zerochain_server::state;
 use zerochain_server::subscriber;
+
+/// Wait for a shutdown signal (Ctrl+C or SIGTERM on Unix).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("received Ctrl+C, shutting down gracefully"),
+        _ = terminate => tracing::info!("received SIGTERM, shutting down gracefully"),
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -47,6 +73,14 @@ struct Cli {
         help = "Explicitly disable API key authentication"
     )]
     no_auth: bool,
+
+    #[arg(
+        long,
+        env = "ZEROCHAIN_MAX_BODY_SIZE",
+        default_value = "1048576",
+        help = "Maximum HTTP request body size in bytes (default: 1 MiB)"
+    )]
+    max_body_size: usize,
 }
 
 #[tokio::main]
@@ -56,7 +90,8 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "zerochaind=info".into()),
         )
-        .init();
+        .try_init()
+        .ok();
 
     let cli = Cli::parse();
 
@@ -100,10 +135,11 @@ async fn main() -> Result<()> {
     };
     server_state = server_state.with_cas(cas.clone());
     {
-        let mut guard = server_state.registry.write().await;
-        guard.set_cas(cas.clone());
+        let guard = server_state.registry.read().await;
+        guard.set_cas(cas.clone()).await;
     }
 
+    let mut subscriber_handle: Option<JoinHandle<()>> = None;
     if cli.broker_enabled {
         let broker: Arc<dyn Broker> = match cli.broker_backend.as_str() {
             "nats" => {
@@ -127,17 +163,30 @@ async fn main() -> Result<()> {
         server_state = server_state.with_broker(broker.clone());
 
         // Spawn background subscriber that bridges broker messages into stage input directories.
-        tokio::spawn(subscriber::spawn(cas, broker, cli.workspace.clone()));
+        subscriber_handle = Some(tokio::spawn(subscriber::spawn(
+            cas,
+            broker,
+            cli.workspace.clone(),
+        )));
     }
 
     server_state.refresh().await?;
 
-    let app = routes::routes(server_state);
+    let app = routes::routes(server_state)
+        .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_size));
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     tracing::info!("listening on {}", cli.listen);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    if let Some(handle) = subscriber_handle {
+        handle.abort();
+        let _ = handle.await;
+    }
+
+    tracing::info!("zerochaind stopped");
     Ok(())
 }

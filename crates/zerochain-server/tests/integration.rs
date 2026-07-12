@@ -739,3 +739,41 @@ mod auth {
         assert_eq!(resp.status(), StatusCode::OK);
     }
 }
+
+mod subvolume {
+    use super::*;
+    use zerochain_fs::BtrfsCow;
+
+    #[tokio::test]
+    async fn list_subvolumes_returns_400_on_non_btrfs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let state = ServerState::new(tmp.path()).await.with_auth_disabled();
+
+        // Create a workflow first.
+        let req = make_request(
+            "POST",
+            "/v1/workflows",
+            Some(r#"{"name": "subvol-test", "template": "00_spec"}"#),
+        );
+        let resp = send!(app_from_state(&state), req);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // On a non-Btrfs filesystem the endpoint explains that subvolumes are
+        // unavailable.
+        let req = make_request("GET", "/v1/workflows/subvol-test/subvolumes", None);
+        let resp = send!(app_from_state(&state), req);
+        if !BtrfsCow::is_btrfs_filesystem(tmp.path()).await {
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+            let body = body_string(resp.into_body()).await;
+            assert!(body.contains("not on a Btrfs filesystem"), "unexpected body: {body}");
+        } else {
+            // Real Btrfs test environments are rare in CI; just ensure it does
+            // not 500 when on Btrfs.
+            assert!(
+                resp.status().is_success() || resp.status() == StatusCode::BAD_REQUEST,
+                "unexpected status: {:?}",
+                resp.status()
+            );
+        }
+    }
+}

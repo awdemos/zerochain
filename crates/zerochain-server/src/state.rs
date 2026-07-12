@@ -60,7 +60,7 @@ impl ServerState {
     ///
     /// Returns `DaemonError` if workflow loading fails.
     pub async fn refresh(&self) -> Result<(), DaemonError> {
-        let mut registry = self.registry.write().await;
+        let registry = self.registry.read().await;
         registry.load_all().await?;
         Ok(())
     }

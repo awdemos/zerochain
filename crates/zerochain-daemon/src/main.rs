@@ -9,7 +9,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
-        .init();
+        .try_init()
+        .ok();
 
     let cli = zerochain_daemon::cli::Cli::parse();
     let mut state = AppState::new(&cli.workspace, None).await;

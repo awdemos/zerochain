@@ -1,8 +1,8 @@
 use async_nats::Client;
 use futures::stream::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use crate::{Broker, BrokerError, BrokerMessage, Result};
+use crate::{Broker, BrokerError, BrokerMessage, Result, Subscription};
 
 /// NATS-backed message broker.
 #[derive(Clone)]
@@ -50,7 +50,7 @@ impl Broker for NatsBroker {
         Ok(())
     }
 
-    async fn subscribe(&self, subject: &str) -> Result<mpsc::Receiver<BrokerMessage>> {
+    async fn subscribe(&self, subject: &str) -> Result<Subscription> {
         let mut subscriber = self
             .client
             .subscribe(subject.to_string())
@@ -58,23 +58,30 @@ impl Broker for NatsBroker {
             .map_err(|e| BrokerError::Subscribe(e.to_string()))?;
 
         let (tx, rx) = mpsc::channel(256);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
         tokio::spawn(async move {
-            while let Some(msg) = subscriber.next().await {
-                let payload = msg.payload;
-                match serde_json::from_slice::<BrokerMessage>(&payload) {
-                    Ok(broker_msg) => {
-                        if tx.send(broker_msg).await.is_err() {
-                            break;
+            loop {
+                tokio::select! {
+                    _ = &mut cancel_rx => break,
+                    maybe_msg = subscriber.next() => {
+                        let Some(msg) = maybe_msg else { break };
+                        let payload = msg.payload;
+                        match serde_json::from_slice::<BrokerMessage>(&payload) {
+                            Ok(broker_msg) => {
+                                if tx.send(broker_msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to deserialize broker message");
+                            }
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to deserialize broker message");
                     }
                 }
             }
         });
 
-        Ok(rx)
+        Ok(Subscription::new(rx, cancel_tx))
     }
 }

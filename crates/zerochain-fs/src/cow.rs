@@ -10,11 +10,102 @@ pub trait CowPlatform: Send + Sync {
     async fn is_available(&self) -> bool;
 
     fn name(&self) -> &str;
+
+    /// Ensure the workflow root directory exists, possibly as a subvolume.
+    async fn prepare_workflow_root(&self, path: &Path) -> Result<()> {
+        tokio::fs::create_dir_all(path)
+            .await
+            .map_err(|e| io_err(path, e))
+    }
+
+    /// Ensure a stage directory exists, possibly as a subvolume.
+    async fn prepare_stage_dir(&self, path: &Path) -> Result<()> {
+        tokio::fs::create_dir_all(path)
+            .await
+            .map_err(|e| io_err(path, e))
+    }
+
+    /// Remove a stage directory, using subvolume deletion if applicable.
+    async fn remove_stage_dir(&self, path: &Path) -> Result<()> {
+        tokio::fs::remove_dir_all(path)
+            .await
+            .map_err(|e| io_err(path, e))
+    }
+
+    /// Remove a snapshot directory, using subvolume deletion if applicable.
+    async fn remove_snapshot(&self, path: &Path) -> Result<()> {
+        tokio::fs::remove_dir_all(path)
+            .await
+            .map_err(|e| io_err(path, e))
+    }
 }
 
 pub struct DirectoryCow;
 
-pub struct BtrfsCow;
+/// Controls how zerochain uses Btrfs subvolumes for isolation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SubvolumeMode {
+    /// No subvolumes are created; plain directories are used.
+    #[default]
+    Off,
+    /// The workflow root is created as a subvolume.
+    Workflow,
+    /// The workflow root and each stage are created as subvolumes.
+    Stage,
+}
+
+impl SubvolumeMode {
+    /// Parse from the `ZEROCHAIN_BTRFS_SUBVOLUME_MODE` environment variable.
+    #[must_use]
+    pub fn from_env() -> Self {
+        std::env::var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE")
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or_default()
+    }
+
+    /// Load the persisted mode from `{workflow_root}/.subvolume-mode`, if any.
+    pub async fn load(workflow_root: &Path) -> Option<Self> {
+        let marker = workflow_root.join(".subvolume-mode");
+        let content = tokio::fs::read_to_string(&marker).await.ok()?;
+        content.trim().parse().ok()
+    }
+
+    /// Persist this mode to `{workflow_root}/.subvolume-mode`.
+    pub async fn save(self, workflow_root: &Path) -> Result<()> {
+        let marker = workflow_root.join(".subvolume-mode");
+        tokio::fs::write(&marker, self.to_string())
+            .await
+            .map_err(|e| io_err(marker, e))
+    }
+}
+
+impl std::fmt::Display for SubvolumeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Off => write!(f, "off"),
+            Self::Workflow => write!(f, "workflow"),
+            Self::Stage => write!(f, "stage"),
+        }
+    }
+}
+
+impl std::str::FromStr for SubvolumeMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "workflow" => Ok(Self::Workflow),
+            "stage" => Ok(Self::Stage),
+            other => Err(format!("unknown subvolume mode: {other}")),
+        }
+    }
+}
+
+pub struct BtrfsCow {
+    mode: SubvolumeMode,
+}
 
 /// A no-op `CoW` backend that silently succeeds.
 pub struct NoopCow;
@@ -35,9 +126,18 @@ impl CowPlatform for NoopCow {
 }
 
 pub async fn detect_backend(workspace_path: &Path) -> Arc<dyn CowPlatform + Send + Sync> {
-    let btrfs = BtrfsCow;
+    let mode = SubvolumeMode::from_env();
+    let btrfs = BtrfsCow::new(mode);
     if btrfs.is_available().await && BtrfsCow::is_btrfs_filesystem(workspace_path).await {
-        tracing::info!("CoW backend: btrfs (zero-copy snapshots)");
+        match mode {
+            SubvolumeMode::Off => tracing::info!("CoW backend: btrfs (zero-copy snapshots)"),
+            SubvolumeMode::Workflow => {
+                tracing::info!("CoW backend: btrfs with workflow subvolumes")
+            }
+            SubvolumeMode::Stage => {
+                tracing::info!("CoW backend: btrfs with per-stage subvolumes")
+            }
+        }
         Arc::new(btrfs)
     } else {
         tracing::info!("CoW backend: directory (file-level copy)");
@@ -46,6 +146,12 @@ pub async fn detect_backend(workspace_path: &Path) -> Arc<dyn CowPlatform + Send
 }
 
 impl BtrfsCow {
+    /// Create a Btrfs-backed CoW backend with the given subvolume mode.
+    #[must_use]
+    pub fn new(mode: SubvolumeMode) -> Self {
+        Self { mode }
+    }
+
     pub async fn create_subvolume(&self, path: &Path) -> Result<()> {
         let output = tokio::process::Command::new("btrfs")
             .args(["subvolume", "create", &path.to_string_lossy()])
@@ -82,6 +188,90 @@ impl BtrfsCow {
             });
         }
         Ok(())
+    }
+
+    /// Returns `true` if `path` is a Btrfs subvolume.
+    pub async fn is_subvolume(&self, path: &Path) -> bool {
+        match tokio::process::Command::new("btrfs")
+            .args(["subvolume", "show", &path.to_string_lossy()])
+            .output()
+            .await
+        {
+            Ok(output) => output.status.success(),
+            Err(e) => {
+                tracing::debug!(path = %path.display(), error = %e, "failed to probe subvolume status");
+                false
+            }
+        }
+    }
+
+    /// Delete a subvolume, falling back to plain directory removal if the path
+    /// is not actually a subvolume.
+    pub async fn delete_subvolume_or_dir(&self, path: &Path) -> Result<()> {
+        if !self.is_subvolume(path).await {
+            return tokio::fs::remove_dir_all(path)
+                .await
+                .map_err(|e| io_err(path, e));
+        }
+        match self.delete_subvolume(path).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let reason = e.to_string().to_lowercase();
+                if reason.contains("not a subvolume") {
+                    tracing::warn!(
+                        path = %path.display(),
+                        "btrfs subvolume delete reported not a subvolume, falling back to directory removal"
+                    );
+                    tokio::fs::remove_dir_all(path)
+                        .await
+                        .map_err(|e| io_err(path, e))
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Recursively delete a subvolume and any nested subvolumes inside it.
+    pub async fn delete_subvolume_recursive(&self, path: &Path) -> Result<()> {
+        let output = tokio::process::Command::new("btrfs")
+            .args(["subvolume", "delete", "-r", &path.to_string_lossy()])
+            .output()
+            .await
+            .map_err(|e| FsError::BtrfsCommandFailed {
+                command: "subvolume delete -r".into(),
+                reason: e.to_string(),
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.to_lowercase().contains("not a subvolume") {
+                return tokio::fs::remove_dir_all(path)
+                    .await
+                    .map_err(|e| io_err(path, e));
+            }
+            return Err(FsError::SubvolumeError {
+                path: path.to_path_buf(),
+                reason: stderr.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Determine the effective subvolume mode for operations under `path`.
+    ///
+    /// Walks up the directory tree looking for `{dir}/.subvolume-mode`. If
+    /// found, the persisted mode is used; otherwise the environment variable
+    /// mode is used.
+    async fn effective_mode(&self, path: &Path) -> SubvolumeMode {
+        let mut current = Some(path);
+        while let Some(dir) = current {
+            if let Some(mode) = SubvolumeMode::load(dir).await {
+                return mode;
+            }
+            current = dir.parent();
+        }
+        self.mode
     }
 
     pub async fn list_subvolumes(&self, path: &Path) -> Result<Vec<String>> {
@@ -260,6 +450,98 @@ impl CowPlatform for BtrfsCow {
             .output()
             .await
             .is_ok()
+    }
+
+    async fn prepare_workflow_root(&self, path: &Path) -> Result<()> {
+        let mode = self.mode;
+        let created = match mode {
+            SubvolumeMode::Off => {
+                tokio::fs::create_dir_all(path)
+                    .await
+                    .map_err(|e| io_err(path, e))?;
+                false
+            }
+            SubvolumeMode::Workflow | SubvolumeMode::Stage => {
+                if tokio::fs::try_exists(path)
+                    .await
+                    .map_err(|e| io_err(path, e))?
+                {
+                    false
+                } else if let Err(e) = self.create_subvolume(path).await {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to create workflow root subvolume, falling back to directory"
+                    );
+                    tokio::fs::create_dir_all(path)
+                        .await
+                        .map_err(|e| io_err(path, e))?;
+                    false
+                } else {
+                    true
+                }
+            }
+        };
+
+        // Persist the mode whenever we create the workflow root. If the root
+        // already existed, preserve any existing marker.
+        if created {
+            if let Err(e) = mode.save(path).await {
+                tracing::warn!(path = %path.display(), error = %e, "failed to save subvolume mode marker");
+            }
+        }
+        Ok(())
+    }
+
+    async fn prepare_stage_dir(&self, path: &Path) -> Result<()> {
+        let mode = self.effective_mode(path).await;
+        match mode {
+            SubvolumeMode::Off | SubvolumeMode::Workflow => {
+                tokio::fs::create_dir_all(path)
+                    .await
+                    .map_err(|e| io_err(path, e))
+            }
+            SubvolumeMode::Stage => {
+                if tokio::fs::try_exists(path)
+                    .await
+                    .map_err(|e| io_err(path, e))?
+                {
+                    return Ok(());
+                }
+                if let Err(e) = self.create_subvolume(path).await {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "failed to create stage subvolume, falling back to directory"
+                    );
+                    tokio::fs::create_dir_all(path)
+                        .await
+                        .map_err(|e| io_err(path, e))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    async fn remove_stage_dir(&self, path: &Path) -> Result<()> {
+        if self.is_subvolume(path).await {
+            self.delete_subvolume_recursive(path).await
+        } else {
+            tokio::fs::remove_dir_all(path)
+                .await
+                .map_err(|e| io_err(path, e))
+        }
+    }
+
+    async fn remove_snapshot(&self, path: &Path) -> Result<()> {
+        if self.is_subvolume(path).await {
+            self.delete_subvolume_recursive(path).await
+        } else {
+            tokio::fs::remove_dir_all(path)
+                .await
+                .map_err(|e| io_err(path, e))
+        }
     }
 
     fn name(&self) -> &'static str {
@@ -494,13 +776,13 @@ mod tests {
 
     #[test]
     fn btrfs_cow_name() {
-        let cow = BtrfsCow;
+        let cow = BtrfsCow::new(SubvolumeMode::Off);
         assert_eq!(cow.name(), "btrfs");
     }
 
     #[tokio::test]
     async fn btrfs_is_not_available_on_non_linux() {
-        let _cow = BtrfsCow;
+        let _cow = BtrfsCow::new(SubvolumeMode::Off);
         #[cfg(not(target_os = "linux"))]
         assert!(!_cow.is_available().await);
     }
@@ -530,12 +812,111 @@ mod tests {
             .await
             .unwrap();
 
-        let cow = BtrfsCow;
+        let cow = BtrfsCow::new(SubvolumeMode::Off);
         cow.snapshot(&source, &target).await.unwrap();
 
         let content = tokio::fs::read_to_string(target.join("hello.txt"))
             .await
             .unwrap();
         assert_eq!(content, "world");
+    }
+
+    #[test]
+    fn subvolume_mode_from_env_defaults_to_off() {
+        // Ensure the variable is not set from a previous test.
+        std::env::remove_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE");
+        assert_eq!(SubvolumeMode::from_env(), SubvolumeMode::Off);
+    }
+
+    #[test]
+    fn subvolume_mode_from_env_parses_variants() {
+        for (value, expected) in [
+            ("off", SubvolumeMode::Off),
+            ("OFF", SubvolumeMode::Off),
+            ("workflow", SubvolumeMode::Workflow),
+            ("WORKFLOW", SubvolumeMode::Workflow),
+            ("stage", SubvolumeMode::Stage),
+            ("STAGE", SubvolumeMode::Stage),
+            ("unknown", SubvolumeMode::Off),
+        ] {
+            std::env::set_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE", value);
+            assert_eq!(SubvolumeMode::from_env(), expected, "failed for {value}");
+        }
+        std::env::remove_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE");
+    }
+
+    #[tokio::test]
+    async fn btrfs_cow_prepare_stage_dir_falls_back_on_non_btrfs() {
+        let tmp = TempDir::new().unwrap();
+        let stage = tmp.path().join("stage");
+        let cow = BtrfsCow::new(SubvolumeMode::Stage);
+        cow.prepare_stage_dir(&stage).await.unwrap();
+        assert!(stage.is_dir());
+    }
+
+    #[test]
+    fn subvolume_mode_display_and_fromstr_round_trip() {
+        for mode in [
+            SubvolumeMode::Off,
+            SubvolumeMode::Workflow,
+            SubvolumeMode::Stage,
+        ] {
+            let s = mode.to_string();
+            let parsed: SubvolumeMode = s.parse().unwrap();
+            assert_eq!(parsed, mode);
+        }
+        assert!("unknown".parse::<SubvolumeMode>().is_err());
+    }
+
+    #[tokio::test]
+    async fn subvolume_mode_save_and_load() {
+        let tmp = TempDir::new().unwrap();
+        SubvolumeMode::Stage.save(tmp.path()).await.unwrap();
+        let loaded = SubvolumeMode::load(tmp.path()).await;
+        assert_eq!(loaded, Some(SubvolumeMode::Stage));
+    }
+
+    #[tokio::test]
+    async fn subvolume_mode_load_missing_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(SubvolumeMode::load(tmp.path()).await, None);
+    }
+
+    #[tokio::test]
+    async fn effective_mode_finds_saved_marker_by_walking_up() {
+        let tmp = TempDir::new().unwrap();
+        let workflow_root = tmp.path().join("wf");
+        let stage = workflow_root.join("00_spec");
+        tokio::fs::create_dir_all(&stage).await.unwrap();
+        SubvolumeMode::Stage.save(&workflow_root).await.unwrap();
+
+        let cow = BtrfsCow::new(SubvolumeMode::Off);
+        let effective = cow.effective_mode(&stage).await;
+        assert_eq!(effective, SubvolumeMode::Stage);
+    }
+
+    #[tokio::test]
+    async fn effective_mode_falls_back_to_env_mode_when_no_marker() {
+        let tmp = TempDir::new().unwrap();
+        let workflow_root = tmp.path().join("wf");
+        tokio::fs::create_dir_all(&workflow_root).await.unwrap();
+
+        std::env::set_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE", "workflow");
+        let cow = BtrfsCow::new(SubvolumeMode::from_env());
+        let effective = cow.effective_mode(&workflow_root).await;
+        assert_eq!(effective, SubvolumeMode::Workflow);
+        std::env::remove_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE");
+    }
+
+    #[tokio::test]
+    async fn delete_subvolume_or_dir_falls_back_on_plain_directory() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("plain");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("file.txt"), b"data").await.unwrap();
+
+        let cow = BtrfsCow::new(SubvolumeMode::Off);
+        cow.delete_subvolume_or_dir(&dir).await.unwrap();
+        assert!(!dir.exists());
     }
 }

@@ -97,6 +97,45 @@ impl Workflow {
     }
 
     pub async fn init(task: &Task, base_path: &Path) -> Result<Self> {
+        Self::init_with_factories(
+            task,
+            base_path,
+            |path| {
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(&path)
+                        .await
+                        .map_err(|e| io_err(path, e))
+                })
+            },
+            |path| {
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(&path)
+                        .await
+                        .map_err(|e| io_err(path, e))
+                })
+            },
+        )
+        .await
+    }
+
+    /// Initialize a workflow, creating directories through supplied factories.
+    ///
+    /// `create_workflow_root` is invoked for the workflow root directory and
+    /// `create_stage_dir` is invoked for each stage directory. This lets callers
+    /// create Btrfs subvolumes instead of plain directories. Output and input
+    /// directories inside a stage are always created as plain directories.
+    pub async fn init_with_factories<FRoot, FutRoot, FStage, FutStage>(
+        task: &Task,
+        base_path: &Path,
+        create_workflow_root: FRoot,
+        create_stage_dir: FStage,
+    ) -> Result<Self>
+    where
+        FRoot: Fn(PathBuf) -> FutRoot,
+        FutRoot: std::future::Future<Output = Result<()>>,
+        FStage: Fn(PathBuf) -> FutStage,
+        FutStage: std::future::Future<Output = Result<()>>,
+    {
         let sanitized_id = task
             .id
             .replace(['/', '\\'], "-")
@@ -108,9 +147,7 @@ impl Workflow {
             });
         }
         let workflow_dir = base_path.join(&sanitized_id);
-        tokio::fs::create_dir_all(&workflow_dir)
-            .await
-            .map_err(|e| io_err(workflow_dir.clone(), e))?;
+        create_workflow_root(workflow_dir.clone()).await?;
 
         let stage_names = task.stage_names();
         let stage_defs: Vec<String> = if stage_names.is_empty() {
@@ -123,9 +160,7 @@ impl Workflow {
 
         for stage_name in &stage_defs {
             let stage_dir = workflow_dir.join(stage_name);
-            tokio::fs::create_dir_all(&stage_dir)
-                .await
-                .map_err(|e| io_err(stage_dir.clone(), e))?;
+            create_stage_dir(stage_dir.clone()).await?;
 
             let output_dir = stage_dir.join("output");
             tokio::fs::create_dir_all(&output_dir)
@@ -589,5 +624,62 @@ mod tests {
                 .unwrap();
             assert_eq!(content, "hello");
         }
+    }
+
+    #[tokio::test]
+    async fn init_with_factories_invokes_callbacks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task = Task {
+            id: "FACTORY-100".to_string(),
+            title: "Factory test".to_string(),
+            status: "todo".to_string(),
+            priority: None,
+            execution: Some(crate::task::TaskExecution {
+                stages: vec!["00_a".to_string(), "01_b".to_string()],
+                strategy: None,
+            }),
+            acceptance_criteria: vec![],
+            description: "Factory test".to_string(),
+            source_path: None,
+        };
+
+        let created = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let root_created = created.clone();
+        let stage_created = created.clone();
+
+        let wf = Workflow::init_with_factories(
+            &task,
+            tmp.path(),
+            move |path| {
+                let created = root_created.clone();
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(&path)
+                        .await
+                        .map_err(|e| io_err(path.clone(), e))?;
+                    created.lock().await.push(path);
+                    Ok(())
+                })
+            },
+            move |path| {
+                let created = stage_created.clone();
+                Box::pin(async move {
+                    tokio::fs::create_dir_all(&path)
+                        .await
+                        .map_err(|e| io_err(path.clone(), e))?;
+                    created.lock().await.push(path);
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(wf.stages.len(), 2);
+
+        let paths = created.lock().await;
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].ends_with("FACTORY-100"));
+        assert!(paths[1].ends_with("00_a"));
+        assert!(paths[2].ends_with("01_b"));
     }
 }

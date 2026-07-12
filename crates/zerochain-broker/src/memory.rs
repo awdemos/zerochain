@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
 
-use crate::{Broker, BrokerMessage, Result};
+use crate::{Broker, BrokerMessage, Result, Subscription};
 
 /// In-memory broker for local development and testing.
 ///
@@ -41,7 +41,7 @@ impl Broker for MemoryBroker {
         Ok(())
     }
 
-    async fn subscribe(&self, subject: &str) -> Result<mpsc::Receiver<BrokerMessage>> {
+    async fn subscribe(&self, subject: &str) -> Result<Subscription> {
         let mut channels = self.channels.lock().await;
         let tx = channels
             .entry(subject.to_string())
@@ -51,22 +51,28 @@ impl Broker for MemoryBroker {
 
         let mut rx = tx.subscribe();
         let (fwd_tx, fwd_rx) = mpsc::channel(256);
+        let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(msg) => {
-                        if fwd_tx.send(msg).await.is_err() {
-                            break;
+                tokio::select! {
+                    _ = &mut cancel_rx => break,
+                    result = rx.recv() => {
+                        match result {
+                            Ok(msg) => {
+                                if fwd_tx.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Closed) => break,
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
                 }
             }
         });
 
-        Ok(fwd_rx)
+        Ok(Subscription::new(fwd_rx, cancel_tx))
     }
 }
 

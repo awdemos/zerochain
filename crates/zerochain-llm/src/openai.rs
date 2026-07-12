@@ -26,6 +26,8 @@ struct ChatRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    stream: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ChatTool>>,
     #[serde(flatten)]
     extra_body: serde_json::Value,
@@ -47,13 +49,17 @@ struct ChatFunction {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<serde_json::Value>,
+    #[serde(default)]
     usage: Option<ChatUsage>,
-    model: String,
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct ChatUsage {
+    #[serde(default)]
     prompt_tokens: usize,
+    #[serde(default)]
     completion_tokens: usize,
 }
 
@@ -185,6 +191,7 @@ impl OpenAICompatibleProvider {
                 None
             },
             top_p: params.config.top_p,
+            stream: Some(false),
             tools: chat_tools,
             extra_body,
         };
@@ -228,17 +235,28 @@ impl OpenAICompatibleProvider {
             .unwrap_or_default()
             .into_iter()
             .map(|tc| {
-                let args = serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
-                    warn!(error = %e, "failed to parse tool call arguments as JSON");
-                    serde_json::Value::Null
-                });
-                ToolCall {
-                    id: tc.id,
-                    name: tc.function.name,
+                let function = tc.function.ok_or_else(|| {
+                    LLMError::parse("tool call missing 'function' field".to_string())
+                })?;
+                let id = tc.id.ok_or_else(|| {
+                    LLMError::parse("tool call missing 'id' field".to_string())
+                })?;
+                let name = function.name.ok_or_else(|| {
+                    LLMError::parse("tool call function missing 'name' field".to_string())
+                })?;
+                let arguments = function.arguments.ok_or_else(|| {
+                    LLMError::parse("tool call function missing 'arguments' field".to_string())
+                })?;
+                let args = serde_json::from_str(&arguments).map_err(|e| {
+                    LLMError::parse(format!("failed to parse tool call arguments as JSON: {e}"))
+                })?;
+                Ok(ToolCall {
+                    id,
+                    name,
                     arguments: args,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, LLMError>>()?;
 
         let usage = parsed_response
             .usage
@@ -255,7 +273,7 @@ impl OpenAICompatibleProvider {
             tool_calls,
             usage,
             finish_reason: finish,
-            model: parsed_response.model,
+            model: parsed_response.model.unwrap_or_else(|| params.config.model.clone()),
             reasoning: None,
         };
 
@@ -281,14 +299,18 @@ struct ChoiceMessageHelper {
 
 #[derive(Deserialize)]
 struct ChatToolCall {
-    id: String,
-    r#function: ChatFunctionCall,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, rename = "function")]
+    function: Option<ChatFunctionCall>,
 }
 
 #[derive(Deserialize)]
 struct ChatFunctionCall {
-    name: String,
-    arguments: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[async_trait]
@@ -304,7 +326,8 @@ impl LLM for OpenAICompatibleProvider {
         messages: &[Message],
         tools: Option<&[Tool]>,
     ) -> Result<CompleteResponse, LLMError> {
-        let profile = crate::profiles::resolve_profile("generic");
+        let profile_name = crate::profiles::profile_name_for_model(&config.model);
+        let profile = crate::profiles::resolve_profile(profile_name);
         let stage_ctx = StageContext::default();
         self.complete_with_profile_impl(ProfiledCompleteParams {
             config,
@@ -449,7 +472,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
         let chat_resp: ChatResponse = serde_json::from_value(parsed).unwrap();
         assert_eq!(chat_resp.choices.len(), 1);
-        assert_eq!(chat_resp.model, "gpt-4o");
+        assert_eq!(chat_resp.model.as_deref(), Some("gpt-4o"));
     }
 
     #[test]
@@ -499,6 +522,7 @@ mod tests {
             seed: None,
             max_tokens: None,
             top_p: None,
+            stream: None,
             tools: None,
             extra_body: extra,
         };
@@ -506,5 +530,22 @@ mod tests {
         let serialized = serde_json::to_string(&req).unwrap();
         assert!(serialized.contains("\"thinking\""));
         assert!(serialized.contains("\"type\":\"disabled\""));
+    }
+
+    #[test]
+    fn chat_request_sets_stream_false() {
+        let req = ChatRequest {
+            model: "test".into(),
+            messages: vec![],
+            temperature: None,
+            seed: None,
+            max_tokens: None,
+            top_p: None,
+            stream: Some(false),
+            tools: None,
+            extra_body: serde_json::Value::Object(serde_json::Map::new()),
+        };
+        let serialized = serde_json::to_string(&req).unwrap();
+        assert!(serialized.contains("\"stream\":false"));
     }
 }

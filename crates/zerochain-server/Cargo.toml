@@ -27,6 +27,7 @@ zerochain-engine = { path = "../zerochain-engine" }
 zerochain-llm = { path = "../zerochain-llm" }
 zerochain-cas = { path = "../zerochain-cas" }
 zerochain-broker = { path = "../zerochain-broker" }
+zerochain-fs = { path = "../zerochain-fs" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

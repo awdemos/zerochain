@@ -152,23 +152,6 @@ fn epoch_secs() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-async fn is_pid_alive(pid: u32) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        PathBuf::from("/proc").join(pid.to_string()).exists()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        tokio::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-}
-
 fn parse_lock_content(content: &str) -> Option<(u32, u64)> {
     let mut pid = None;
     let mut timestamp = None;
@@ -190,10 +173,10 @@ pub struct LockGuard {
 }
 
 impl LockGuard {
-    pub async fn release(mut self) {
+    /// Release the lock and remove the lock file synchronously.
+    pub fn release(mut self) {
         self.released = true;
-        tokio::fs::remove_file(&self.lock_path).await.ok();
-        std::mem::forget(self);
+        std::fs::remove_file(&self.lock_path).ok();
     }
 }
 
@@ -202,41 +185,124 @@ impl Drop for LockGuard {
         if self.released {
             return;
         }
-        let path = self.lock_path.clone();
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&self.lock_path).ok();
     }
+}
+
+async fn is_pid_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/proc").join(pid.to_string()).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        tokio::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
+/// Atomically create the lock file and write ownership metadata.
+///
+/// Uses `O_EXCL` semantics so that only one caller can create the file.
+/// Returns `Err(AlreadyExists)` if the lock file already exists.
+async fn create_lock_file(lock_path: &Path, content: &str) -> Result<()> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+        .await
+        .map_err(|e| io_err(lock_path, e))?;
+
+    tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes())
+        .await
+        .map_err(|e| io_err(lock_path, e))?;
+    file.sync_all().await.map_err(|e| io_err(lock_path, e))?;
+
+    Ok(())
+}
+
+async fn read_lock_pid(lock_path: &Path) -> Option<(u32, u64)> {
+    tokio::fs::read_to_string(lock_path)
+        .await
+        .ok()
+        .and_then(|content| parse_lock_content(&content))
 }
 
 pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
     let lock_path = dir.join(LOCK_FILE);
 
-    if tokio::fs::try_exists(&lock_path)
+    let parent = lock_path.parent().ok_or_else(|| FsError::AtomicWriteFailed {
+        path: lock_path.clone(),
+        reason: "path has no parent directory".into(),
+    })?;
+    tokio::fs::create_dir_all(parent)
         .await
-        .map_err(|e| io_err(&lock_path, e))?
-    {
-        let content = tokio::fs::read_to_string(&lock_path)
-            .await
-            .map_err(|e| io_err(&lock_path, e))?;
-
-        if let Some((pid, _ts)) = parse_lock_content(&content) {
-            if pid != std::process::id() && is_pid_alive(pid).await {
-                return Err(FsError::LockHeld {
-                    path: lock_path,
-                    pid,
-                });
-            }
-        }
-    }
+        .map_err(|e| io_err(parent, e))?;
 
     let content = format!("PID:{}\nTIMESTAMP:{}\n", std::process::id(), epoch_secs());
-    tokio::fs::write(&lock_path, &content)
-        .await
-        .map_err(|e| io_err(&lock_path, e))?;
 
-    Ok(LockGuard {
-        lock_path,
-        released: false,
-    })
+    match create_lock_file(&lock_path, &content).await {
+        Ok(()) => Ok(LockGuard {
+            lock_path,
+            released: false,
+        }),
+        Err(FsError::Io {
+            source: e,
+            path: _,
+        }) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Lock file exists; check whether it is stale.
+            if let Some((pid, _ts)) = read_lock_pid(&lock_path).await {
+                if pid != std::process::id() && is_pid_alive(pid).await {
+                    return Err(FsError::LockHeld {
+                        path: lock_path,
+                        pid,
+                    });
+                }
+            }
+
+            // Stale or corrupt lock file: remove and try once more.
+            tokio::fs::remove_file(&lock_path)
+                .await
+                .or_else(|e| {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(io_err(&lock_path, e))
+                    }
+                })?;
+
+            match create_lock_file(&lock_path, &content).await {
+                Ok(()) => Ok(LockGuard {
+                    lock_path,
+                    released: false,
+                }),
+                Err(FsError::Io {
+                    source: e,
+                    path: _,
+                }) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Lost the race; report the (new) holder's PID if we can read it.
+                    let pid = read_lock_pid(&lock_path)
+                        .await
+                        .and_then(|(pid, _ts)| {
+                            if pid != std::process::id() {
+                                Some(pid)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(0);
+                    Err(FsError::LockHeld { path: lock_path, pid })
+                }
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub async fn is_locked(dir: &Path) -> bool {
@@ -500,7 +566,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let lock_path = tmp.path().join(".lock");
 
-        // Spawn a subprocess we can use as a "live process" placeholder
+        // Spawn a subprocess we can use as a "live process" placeholder.
         let mut child = std::process::Command::new("sleep")
             .arg("30")
             .spawn()
@@ -511,7 +577,10 @@ mod tests {
         tokio::fs::write(&lock_path, &content).await.unwrap();
 
         let result = acquire_lock(tmp.path()).await;
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "acquire_lock should fail when another live process holds the lock"
+        );
 
         let _ = child.kill();
         let _ = child.wait();
@@ -566,12 +635,14 @@ mod tests {
             .await
             .unwrap());
 
-        guard.release().await;
+        guard.release();
 
         assert!(!tokio::fs::try_exists(tmp.path().join(".lock"))
             .await
             .unwrap());
     }
+
+
 
     #[tokio::test]
     async fn clean_output_removes_contents() {

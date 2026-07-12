@@ -36,11 +36,30 @@ pub trait ProviderProfile: Send + Sync {
     }
 }
 
+/// Pick a provider profile name from a model identifier.
+///
+/// This is a heuristic: models whose name contains `kimi` (e.g. `kimi-k2.5`)
+/// use the Kimi K2 profile; everything else falls back to the generic profile.
+#[must_use]
+pub fn profile_name_for_model(model: &str) -> &'static str {
+    let lower = model.to_lowercase();
+    if lower.contains("kimi") {
+        "kimi-k2"
+    } else {
+        "generic"
+    }
+}
+
 #[must_use]
 pub fn resolve_profile(name: &str) -> Box<dyn ProviderProfile> {
     match name {
         "kimi-k2" => Box::new(kimi_k2::KimiK2Profile),
-        _ => Box::new(generic::GenericProfile),
+        _ => {
+            if !name.is_empty() && name != "generic" {
+                tracing::warn!(profile = %name, "unknown provider profile, falling back to generic");
+            }
+            Box::new(generic::GenericProfile)
+        }
     }
 }
 
@@ -70,6 +89,18 @@ mod tests {
     fn resolve_empty_string_is_generic() {
         let p = resolve_profile("");
         assert_eq!(p.name(), "generic");
+    }
+
+    #[test]
+    fn profile_name_for_model_kimi() {
+        assert_eq!(profile_name_for_model("kimi-k2.5"), "kimi-k2");
+        assert_eq!(profile_name_for_model("Kimi-K2"), "kimi-k2");
+    }
+
+    #[test]
+    fn profile_name_for_model_generic() {
+        assert_eq!(profile_name_for_model("gpt-4o"), "generic");
+        assert_eq!(profile_name_for_model("claude-3"), "generic");
     }
 
     #[test]

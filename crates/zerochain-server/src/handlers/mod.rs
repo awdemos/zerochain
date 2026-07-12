@@ -10,6 +10,7 @@ pub mod artifact;
 pub mod health;
 pub mod prompt;
 pub mod stage;
+pub mod subvolume;
 pub mod workflow;
 
 #[derive(Deserialize)]
@@ -48,10 +49,18 @@ pub struct ArtifactResponse {
     pub cid: String,
 }
 
+#[derive(Serialize)]
+pub struct SubvolumeList {
+    pub workflow_id: String,
+    pub filesystem: String,
+    pub subvolumes: Vec<String>,
+}
+
 pub fn routes(state: ServerState) -> Router {
     let protected = Router::new()
         .route("/v1/workflows", get(workflow::list).post(workflow::init))
         .route("/v1/workflows/{id}", get(workflow::get))
+        .route("/v1/workflows/{id}/subvolumes", get(subvolume::list))
         .route("/v1/workflows/{id}/run", post(stage::run_next))
         .route("/v1/workflows/{id}/run/{stage}", post(stage::run))
         .route("/v1/workflows/{id}/approve/{stage}", post(stage::approve))
