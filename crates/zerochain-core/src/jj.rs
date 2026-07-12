@@ -3,6 +3,17 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{io_err, Error, Result};
 
+/// Run a blocking closure on Tokio's blocking thread pool.
+async fn spawn_blocking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|e| panic!("blocking task panicked: {e}"))
+}
+
 fn map_jj_spawn_error(e: &std::io::Error) -> Error {
     if e.kind() == std::io::ErrorKind::NotFound {
         Error::JjNotInstalled
@@ -380,94 +391,106 @@ use std::process::Command;
 
 /// Initialize a jj repo at `workspace` if one doesn't already exist.
 /// Returns `true` on success (or already initialized), `false` on failure.
-pub fn init_repo(workspace: &Path) -> bool {
-    let jj_dir = workspace.join(".jj");
-    if jj_dir.exists() {
-        tracing::debug!("jj repo already initialized");
-        return true;
-    }
+pub async fn init_repo(workspace: &Path) -> bool {
+    let workspace = workspace.to_path_buf();
+    spawn_blocking(move || {
+        let jj_dir = workspace.join(".jj");
+        if jj_dir.exists() {
+            tracing::debug!("jj repo already initialized");
+            return true;
+        }
 
-    let result = Command::new("jj")
-        .args(["init", "--git"])
-        .current_dir(workspace)
-        .output();
+        let result = Command::new("jj")
+            .args(["init", "--git"])
+            .current_dir(&workspace)
+            .output();
 
-    match result {
-        Ok(output) if output.status.success() => {
-            if let Err(e) = Command::new("jj")
-                .args(["config", "set", "user.name", "zerochain"])
-                .current_dir(workspace)
-                .output()
-            {
-                tracing::warn!(error = %e, "failed to set jj user.name");
+        match result {
+            Ok(output) if output.status.success() => {
+                if let Err(e) = Command::new("jj")
+                    .args(["config", "set", "user.name", "zerochain"])
+                    .current_dir(&workspace)
+                    .output()
+                {
+                    tracing::warn!(error = %e, "failed to set jj user.name");
+                }
+                if let Err(e) = Command::new("jj")
+                    .args(["config", "set", "user.email", "zerochain@daemon"])
+                    .current_dir(&workspace)
+                    .output()
+                {
+                    tracing::warn!(error = %e, "failed to set jj user.email");
+                }
+                tracing::debug!("jj repo initialized");
+                true
             }
-            if let Err(e) = Command::new("jj")
-                .args(["config", "set", "user.email", "zerochain@daemon"])
-                .current_dir(workspace)
-                .output()
-            {
-                tracing::warn!(error = %e, "failed to set jj user.email");
+            Ok(output) => {
+                tracing::warn!(
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "jj init failed"
+                );
+                false
             }
-            tracing::debug!("jj repo initialized");
-            true
+            Err(e) => {
+                tracing::debug!("jj not available: {e}");
+                false
+            }
         }
-        Ok(output) => {
-            tracing::warn!(
-                stderr = %String::from_utf8_lossy(&output.stderr),
-                "jj init failed"
-            );
-            false
-        }
-        Err(e) => {
-            tracing::debug!("jj not available: {e}");
-            false
-        }
-    }
+    })
+    .await
 }
 
-fn run_jj_commit(workspace: &Path, message: &str) -> Result<()> {
-    let output = Command::new("jj")
-        .args(["commit", "-m", message])
-        .current_dir(workspace)
-        .output()
-        .map_err(|e| Error::JjError {
-            message: format!("failed to spawn jj commit: {e}"),
-        })?;
+async fn run_jj_commit(workspace: PathBuf, message: String) -> Result<()> {
+    spawn_blocking(move || {
+        let output = Command::new("jj")
+            .args(["commit", "-m", &message])
+            .current_dir(&workspace)
+            .output()
+            .map_err(|e| Error::JjError {
+                message: format!("failed to spawn jj commit: {e}"),
+            })?;
 
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(Error::JjError {
-            message: format!(
-                "jj commit failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        })
-    }
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(Error::JjError {
+                message: format!(
+                    "jj commit failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            })
+        }
+    })
+    .await
 }
 
 /// Commit current changes with the given message.
-pub fn auto_commit(workspace: &Path, message: &str) {
-    if let Err(e) = run_jj_commit(workspace, message) {
+pub async fn auto_commit(workspace: &Path, message: &str) {
+    let workspace = workspace.to_path_buf();
+    let message = message.to_string();
+    if let Err(e) = run_jj_commit(workspace, message.clone()).await {
         tracing::warn!(error = %e, message, "jj auto-commit failed");
     }
 }
 
 /// Commit current changes with the given message, returning an error on failure.
-pub fn auto_commit_result(workspace: &Path, message: &str) -> Result<()> {
-    run_jj_commit(workspace, message)
+pub async fn auto_commit_result(workspace: &Path, message: &str) -> Result<()> {
+    let workspace = workspace.to_path_buf();
+    let message = message.to_string();
+    run_jj_commit(workspace, message).await
 }
 
 /// Commit with a stage-complete message.
-pub fn commit_stage_complete(workspace: &Path, workflow_id: &str, stage_raw: &str) {
+pub async fn commit_stage_complete(workspace: &Path, workflow_id: &str, stage_raw: &str) {
     auto_commit(
         workspace,
         &format!("stage {stage_raw} complete: {workflow_id}"),
-    );
+    )
+    .await;
 }
 
 /// Commit with a stage-complete message, returning an error on failure.
-pub fn commit_stage_complete_result(
+pub async fn commit_stage_complete_result(
     workspace: &Path,
     workflow_id: &str,
     stage_raw: &str,
@@ -476,18 +499,20 @@ pub fn commit_stage_complete_result(
         workspace,
         &format!("stage {stage_raw} complete: {workflow_id}"),
     )
+    .await
 }
 
 /// Commit with a stage-error message.
-pub fn commit_stage_error(workspace: &Path, workflow_id: &str, stage_raw: &str) {
+pub async fn commit_stage_error(workspace: &Path, workflow_id: &str, stage_raw: &str) {
     auto_commit(
         workspace,
         &format!("stage {stage_raw} error: {workflow_id}"),
-    );
+    )
+    .await;
 }
 
 /// Commit with a stage-error message, returning an error on failure.
-pub fn commit_stage_error_result(
+pub async fn commit_stage_error_result(
     workspace: &Path,
     workflow_id: &str,
     stage_raw: &str,
@@ -496,6 +521,7 @@ pub fn commit_stage_error_result(
         workspace,
         &format!("stage {stage_raw} error: {workflow_id}"),
     )
+    .await
 }
 
 #[cfg(test)]

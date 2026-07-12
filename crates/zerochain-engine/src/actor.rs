@@ -18,6 +18,10 @@ pub enum ActorMessage {
         stage_raw: String,
         respond: oneshot::Sender<Result<(), DaemonError>>,
     },
+    RunNext {
+        workflow_id: String,
+        respond: oneshot::Sender<Result<Option<String>, DaemonError>>,
+    },
     GetWorkflow {
         workflow_id: String,
         respond: oneshot::Sender<Option<Workflow>>,
@@ -93,6 +97,13 @@ impl WorkflowActor {
                 respond,
             } => {
                 let result = self.state.run_stage(&workflow_id, &stage_raw).await;
+                let _ = respond.send(result);
+            }
+            ActorMessage::RunNext {
+                workflow_id,
+                respond,
+            } => {
+                let result = self.state.run_next_stage(&workflow_id).await;
                 let _ = respond.send(result);
             }
             ActorMessage::GetWorkflow {
@@ -208,6 +219,17 @@ impl WorkflowHandle {
         self.call(|respond| ActorMessage::RunStage {
             workflow_id,
             stage_raw,
+            respond,
+        })
+        .await?
+    }
+
+    pub async fn run_next(
+        &self,
+        workflow_id: String,
+    ) -> Result<Option<String>, DaemonError> {
+        self.call(|respond| ActorMessage::RunNext {
+            workflow_id,
             respond,
         })
         .await?

@@ -35,12 +35,12 @@ pub async fn init(
         )
             .into_response();
     }
-    let mut registry = state.registry.write().await;
+    let registry = state.registry.read().await;
     match registry.init_workflow(body.name, body.template).await {
         Ok(wf) => {
-            jj::init_repo(&state.workspace);
+            jj::init_repo(&state.workspace).await;
             let id = wf.id.clone();
-            jj::auto_commit(&state.workspace, &format!("workflow init: {id}"));
+            jj::auto_commit(&state.workspace, &format!("workflow init: {id}")).await;
             (StatusCode::CREATED, Json(SimpleMessage { message: id })).into_response()
         }
         Err(e) => (
@@ -55,7 +55,7 @@ pub async fn init(
 
 pub async fn get(State(state): State<ServerState>, Path(id): Path<String>) -> impl IntoResponse {
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(&id).await {
             Ok(h) => h,
             Err(e) => {

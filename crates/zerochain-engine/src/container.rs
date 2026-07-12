@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
+
 use crate::error::DaemonError;
 
 #[non_exhaustive]
@@ -16,7 +19,8 @@ pub struct ContainerConfig {
 
 #[non_exhaustive]
 pub struct ContainerResult {
-    pub exit_code: i32,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -109,29 +113,41 @@ impl ContainerExecutor {
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let exit_code = output.status.code().unwrap_or(-1);
+        let exit_code = output.status.code();
+        #[cfg(unix)]
+        let signal = output.status.signal();
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
 
         if !output.status.success() {
+            let reason = match (exit_code, signal) {
+                (Some(code), _) => format!("code {code}"),
+                #[cfg(unix)]
+                (None, Some(sig)) => format!("signal {sig}"),
+                (None, _) => "unknown status".to_string(),
+            };
             tracing::error!(
                 container = %container_name,
-                exit_code,
+                exit_code = ?exit_code,
+                signal = ?signal,
                 stderr = %stderr,
                 "container execution failed"
             );
             return Err(DaemonError::ContainerExec(format!(
-                "container exited with code {exit_code}: {stderr}"
+                "container exited with {reason}: {stderr}"
             )));
         }
 
         tracing::info!(
             container = %container_name,
-            exit_code,
+            exit_code = ?exit_code,
             stdout_bytes = stdout.len(),
             "container execution complete"
         );
 
         Ok(ContainerResult {
             exit_code,
+            signal,
             stdout,
             stderr,
         })

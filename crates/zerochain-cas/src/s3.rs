@@ -135,12 +135,20 @@ impl StorageBackend for S3Backend {
             )));
         }
 
-        Ok(response.bytes().to_vec())
+        let data = response.bytes().to_vec();
+        let actual = Cid::from_bytes(&data);
+        if &actual != cid {
+            return Err(CasError::InvalidCid(format!(
+                "s3 content hash mismatch for key {key}: expected {cid}, got {actual}"
+            )));
+        }
+
+        Ok(data)
     }
 
     async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
         // rust-s3 does not provide a streaming async reader directly.
-        // We fetch the full object and wrap it in a Cursor for now.
+        // We fetch the full object, verify its hash, and wrap it in a Cursor.
         // For large objects, presigned URLs or ranged GETs would be better.
         let data = self.get(cid).await?;
         Ok(Box::new(std::io::Cursor::new(data)))

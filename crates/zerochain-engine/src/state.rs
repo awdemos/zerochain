@@ -66,7 +66,8 @@ async fn resolve_cow_backend(
 
     let backend = match env_val.as_str() {
         "btrfs" => {
-            let btrfs = zerochain_fs::BtrfsCow;
+            let mode = zerochain_fs::SubvolumeMode::from_env();
+            let btrfs = zerochain_fs::BtrfsCow::new(mode);
             if btrfs.is_available().await {
                 tracing::info!("CoW backend: btrfs (forced by ZEROCHAIN_COW_BACKEND)");
                 Arc::new(btrfs)
@@ -278,6 +279,28 @@ impl AppState {
         result
     }
 
+    /// Resolve the next pending stage and run it atomically.
+    ///
+    /// Returns `Ok(Some(stage_raw))` if a stage was executed, `Ok(None)` if no
+    /// pending stages remain, or `Err` if the workflow/stage could not be run.
+    pub async fn run_next_stage(
+        &mut self,
+        workflow_id: &str,
+    ) -> Result<Option<String>, DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?
+            .clone();
+        let plan = wf.execution_plan();
+        let next_stage = match plan.next_stage() {
+            Some(stage) => stage.clone(),
+            None => return Ok(None),
+        };
+        self.run_stage(workflow_id, &next_stage.raw).await?;
+        Ok(Some(next_stage.raw))
+    }
+
     pub async fn init_workflow(
         &mut self,
         params: InitWorkflowParams<'_>,
@@ -321,7 +344,37 @@ impl AppState {
             ))
             .build();
 
-        let workflow = Workflow::init(&task, &wf_base).await?;
+        let cow_backend = self.cow_backend.clone();
+        let workflow = Workflow::init_with_factories(
+            &task,
+            &wf_base,
+            move |path| {
+                let backend = cow_backend.clone();
+                Box::pin(async move {
+                    backend
+                        .prepare_workflow_root(&path)
+                        .await
+                        .map_err(|e| zerochain_core::error::Error::PlanError {
+                            reason: e.to_string(),
+                        })
+                })
+            },
+            {
+                let backend = self.cow_backend.clone();
+                move |path| {
+                    let backend = backend.clone();
+                    Box::pin(async move {
+                        backend
+                            .prepare_stage_dir(&path)
+                            .await
+                            .map_err(|e| zerochain_core::error::Error::PlanError {
+                                reason: e.to_string(),
+                            })
+                    })
+                }
+            },
+        )
+        .await?;
 
         if let Some(defs) = stage_defs {
             for def in defs {
@@ -488,7 +541,7 @@ impl AppState {
             "stage snapshot created"
         );
 
-        Self::cleanup_old_snapshots_static(&snapshots_dir).await?;
+        Self::cleanup_old_snapshots_static(&snapshots_dir, cow_backend.as_ref()).await?;
 
         Ok(snap_dir)
     }
@@ -526,6 +579,7 @@ impl AppState {
         }
 
         let latest = find_latest_snapshot(&snapshots_dir, &stage.id.raw)
+            .await
             .map_err(|e| DaemonError::io(&snapshots_dir, e))?
             .ok_or_else(|| DaemonError::CowRestore {
                 stage: stage_id.into(),
@@ -544,9 +598,13 @@ impl AppState {
 
         match tokio::fs::metadata(&stage.path).await {
             Ok(_) => {
-                tokio::fs::remove_dir_all(&stage.path)
+                self.cow_backend
+                    .remove_stage_dir(&stage.path)
                     .await
-                    .map_err(|e| DaemonError::io(&stage.path, e))?;
+                    .map_err(|e| DaemonError::CowRestore {
+                        stage: stage.id.raw.clone(),
+                        source: e,
+                    })?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(DaemonError::io(&stage.path, e)),
@@ -564,37 +622,47 @@ impl AppState {
         Ok(())
     }
 
-    async fn cleanup_old_snapshots_static(snapshots_dir: &Path) -> Result<(), DaemonError> {
+    async fn cleanup_old_snapshots_static(
+        snapshots_dir: &Path,
+        backend: &dyn zerochain_fs::CowPlatform,
+    ) -> Result<(), DaemonError> {
         let mut rd = tokio::fs::read_dir(snapshots_dir)
             .await
             .map_err(|e| DaemonError::io(snapshots_dir, e))?;
 
-        let mut entries = Vec::new();
+        let mut names = Vec::new();
         while let Some(entry) = rd
             .next_entry()
             .await
             .map_err(|e| DaemonError::io(snapshots_dir, e))?
         {
-            let path = entry.path();
-            if path.is_dir() {
-                entries.push(entry);
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|e| DaemonError::io(snapshots_dir, e))?;
+            if !file_type.is_dir() {
+                continue;
             }
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            names.push(name.to_string());
         }
 
-        if entries.len() <= MAX_SNAPSHOTS_PER_WORKFLOW {
+        if names.len() <= MAX_SNAPSHOTS_PER_WORKFLOW {
             return Ok(());
         }
 
-        entries.sort_by_key(|entry| {
-            std::fs::metadata(entry.path())
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH)
-        });
-        let to_remove = entries.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
+        // Snapshot names embed a UTC timestamp + nanosecond nonce, so
+        // lexicographic order is chronological order within a stage. This
+        // avoids unreliable filesystem mtimes that copy utilities may preserve.
+        names.sort();
+        let to_remove = names.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
 
-        for entry in entries.iter().take(to_remove) {
-            let path = entry.path();
-            if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+        for name in names.iter().take(to_remove) {
+            let path = snapshots_dir.join(name);
+            if let Err(e) = backend.remove_snapshot(&path).await {
                 tracing::warn!(path = %path.display(), error = %e, "failed to remove old snapshot");
             }
         }
@@ -824,15 +892,15 @@ impl AppState {
     }
 }
 
-fn find_latest_snapshot(
+async fn find_latest_snapshot(
     snapshots_dir: &Path,
     stage_id: &str,
 ) -> Result<Option<String>, std::io::Error> {
     let prefix = format!("{stage_id}.");
+    let mut rd = tokio::fs::read_dir(snapshots_dir).await?;
     let mut candidates: Vec<String> = Vec::new();
-    for entry in std::fs::read_dir(snapshots_dir)? {
-        let entry = entry?;
-        if !entry.path().is_dir() {
+    while let Some(entry) = rd.next_entry().await? {
+        if !entry.file_type().await?.is_dir() {
             continue;
         }
         let file_name = entry.file_name();
@@ -1184,16 +1252,17 @@ mod tests {
         assert_eq!(count, MAX_SNAPSHOTS_PER_WORKFLOW);
     }
 
-    #[test]
-    fn find_latest_snapshot_returns_none_on_empty() {
+    #[tokio::test]
+    async fn find_latest_snapshot_returns_none_on_empty() {
         let tmp = TempDir::new().unwrap();
         assert!(find_latest_snapshot(tmp.path(), "00_spec")
+            .await
             .unwrap()
             .is_none());
     }
 
-    #[test]
-    fn find_latest_snapshot_picks_newest() {
+    #[tokio::test]
+    async fn find_latest_snapshot_picks_newest() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
         for name in [
@@ -1205,18 +1274,18 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        let latest = find_latest_snapshot(dir, "00_spec").unwrap().unwrap();
+        let latest = find_latest_snapshot(dir, "00_spec").await.unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250301T000000Z");
     }
 
-    #[test]
-    fn find_latest_snapshot_ignores_other_stages() {
+    #[tokio::test]
+    async fn find_latest_snapshot_ignores_other_stages() {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path();
         std::fs::create_dir_all(dir.join("01_impl.20250101T000000Z")).unwrap();
         std::fs::create_dir_all(dir.join("00_spec.20250101T000000Z")).unwrap();
 
-        let latest = find_latest_snapshot(dir, "00_spec").unwrap().unwrap();
+        let latest = find_latest_snapshot(dir, "00_spec").await.unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250101T000000Z");
     }
 }

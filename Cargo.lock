@@ -3806,6 +3806,7 @@ dependencies = [
  "zerochain-cas",
  "zerochain-core",
  "zerochain-engine",
+ "zerochain-fs",
  "zerochain-llm",
 ]
 

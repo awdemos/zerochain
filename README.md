@@ -126,6 +126,8 @@ Because zerochaind is filesystem-native, every workflow mutation is a file opera
 
 **Deterministic LLM config.** `LLMConfig::deterministic()` derives a Blake3 seed from the content CID for reproducible execution.
 
+**What is an agent?** Zerochain does not define a separate `Agent` abstraction. In this codebase, an *agent* is a workflow **stage**: a directory (`NN_name/`) containing a `CONTEXT.md` prompt, an `input/` directory, and an `output/` directory. A multi-agent workflow is simply a pipeline of stages that pass state through the filesystem. Stages can also exchange messages across pods via the optional broker.
+
 ### Crate Structure
 
 | Crate | Purpose |

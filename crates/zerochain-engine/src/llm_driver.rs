@@ -7,7 +7,7 @@ use zerochain_core::context::{Context as StageContext, ContextCache};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
 use zerochain_core::{
-    acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext,
+    acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext, PooledLua,
 };
 use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
@@ -87,23 +87,20 @@ impl<'a> LLMStageDriver<'a> {
             .validate_config(&config, &stage_ctx)
             .map_err(DaemonError::ProfileValidation)?;
 
-        let shared_store = match workflows.get(self.workflow_id) {
-            Some(wf) => load_shared_store(&wf.root).map_err(DaemonError::Workflow)?,
-            None => load_shared_store(Path::new(".")).map_err(DaemonError::Workflow)?,
-        };
+        let workflow_root = workflows
+            .get(self.workflow_id)
+            .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone());
+        let shared_store = load_shared_store_async(workflow_root.clone()).await?;
 
         if let Some(ref script) = lua_script {
             let lua = acquire_sandboxed_vm().map_err(DaemonError::Workflow)?;
-            let mut lua_ctx = LuaContext::new(
+            let lua_ctx = LuaContext::new(
                 &self.stage.id.raw,
                 &self.stage.path,
-                &workflows
-                    .get(self.workflow_id)
-                    .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone()),
+                &workflow_root,
             )
             .with_shared_store(shared_store.clone());
-            run_hook(lua.get(), "on_validate", &mut lua_ctx, script)
-                .map_err(DaemonError::Workflow)?;
+            let lua_ctx = run_hook_async(lua, "on_validate", lua_ctx, script.clone()).await?;
             if lua_ctx.skip {
                 tracing::info!(stage = %self.stage.id.raw, "skipped by on_validate hook");
                 return Ok(String::new());
@@ -396,6 +393,53 @@ async fn write_stage_output(
     Ok(result_path)
 }
 
+async fn run_hook_async(
+    lua: PooledLua,
+    hook_name: &'static str,
+    mut ctx: LuaContext,
+    script: String,
+) -> Result<LuaContext, DaemonError> {
+    tokio::task::spawn_blocking(move || {
+        run_hook(lua.get(), hook_name, &mut ctx, &script).map_err(DaemonError::Workflow)?;
+        Ok(ctx)
+    })
+    .await
+    .map_err(|e| {
+        DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+            reason: format!("hook task panicked: {e}"),
+        })
+    })?
+}
+
+async fn load_shared_store_async(
+    workflow_root: PathBuf,
+) -> Result<Arc<Mutex<HashMap<String, serde_json::Value>>>, DaemonError> {
+    tokio::task::spawn_blocking(move || {
+        load_shared_store(&workflow_root).map_err(DaemonError::Workflow)
+    })
+    .await
+    .map_err(|e| {
+        DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+            reason: format!("shared store load task panicked: {e}"),
+        })
+    })?
+}
+
+async fn save_shared_store_async(
+    workflow_root: PathBuf,
+    store: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+) -> Result<(), DaemonError> {
+    tokio::task::spawn_blocking(move || {
+        save_shared_store(&workflow_root, &store).map_err(DaemonError::Workflow)
+    })
+    .await
+    .map_err(|e| {
+        DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+            reason: format!("shared store save task panicked: {e}"),
+        })
+    })?
+}
+
 async fn run_post_completion_hooks(
     workflows: &mut HashMap<String, Workflow>,
     workflow_id: &str,
@@ -410,37 +454,40 @@ async fn run_post_completion_hooks(
     let wf_root = workflows
         .get(workflow_id)
         .map_or_else(|| stage.path.clone(), |wf| wf.root.clone());
-    let mut lua_ctx = LuaContext::new(&stage.id.raw, &stage.path, &wf_root)
+    let lua_ctx = LuaContext::new(&stage.id.raw, &stage.path, &wf_root)
         .with_output(content, completion_tokens)
         .with_shared_store(shared_store.clone());
-    if let Err(e) = run_hook(lua.get(), "on_complete", &mut lua_ctx, script) {
-        tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
-    } else {
-        if let Err(e) = save_shared_store(&wf_root, shared_store) {
-            tracing::warn!(error = %e, "failed to save shared store");
-        }
-        for new_stage in &lua_ctx.hooks.insert_after {
-            if let Some(wf) = workflows.get_mut(workflow_id) {
-                if let Err(e) = wf.insert_stage_after(&stage.id.raw, new_stage).await {
-                    tracing::warn!(stage = new_stage, error = %e, "failed to insert stage");
+    match run_hook_async(lua, "on_complete", lua_ctx, script.to_string()).await {
+        Ok(lua_ctx) => {
+            if let Err(e) = save_shared_store_async(wf_root.clone(), shared_store.clone()).await {
+                tracing::warn!(error = %e, "failed to save shared store");
+            }
+            for new_stage in &lua_ctx.hooks.insert_after {
+                if let Some(wf) = workflows.get_mut(workflow_id) {
+                    if let Err(e) = wf.insert_stage_after(&stage.id.raw, new_stage).await {
+                        tracing::warn!(stage = new_stage, error = %e, "failed to insert stage");
+                    }
                 }
             }
-        }
-        for remove_raw in &lua_ctx.hooks.remove_stages {
-            if let Some(wf) = workflows.get_mut(workflow_id) {
-                if let Err(e) = wf.remove_stage(remove_raw).await {
-                    tracing::warn!(stage = remove_raw, error = %e, "failed to remove stage");
+            for remove_raw in &lua_ctx.hooks.remove_stages {
+                if let Some(wf) = workflows.get_mut(workflow_id) {
+                    if let Err(e) = wf.remove_stage(remove_raw).await {
+                        tracing::warn!(stage = remove_raw, error = %e, "failed to remove stage");
+                    }
                 }
             }
+            tracing::info!(
+                stage = %stage.id.raw,
+                inserted = lua_ctx.hooks.insert_after.len(),
+                removed = lua_ctx.hooks.remove_stages.len(),
+                elapsed_ms = start.elapsed().as_millis(),
+                "ran post-completion hooks"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(stage = %stage.id.raw, error = %e, "on_complete hook failed");
         }
     }
-    tracing::info!(
-        stage = %stage.id.raw,
-        inserted = lua_ctx.hooks.insert_after.len(),
-        removed = lua_ctx.hooks.remove_stages.len(),
-        elapsed_ms = start.elapsed().as_millis(),
-        "ran post-completion hooks"
-    );
     Ok(())
 }
 

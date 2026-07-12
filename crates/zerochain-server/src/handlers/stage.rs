@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use zerochain_core::jj;
 use zerochain_core::stage::StageId;
+use zerochain_engine::DaemonError;
 
 use crate::handlers::{RejectRequest, SimpleMessage};
 use crate::state::ServerState;
@@ -13,7 +14,7 @@ pub async fn run_next(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(&id).await {
             Ok(h) => h,
             Err(e) => {
@@ -28,31 +29,35 @@ pub async fn run_next(
         }
     };
 
-    let wf = match handle.get_workflow(id.clone()).await {
-        Some(wf) => wf,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(SimpleMessage {
-                    message: format!("workflow not found: {id}"),
-                }),
-            )
-                .into_response()
-        }
-    };
-
-    let plan = wf.execution_plan();
-    let next_stage = match plan.next_stage() {
-        Some(stage) => stage.clone(),
-        None => {
-            return Json(SimpleMessage {
-                message: "no pending stages".into(),
+    match handle.run_next(id.clone()).await {
+        Ok(Some(stage_raw)) => {
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await {
+                tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after run_next");
+            }
+            Json(SimpleMessage {
+                message: format!("stage {stage_raw} complete"),
             })
             .into_response()
         }
-    };
-
-    run_stage_by_id(&state, &id, &next_stage.raw).await
+        Ok(None) => Json(SimpleMessage {
+            message: "no pending stages".into(),
+        })
+        .into_response(),
+        Err(DaemonError::WorkflowNotFound(_)) => (
+            StatusCode::NOT_FOUND,
+            Json(SimpleMessage {
+                message: format!("workflow not found: {id}"),
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SimpleMessage {
+                message: format!("failed to run next stage: {e}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn run(
@@ -82,7 +87,7 @@ async fn run_stage_by_id(
     };
 
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(id).await {
             Ok(h) => h,
             Err(e) => {
@@ -128,7 +133,7 @@ async fn run_stage_by_id(
 
     match result {
         Ok(()) => {
-            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, id, &stage_raw) {
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, id, &stage_raw).await {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after stage completion");
             }
             Json(SimpleMessage {
@@ -137,7 +142,7 @@ async fn run_stage_by_id(
             .into_response()
         }
         Err(e) => {
-            if let Err(e2) = jj::commit_stage_error_result(&state.workspace, id, &stage_raw) {
+            if let Err(e2) = jj::commit_stage_error_result(&state.workspace, id, &stage_raw).await {
                 tracing::warn!(error = %e2, workflow = %id, stage = %stage_raw, "jj commit failed after stage error");
             }
             (
@@ -167,7 +172,7 @@ pub async fn approve(
     }
 
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(&id).await {
             Ok(h) => h,
             Err(e) => {
@@ -190,7 +195,7 @@ pub async fn approve(
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after approve");
             }
-            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw) {
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after approve");
             }
             Json(SimpleMessage {
@@ -225,7 +230,7 @@ pub async fn reject(
     }
 
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(&id).await {
             Ok(h) => h,
             Err(e) => {
@@ -248,7 +253,7 @@ pub async fn reject(
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after reject");
             }
-            if let Err(e) = jj::commit_stage_error_result(&state.workspace, &id, &stage_raw) {
+            if let Err(e) = jj::commit_stage_error_result(&state.workspace, &id, &stage_raw).await {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after reject");
             }
             Json(SimpleMessage {
@@ -274,7 +279,7 @@ async fn read_stage_file(
     not_found_msg: String,
 ) -> axum::response::Response {
     let handle = {
-        let mut registry = state.registry.write().await;
+        let registry = state.registry.read().await;
         match registry.get_or_create(id).await {
             Ok(h) => h,
             Err(e) => {

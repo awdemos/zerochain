@@ -127,6 +127,39 @@ impl From<ZerochainError> for BrokerError {
     }
 }
 
+/// A cancellable broker subscription.
+///
+/// Dropping the subscription immediately cancels the underlying backend
+/// subscription and stops the forwarding task, preventing leaks when a
+/// subscriber goes away (e.g. an HTTP client disconnects).
+pub struct Subscription {
+    rx: tokio::sync::mpsc::Receiver<BrokerMessage>,
+    _cancel: tokio::sync::oneshot::Sender<()>,
+}
+
+impl Subscription {
+    /// Wrap a receiver and its cancellation signal.
+    pub fn new(
+        rx: tokio::sync::mpsc::Receiver<BrokerMessage>,
+        cancel: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            rx,
+            _cancel: cancel,
+        }
+    }
+
+    /// Receive the next message, if any.
+    pub async fn recv(&mut self) -> Option<BrokerMessage> {
+        self.rx.recv().await
+    }
+
+    /// Returns `true` if there are no messages buffered.
+    pub fn is_empty(&self) -> bool {
+        self.rx.is_empty()
+    }
+}
+
 /// Abstraction over message broker backends.
 #[async_trait::async_trait]
 pub trait Broker: Send + Sync {
@@ -137,6 +170,7 @@ pub trait Broker: Send + Sync {
 
     /// Subscribe to messages on the given subject.
     ///
-    /// Returns a channel that yields messages as they arrive.
-    async fn subscribe(&self, subject: &str) -> Result<tokio::sync::mpsc::Receiver<BrokerMessage>>;
+    /// Returns a channel that yields messages as they arrive. Dropping the
+    /// returned [`Subscription`] cancels the backend subscription.
+    async fn subscribe(&self, subject: &str) -> Result<Subscription>;
 }

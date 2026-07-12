@@ -1,13 +1,73 @@
 use std::any::Any;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use tokio::fs;
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, ReadBuf};
 
 use crate::cid::Cid;
 use crate::error::{CasError, Result};
+
+/// Wraps an async reader and verifies its Blake3 hash once the stream is fully consumed.
+struct HashingReader<R> {
+    inner: R,
+    hasher: blake3::Hasher,
+    expected: [u8; 32],
+    verified: bool,
+    saw_eof: bool,
+}
+
+impl<R> HashingReader<R> {
+    fn new(inner: R, expected: [u8; 32]) -> Self {
+        Self {
+            inner,
+            hasher: blake3::Hasher::new(),
+            expected,
+            verified: false,
+            saw_eof: false,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for HashingReader<R> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.saw_eof {
+            return Poll::Ready(Ok(()));
+        }
+
+        let filled_before = buf.filled().len();
+        let result = Pin::new(&mut this.inner).poll_read(cx, buf);
+        let filled_after = buf.filled().len();
+
+        if filled_after > filled_before {
+            this.hasher.update(&buf.filled()[filled_before..filled_after]);
+        }
+
+        if let Poll::Ready(Ok(())) = &result {
+            if filled_after == filled_before && buf.capacity() > 0 {
+                this.saw_eof = true;
+                let hash = this.hasher.finalize();
+                if hash.as_bytes() != &this.expected {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "content hash mismatch",
+                    )));
+                }
+                this.verified = true;
+            }
+        }
+
+        result
+    }
+}
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -43,6 +103,7 @@ pub trait StorageBackend: Send + Sync {
 /// Files are stored using a two-level layout: `{base_dir}/ab/abcdef...`
 /// where `ab` is the first two hex characters of the Blake3 hash.
 /// Writes are atomic (temp file + rename) to prevent partial reads.
+/// Reads verify that the file content hashes to the requested CID.
 #[derive(Clone, Debug)]
 pub struct LocalBackend {
     base_dir: PathBuf,
@@ -116,24 +177,40 @@ impl StorageBackend for LocalBackend {
 
     async fn get(&self, cid: &Cid) -> Result<Vec<u8>> {
         let path = self.path_for(cid);
-        match fs::read(&path).await {
-            Ok(data) => Ok(data),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                Err(CasError::NotFound(cid.to_string()))
+        let data = fs::read(&path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                CasError::NotFound(cid.to_string())
+            } else {
+                CasError::io(&path, e)
             }
-            Err(e) => Err(CasError::io(&path, e)),
+        })?;
+
+        let actual = Cid::from_bytes(&data);
+        if &actual != cid {
+            return Err(CasError::InvalidCid(format!(
+                "content hash mismatch at {}: expected {}, got {}",
+                path.display(),
+                cid,
+                actual
+            )));
         }
+
+        Ok(data)
     }
 
     async fn get_reader(&self, cid: &Cid) -> Result<Box<dyn AsyncRead + Send + Unpin>> {
         let path = self.path_for(cid);
-        if !path.exists() {
-            return Err(CasError::NotFound(cid.to_string()));
-        }
-        let file = fs::File::open(&path)
-            .await
-            .map_err(|e| CasError::io(&path, e))?;
-        Ok(Box::new(tokio::io::BufReader::new(file)))
+        let file = fs::File::open(&path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                CasError::NotFound(cid.to_string())
+            } else {
+                CasError::io(&path, e)
+            }
+        })?;
+        Ok(Box::new(HashingReader::new(
+            tokio::io::BufReader::new(file),
+            *cid.as_bytes(),
+        )))
     }
 
     async fn exists(&self, cid: &Cid) -> Result<bool> {
@@ -189,7 +266,7 @@ impl StorageBackend for LocalBackend {
                 }
                 let file_name = sub_entry.file_name();
                 let file_name = file_name.to_string_lossy();
-                if file_name.ends_with(".tmp") {
+                if file_name.starts_with(".tmp.") {
                     continue;
                 }
                 if let Ok(cid) = file_name.parse::<Cid>() {
@@ -252,5 +329,60 @@ mod tests {
 
         let stored = backend.get(&expected_cid).await.unwrap();
         assert_eq!(stored, content);
+    }
+
+    #[tokio::test]
+    async fn get_detects_corrupted_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().to_path_buf()).await.unwrap();
+
+        let content = b"valid content";
+        let cid = backend.put(content).await.unwrap();
+
+        // Corrupt the stored file in place.
+        let path = backend.path_for(&cid);
+        let corrupted = b"corrupted content";
+        tokio::fs::write(&path, corrupted).await.unwrap();
+
+        let err = backend.get(&cid).await.unwrap_err();
+        assert!(
+            matches!(err, CasError::InvalidCid(_)),
+            "expected InvalidCid, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_reader_detects_corrupted_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().to_path_buf()).await.unwrap();
+
+        let content = b"valid content";
+        let cid = backend.put(content).await.unwrap();
+
+        let path = backend.path_for(&cid);
+        tokio::fs::write(&path, b"corrupted content").await.unwrap();
+
+        let mut reader = backend.get_reader(&cid).await.unwrap();
+        let mut buf = Vec::new();
+        let err = tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn get_reader_verifies_valid_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().to_path_buf()).await.unwrap();
+
+        let content = b"streaming content test";
+        let cid = backend.put(content).await.unwrap();
+
+        let mut reader = backend.get_reader(&cid).await.unwrap();
+        let mut read_data = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut read_data)
+            .await
+            .unwrap();
+        assert_eq!(read_data, content);
     }
 }
