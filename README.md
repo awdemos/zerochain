@@ -64,6 +64,18 @@ That's it. zerochain creates a stage directory, calls the LLM, and writes the re
 
 ---
 
+## 🎬 Demo
+
+### Creating and inspecting a workflow
+
+![zerochain init, status, and list demo](docs/assets/demo-intro.gif)
+
+### Running a stage
+
+![zerochain run demo](docs/assets/demo-run.gif)
+
+---
+
 ## 🖥️ CLI
 
 ```bash
