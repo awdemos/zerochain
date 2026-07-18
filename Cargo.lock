@@ -5202,6 +5202,7 @@ dependencies = [
  "async-trait",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
  "zerochain-error",
  "zerochain-memory",

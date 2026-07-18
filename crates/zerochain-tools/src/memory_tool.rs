@@ -178,3 +178,63 @@ impl Tool for MemoryQueryTool {
         Ok(json!({ "results": json_results }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+    use zerochain_memory::{FastEmbedModel, MemoryStore};
+
+    #[tokio::test]
+    async fn query_tool_returns_top_k_results_with_metadata() {
+        let tmp = TempDir::new().unwrap();
+        let model = FastEmbedModel::try_new().expect("failed to load embedding model");
+        let mut store = MemoryStore::open(tmp.path()).await.unwrap();
+        store
+            .add(
+                &model,
+                vec![
+                    (
+                        "zerochain vector memory search".into(),
+                        json!({"source": "a.md"}),
+                    ),
+                    (
+                        "semantic embeddings in rust".into(),
+                        json!({"source": "b.md"}),
+                    ),
+                    ("workflow memory store".into(), json!({"source": "c.md"})),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let tool = MemoryQueryTool;
+        let input = json!({
+            "query": "vector memory",
+            "top_k": 2,
+            "memory_store_path": tmp.path().to_str().unwrap(),
+        });
+        let result = tool.run(input).await.unwrap();
+        let results = result
+            .get("results")
+            .and_then(|v| v.as_array())
+            .expect("results array");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| {
+            r.get("metadata")
+                .and_then(|m| m.get("source"))
+                .and_then(|s| s.as_str())
+                == Some("a.md")
+        }));
+    }
+
+    #[tokio::test]
+    async fn store_tool_rejects_missing_memory_store_path() {
+        let tool = MemoryStoreTool;
+        let input = json!({
+            "texts": [{"text": "some text"}]
+        });
+        let err = tool.run(input).await.unwrap_err();
+        assert!(err.to_string().contains("memory_store_path"));
+    }
+}
