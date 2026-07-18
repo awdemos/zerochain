@@ -68,7 +68,7 @@ That's it. zerochain creates a stage directory, calls the LLM, and writes the re
 
 Typical CLI workflow: help → init → inspect prompt → run → read result → status → list.
 
-![Typical zerochain workflow](docs/assets/demo-typical-v2.gif)
+![Typical zerochain workflow](docs/assets/demo-typical.gif)
 
 ---
 
