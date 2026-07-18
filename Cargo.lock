@@ -5115,6 +5115,7 @@ dependencies = [
  "zerochain-error",
  "zerochain-fs",
  "zerochain-llm",
+ "zerochain-memory",
  "zerochain-tools",
 ]
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
@@ -10,8 +12,10 @@ use zerochain_core::graph::ControlOutcome;
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
+use zerochain_error::ZerochainError;
 use zerochain_fs::{acquire_lock, clean_output, CowPlatform};
 use zerochain_llm::{LLMConfig, LLMFactory, ProviderId, LLM};
+use zerochain_memory::{EmbeddingModel, FastEmbedModel, MemoryStore};
 use zerochain_tools::ToolRegistry;
 
 /// Shared request type for HTTP and MCP entrypoints.
@@ -35,6 +39,8 @@ pub struct AppState {
     pub workflows: HashMap<String, Workflow>,
     pub cas: Option<CasStore>,
     pub tool_registry: Arc<ToolRegistry>,
+    pub embedding_model: Option<Arc<dyn EmbeddingModel>>,
+    memory_stores: Arc<StdMutex<HashMap<String, Arc<TokioMutex<MemoryStore>>>>>,
     context_cache: ContextCache,
     cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
 }
@@ -44,11 +50,11 @@ fn workflow_dir(workspace_root: &Path) -> PathBuf {
 }
 
 fn cow_backend_cache(
-) -> &'static Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>> {
+) -> &'static StdMutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>> {
     static CACHE: OnceLock<
-        Mutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>>,
+        StdMutex<HashMap<PathBuf, Arc<dyn zerochain_fs::CowPlatform + Send + Sync>>>,
     > = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    CACHE.get_or_init(|| StdMutex::new(HashMap::new()))
 }
 
 #[tracing::instrument(skip(workspace_root), fields(dir = %workspace_root.display()))]
@@ -106,6 +112,18 @@ impl AppState {
     pub async fn new(workspace_root: &Path, cas: Option<CasStore>) -> AppState {
         let start = std::time::Instant::now();
         let cow_backend = resolve_cow_backend(workspace_root).await;
+
+        let embedding_model: Option<Arc<dyn EmbeddingModel>> = match FastEmbedModel::try_new_arc() {
+            Ok(model) => Some(model),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to initialize FastEmbedModel; memory tools unavailable"
+                );
+                None
+            }
+        };
+
         tracing::info!(
             dir = %workspace_root.display(),
             backend = %cow_backend.name(),
@@ -117,9 +135,53 @@ impl AppState {
             workflows: HashMap::new(),
             cas,
             tool_registry: Arc::new(ToolRegistry::default()),
+            embedding_model,
+            memory_stores: Arc::new(StdMutex::new(HashMap::new())),
             context_cache: ContextCache::default(),
             cow_backend,
         }
+    }
+
+    pub async fn workflow_memory_store(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Arc<TokioMutex<MemoryStore>>, DaemonError> {
+        {
+            let stores = self.memory_stores.lock().map_err(|e| {
+                DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+                    reason: format!("memory store lock poisoned: {e}"),
+                })
+            })?;
+            if let Some(store) = stores.get(workflow_id) {
+                return Ok(store.clone());
+            }
+        }
+
+        let dir = self.workflow_dir(workflow_id).await?;
+        let store = MemoryStore::open(&dir)
+            .await
+            .map_err(|e| DaemonError::from(ZerochainError::from(e)))?;
+        let arc = Arc::new(TokioMutex::new(store));
+
+        {
+            let mut stores = self.memory_stores.lock().map_err(|e| {
+                DaemonError::Workflow(zerochain_core::error::Error::PlanError {
+                    reason: format!("memory store lock poisoned: {e}"),
+                })
+            })?;
+            stores.insert(workflow_id.to_string(), arc.clone());
+        }
+
+        Ok(arc)
+    }
+
+    async fn workflow_dir(&self, workflow_id: &str) -> Result<PathBuf, DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        let dir = wf.root.join(".zerochain").join("memory");
+        Ok(dir)
     }
 
     /// Load all workflows from the workspace workflows directory.
