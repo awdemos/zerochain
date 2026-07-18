@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use zerochain_llm::{Tool as LlmTool, ToolCall};
 use zerochain_tools::{Tool, ToolRegistry};
 
