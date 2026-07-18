@@ -41,6 +41,10 @@ pub struct FastEmbedModel {
 }
 
 impl FastEmbedModel {
+    /// Construct a new FastEmbed model.
+    ///
+    /// This calls the synchronous `fastembed` initializer; call it from
+    /// `tokio::task::spawn_blocking` if you are already inside an async context.
     pub fn try_new() -> Result<Self> {
         let cache_dir = default_cache_dir();
         let options =
@@ -77,10 +81,15 @@ impl EmbeddingModel for FastEmbedModel {
 }
 
 fn default_cache_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+    cache_dir_for(
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(".")),
+    )
+}
+
+fn cache_dir_for(home: PathBuf) -> PathBuf {
     home.join(".cache").join("zerochain").join("models")
 }
 
@@ -97,9 +106,8 @@ mod tests {
     }
 
     #[test]
-    fn default_cache_dir_under_home() {
-        std::env::set_var("HOME", "/tmp/fakehome");
-        let dir = default_cache_dir();
+    fn cache_dir_under_home() {
+        let dir = cache_dir_for(PathBuf::from("/tmp/fakehome"));
         assert!(dir.ends_with(".cache/zerochain/models"));
     }
 }
