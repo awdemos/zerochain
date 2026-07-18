@@ -40,7 +40,7 @@ pub struct AppState {
     pub cas: Option<CasStore>,
     pub tool_registry: Arc<ToolRegistry>,
     pub embedding_model: Option<Arc<dyn EmbeddingModel>>,
-    memory_stores: Arc<StdMutex<HashMap<String, Arc<TokioMutex<MemoryStore>>>>>,
+    memory_stores: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<MemoryStore>>>>>,
     context_cache: ContextCache,
     cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
 }
@@ -136,7 +136,7 @@ impl AppState {
             cas,
             tool_registry: Arc::new(ToolRegistry::default()),
             embedding_model,
-            memory_stores: Arc::new(StdMutex::new(HashMap::new())),
+            memory_stores: Arc::new(TokioMutex::new(HashMap::new())),
             context_cache: ContextCache::default(),
             cow_backend,
         }
@@ -146,15 +146,9 @@ impl AppState {
         &self,
         workflow_id: &str,
     ) -> Result<Arc<TokioMutex<MemoryStore>>, DaemonError> {
-        {
-            let stores = self.memory_stores.lock().map_err(|e| {
-                DaemonError::Workflow(zerochain_core::error::Error::PlanError {
-                    reason: format!("memory store lock poisoned: {e}"),
-                })
-            })?;
-            if let Some(store) = stores.get(workflow_id) {
-                return Ok(store.clone());
-            }
+        let mut stores = self.memory_stores.lock().await;
+        if let Some(store) = stores.get(workflow_id) {
+            return Ok(store.clone());
         }
 
         let dir = self.workflow_dir(workflow_id).await?;
@@ -162,16 +156,7 @@ impl AppState {
             .await
             .map_err(|e| DaemonError::from(ZerochainError::from(e)))?;
         let arc = Arc::new(TokioMutex::new(store));
-
-        {
-            let mut stores = self.memory_stores.lock().map_err(|e| {
-                DaemonError::Workflow(zerochain_core::error::Error::PlanError {
-                    reason: format!("memory store lock poisoned: {e}"),
-                })
-            })?;
-            stores.insert(workflow_id.to_string(), arc.clone());
-        }
-
+        stores.insert(workflow_id.to_string(), arc.clone());
         Ok(arc)
     }
 
