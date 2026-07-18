@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
-use crate::tool_driver;
 use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
 use zerochain_core::graph::ControlOutcome;
@@ -117,7 +116,7 @@ impl AppState {
             workspace_root: workspace_root.to_path_buf(),
             workflows: HashMap::new(),
             cas,
-            tool_registry: Arc::new(tool_driver::default_tool_registry()),
+            tool_registry: Arc::new(ToolRegistry::default()),
             context_cache: ContextCache::default(),
             cow_backend,
         }

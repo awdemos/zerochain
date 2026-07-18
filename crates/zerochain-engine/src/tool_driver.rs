@@ -1,7 +1,6 @@
 use std::path::Path;
-use std::sync::Arc;
 use zerochain_llm::{Tool as LlmTool, ToolCall};
-use zerochain_tools::{HttpTool, ReadFileTool, ShellTool, Tool, ToolRegistry, WriteFileTool};
+use zerochain_tools::{Tool, ToolRegistry};
 
 use crate::error::DaemonError;
 
@@ -29,15 +28,6 @@ pub fn to_llm_tools(registry: &ToolRegistry, names: &[String]) -> Vec<LlmTool> {
                 })
         })
         .collect()
-}
-
-pub fn default_tool_registry() -> ToolRegistry {
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(HttpTool));
-    registry.register(Arc::new(ReadFileTool));
-    registry.register(Arc::new(WriteFileTool));
-    registry.register(Arc::new(ShellTool));
-    registry
 }
 
 /// Look up the tool referenced by `call` in `registry`, execute it, and return the JSON result as a string.
