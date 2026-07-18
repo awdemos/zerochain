@@ -7,13 +7,14 @@ keywords = ["zerochain", "ai", "tools", "mcp"]
 categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
-description = "Reusable tool registry with built-in HTTP tool"
+description = "Reusable tool registry with built-in HTTP and file tools"
 
 [dependencies]
 zerochain-error = { path = "../zerochain-error" }
 async-trait.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

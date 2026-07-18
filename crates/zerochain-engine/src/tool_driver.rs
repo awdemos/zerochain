@@ -1,3 +1,4 @@
+use std::path::Path;
 use zerochain_llm::{Tool as LlmTool, ToolCall};
 use zerochain_tools::{Tool, ToolRegistry};
 
@@ -33,6 +34,7 @@ pub fn to_llm_tools(registry: &ToolRegistry, names: &[String]) -> Vec<LlmTool> {
 pub async fn execute_tool_call(
     registry: &ToolRegistry,
     call: &ToolCall,
+    workspace_root: &Path,
 ) -> Result<String, DaemonError> {
     let tool = registry.get(&call.name).ok_or_else(|| {
         DaemonError::Workflow(zerochain_core::error::Error::PlanError {
@@ -40,10 +42,11 @@ pub async fn execute_tool_call(
         })
     })?;
 
-    let result = tool
-        .run(call.arguments.clone())
-        .await
-        .map_err(DaemonError::from)?;
+    let mut input = call.arguments.clone();
+    if matches!(call.name.as_str(), "read_file" | "write_file" | "shell") {
+        input["workspace_root"] = serde_json::json!(workspace_root.to_string_lossy().to_string());
+    }
 
+    let result = tool.run(input).await.map_err(DaemonError::from)?;
     Ok(result.to_string())
 }
