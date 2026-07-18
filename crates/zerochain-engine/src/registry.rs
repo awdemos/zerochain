@@ -76,7 +76,11 @@ impl WorkflowRegistry {
             match handle.get_workflow(id.clone()).await {
                 Some(wf) => {
                     let plan = wf.execution_plan();
-                    let status = if plan.is_complete() { "complete" } else { "active" };
+                    let status = if plan.is_complete() {
+                        "complete"
+                    } else {
+                        "active"
+                    };
                     results.push((id.clone(), status.to_string()));
                 }
                 None => {
