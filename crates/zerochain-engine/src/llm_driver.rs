@@ -149,7 +149,9 @@ impl<'a> LLMStageDriver<'a> {
             }
 
             tool_round += 1;
-            if tool_round > max_iterations {
+            // Exceeded the configured number of tool-use iterations; execute the
+            // remaining tool calls and write their raw results as the stage output.
+            if tool_round >= max_iterations {
                 let mut results = Vec::new();
                 for call in &response.tool_calls {
                     let result =
