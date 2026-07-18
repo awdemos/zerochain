@@ -121,6 +121,7 @@ impl MemoryStore {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use serde_json::json;
     use tempfile::TempDir;
 
     struct FixedModel;
@@ -137,6 +138,15 @@ mod tests {
                     v
                 })
                 .collect())
+        }
+    }
+
+    struct FakeEmbeddingModel;
+
+    #[async_trait]
+    impl EmbeddingModel for FakeEmbeddingModel {
+        async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            Ok(_texts.iter().map(|_| vec![1.0f32, 0.0, 0.0]).collect())
         }
     }
 
@@ -158,5 +168,29 @@ mod tests {
         let results = store.search(&[1.0f32, 0.0, 0.0], 1).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1.text, "first");
+    }
+
+    #[tokio::test]
+    async fn memory_store_persists_across_reopen() {
+        let dir = TempDir::new().unwrap();
+        let model = FakeEmbeddingModel;
+
+        {
+            let mut store = MemoryStore::open(dir.path()).await.unwrap();
+            store
+                .add(
+                    &model,
+                    vec![("zerochain semantic search".into(), json!({"id": 1}))],
+                )
+                .await
+                .unwrap();
+        }
+
+        let store2 = MemoryStore::open(dir.path()).await.unwrap();
+        let results = store2.query(&model, "semantic", 5).await.unwrap();
+        assert!(!results.is_empty());
+        assert!(results
+            .iter()
+            .any(|r| r.1.text.contains("zerochain semantic search")));
     }
 }
