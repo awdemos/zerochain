@@ -35,6 +35,7 @@ pub async fn execute_tool_call(
     registry: &ToolRegistry,
     call: &ToolCall,
     workspace_root: &Path,
+    memory_store_path: Option<&Path>,
 ) -> Result<String, DaemonError> {
     let tool = registry.get(&call.name).ok_or_else(|| {
         DaemonError::Workflow(zerochain_core::error::Error::PlanError {
@@ -45,6 +46,11 @@ pub async fn execute_tool_call(
     let mut input = call.arguments.clone();
     if matches!(call.name.as_str(), "read_file" | "write_file" | "shell") {
         input["workspace_root"] = serde_json::json!(workspace_root.to_string_lossy().to_string());
+    }
+    if matches!(call.name.as_str(), "memory_store" | "memory_query") {
+        if let Some(path) = memory_store_path {
+            input["memory_store_path"] = serde_json::json!(path.to_string_lossy().to_string());
+        }
     }
 
     let result = tool.run(input).await.map_err(DaemonError::from)?;

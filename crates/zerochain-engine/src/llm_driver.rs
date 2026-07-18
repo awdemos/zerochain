@@ -93,6 +93,7 @@ impl<'a> LLMStageDriver<'a> {
         let workflow_root = workflows
             .get(self.workflow_id)
             .map_or_else(|| self.stage.path.clone(), |wf| wf.root.clone());
+        let memory_dir = workflow_root.join(".zerochain").join("memory");
         let shared_store = load_shared_store_async(workflow_root.clone()).await?;
 
         if let Some(ref script) = lua_script {
@@ -154,9 +155,13 @@ impl<'a> LLMStageDriver<'a> {
             if tool_round >= max_iterations {
                 let mut results = Vec::new();
                 for call in &response.tool_calls {
-                    let result =
-                        tool_driver::execute_tool_call(&self.tool_registry, call, &workflow_root)
-                            .await?;
+                    let result = tool_driver::execute_tool_call(
+                        &self.tool_registry,
+                        call,
+                        &workflow_root,
+                        Some(&memory_dir),
+                    )
+                    .await?;
                     results.push(format!("{}: {}", call.name, result));
                 }
                 let tool_output = results.join("\n\n");
@@ -180,9 +185,13 @@ impl<'a> LLMStageDriver<'a> {
             }
 
             for call in &response.tool_calls {
-                let result =
-                    tool_driver::execute_tool_call(&self.tool_registry, call, &workflow_root)
-                        .await?;
+                let result = tool_driver::execute_tool_call(
+                    &self.tool_registry,
+                    call,
+                    &workflow_root,
+                    Some(&memory_dir),
+                )
+                .await?;
                 let result_text = format!(
                     "Tool result for call {} ({}): {}",
                     call.id, call.name, result
