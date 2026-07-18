@@ -73,6 +73,9 @@ pub enum DaemonError {
 
     #[error("CAS error: {0}")]
     Cas(#[from] zerochain_cas::CasError),
+
+    #[error("memory error: {0}")]
+    Memory(#[from] zerochain_memory::MemoryError),
 }
 
 impl DaemonError {
@@ -125,6 +128,7 @@ impl From<DaemonError> for ZerochainError {
             },
             DaemonError::Fs(e) => ZerochainError::from(e),
             DaemonError::Cas(e) => ZerochainError::from(e),
+            DaemonError::Memory(e) => ZerochainError::from(e),
         }
     }
 }

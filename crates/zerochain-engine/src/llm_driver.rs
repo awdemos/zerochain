@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use serde_json::json;
 use zerochain_cas::{CasStore, Cid};
 use zerochain_core::context::{Context as StageContext, ContextCache};
 use zerochain_core::stage::Stage;
@@ -13,9 +14,11 @@ use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
 };
+use zerochain_memory::chunk_text;
 use zerochain_tools::ToolRegistry;
 
 use crate::error::DaemonError;
+use crate::state::AppState;
 use crate::tool_driver;
 
 pub struct LLMStageDriver<'a> {
@@ -25,6 +28,7 @@ pub struct LLMStageDriver<'a> {
     pub cas: Option<CasStore>,
     pub context_cache: Option<ContextCache>,
     pub tool_registry: Arc<ToolRegistry>,
+    pub state: Arc<AppState>,
 }
 
 impl<'a> LLMStageDriver<'a> {
@@ -106,6 +110,8 @@ impl<'a> LLMStageDriver<'a> {
                 return Ok(String::new());
             }
         }
+
+        self.load_memory_sources(&ctx).await?;
 
         let mut messages = assemble_messages(&ctx, &input_content, self.stage).await;
 
@@ -200,6 +206,8 @@ impl<'a> LLMStageDriver<'a> {
             }
         };
 
+        self.index_output(&ctx, &output).await?;
+
         if let Some(ref script) = lua_script {
             run_post_completion_hooks(
                 workflows,
@@ -229,6 +237,94 @@ impl<'a> LLMStageDriver<'a> {
         } else {
             Ok(None)
         }
+    }
+}
+
+impl<'a> LLMStageDriver<'a> {
+    async fn load_memory_sources(&self, ctx: &Option<StageContext>) -> Result<(), DaemonError> {
+        let Some(model) = self.state.embedding_model.as_ref() else {
+            return Ok(());
+        };
+        let Some(ctx) = ctx else {
+            return Ok(());
+        };
+        if ctx.frontmatter.memory_sources.is_empty() {
+            return Ok(());
+        }
+
+        let workflow_root = self.state.workflow_root(self.workflow_id).await?;
+        let mut parts = Vec::new();
+        let mut source_paths = Vec::new();
+        for src in &ctx.frontmatter.memory_sources {
+            let path = workflow_root.join(src);
+            match tokio::fs::metadata(&path).await {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(DaemonError::io(&path, e)),
+            }
+            let content = tokio::fs::read_to_string(&path)
+                .await
+                .map_err(|e| DaemonError::io(&path, e))?;
+            parts.push(content);
+            source_paths.push(path);
+        }
+        if parts.is_empty() {
+            return Ok(());
+        }
+
+        let combined = parts.join("\n\n");
+        let chunk_size = ctx.frontmatter.memory_chunk_size.unwrap_or(1000);
+        let overlap = ctx.frontmatter.memory_chunk_overlap.unwrap_or(200);
+        let chunks = chunk_text(&combined, chunk_size, overlap);
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let store = self.state.workflow_memory_store(self.workflow_id).await?;
+        let mut locked = store.lock().await;
+        let texts: Vec<(String, serde_json::Value)> = chunks
+            .into_iter()
+            .zip(source_paths.iter().cycle())
+            .map(|(chunk, path)| (chunk, json!({ "source": path.display().to_string() })))
+            .collect();
+        locked.add(&**model, texts).await?;
+        Ok(())
+    }
+
+    async fn index_output(
+        &self,
+        ctx: &Option<StageContext>,
+        output: &str,
+    ) -> Result<(), DaemonError> {
+        let Some(model) = self.state.embedding_model.as_ref() else {
+            return Ok(());
+        };
+        let Some(ctx) = ctx else {
+            return Ok(());
+        };
+        if !ctx.frontmatter.index_output {
+            return Ok(());
+        }
+        if output.is_empty() {
+            return Ok(());
+        }
+
+        let chunk_size = ctx.frontmatter.memory_chunk_size.unwrap_or(1000);
+        let overlap = ctx.frontmatter.memory_chunk_overlap.unwrap_or(200);
+        let chunks = chunk_text(output, chunk_size, overlap);
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let store = self.state.workflow_memory_store(self.workflow_id).await?;
+        let mut locked = store.lock().await;
+        let stage_id = self.stage.id.raw.clone();
+        let texts: Vec<(String, serde_json::Value)> = chunks
+            .into_iter()
+            .map(|chunk| (chunk, json!({ "stage": stage_id })))
+            .collect();
+        locked.add(&**model, texts).await?;
+        Ok(())
     }
 }
 
@@ -566,6 +662,185 @@ async fn run_post_completion_hooks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use tempfile::TempDir;
+    use zerochain_core::stage::Stage;
+    use zerochain_llm::error::LLMError;
+    use zerochain_llm::types::{CompleteResponse, LLMConfig, Message, ProviderId, Tool};
+    use zerochain_memory::{EmbeddingModel, MemoryError};
+
+    struct FakeLlm {
+        response: String,
+    }
+
+    #[async_trait]
+    impl LLM for FakeLlm {
+        fn provider_id(&self) -> &ProviderId {
+            static PROVIDER: ProviderId = ProviderId::OpenAI;
+            &PROVIDER
+        }
+
+        async fn complete(
+            &self,
+            _config: &LLMConfig,
+            _messages: &[Message],
+            _tools: Option<&[Tool]>,
+        ) -> std::result::Result<CompleteResponse, LLMError> {
+            Ok(CompleteResponse::new(Some(self.response.clone())))
+        }
+
+        fn supports_multimodal(&self) -> bool {
+            false
+        }
+
+        fn context_window(&self) -> usize {
+            128_000
+        }
+
+        async fn health_check(&self) -> std::result::Result<(), LLMError> {
+            Ok(())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    struct FakeEmbed;
+
+    #[async_trait]
+    impl EmbeddingModel for FakeEmbed {
+        async fn embed(&self, _texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, MemoryError> {
+            Ok(_texts.iter().map(|_| vec![1.0f32, 0.0, 0.0]).collect())
+        }
+    }
+
+    async fn test_state_with_embedding(tmp: &TempDir) -> Arc<AppState> {
+        let mut state = AppState::new(tmp.path(), None).await;
+        state.embedding_model = Some(Arc::new(FakeEmbed));
+        Arc::new(state)
+    }
+
+    #[tokio::test]
+    async fn indexes_stage_output_when_index_output_is_true() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "idx-test",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        let ctx_path = wf.root.join("00_spec").join("CONTEXT.md");
+        tokio::fs::write(
+            &ctx_path,
+            "---\nindex_output: true\n---\nSummarize the task.",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "The quick brown fox jumps over the lazy dog.".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "idx-test",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+
+        let output = driver.execute(&mut workflows).await.unwrap();
+        assert_eq!(output, "The quick brown fox jumps over the lazy dog.");
+
+        let store = state.workflow_memory_store("idx-test").await.unwrap();
+        let locked = store.lock().await;
+        let model = state.embedding_model.as_ref().unwrap();
+        let results = locked
+            .query(model.as_ref(), "quick brown fox", 1)
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "expected indexed output to be searchable"
+        );
+    }
+
+    #[tokio::test]
+    async fn preloads_memory_sources_before_llm_call() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mem-test",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+
+        let docs_dir = wf.root.join("docs");
+        tokio::fs::create_dir_all(&docs_dir).await.unwrap();
+        let readme = docs_dir.join("readme.md");
+        tokio::fs::write(
+            &readme,
+            "# Project\n\nThis project uses vector memory for semantic search.",
+        )
+        .await
+        .unwrap();
+
+        let ctx_path = wf.root.join("00_spec").join("CONTEXT.md");
+        tokio::fs::write(
+            &ctx_path,
+            "---\nmemory_sources:\n  - docs/readme.md\n---\nEcho the docs.",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "The project uses vector memory.".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "mem-test",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+
+        let output = driver.execute(&mut workflows).await.unwrap();
+        assert_eq!(output, "The project uses vector memory.");
+
+        let store = state.workflow_memory_store("mem-test").await.unwrap();
+        let locked = store.lock().await;
+        let model = state.embedding_model.as_ref().unwrap();
+        let results = locked
+            .query(model.as_ref(), "vector memory", 1)
+            .await
+            .unwrap();
+        assert!(
+            !results.is_empty(),
+            "expected memory source to be searchable"
+        );
+    }
 
     #[test]
     fn parse_thinking_mode_variants() {
