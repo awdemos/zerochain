@@ -9,6 +9,7 @@ pub mod error;
 pub mod llm_driver;
 pub mod registry;
 pub mod state;
+mod tool_driver;
 
 pub use actor::{ActorMessage, WorkflowActor, WorkflowHandle};
 pub use error::DaemonError;

@@ -13,8 +13,10 @@ use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
 };
+use zerochain_tools::ToolRegistry;
 
 use crate::error::DaemonError;
+use crate::tool_driver;
 
 pub struct LLMStageDriver<'a> {
     pub workflow_id: &'a str,
@@ -22,6 +24,7 @@ pub struct LLMStageDriver<'a> {
     pub llm: &'a dyn LLM,
     pub cas: Option<CasStore>,
     pub context_cache: Option<ContextCache>,
+    pub tool_registry: Arc<ToolRegistry>,
 }
 
 impl<'a> LLMStageDriver<'a> {
@@ -105,6 +108,17 @@ impl<'a> LLMStageDriver<'a> {
 
         let messages = assemble_messages(&ctx, &input_content, self.stage).await;
 
+        let tool_names = ctx
+            .as_ref()
+            .map(|c| c.frontmatter.tools.as_slice())
+            .unwrap_or(&[]);
+        let tools_vec = tool_driver::to_llm_tools(&self.tool_registry, tool_names);
+        let tools = if tools_vec.is_empty() {
+            None
+        } else {
+            Some(tools_vec.as_slice())
+        };
+
         tracing::info!(
             workflow_id = self.workflow_id,
             stage = %self.stage.id.raw,
@@ -116,13 +130,37 @@ impl<'a> LLMStageDriver<'a> {
 
         let response = self
             .llm
-            .complete_with_profile(&config, &messages, None, profile.as_ref(), &stage_ctx)
+            .complete_with_profile(&config, &messages, tools, profile.as_ref(), &stage_ctx)
             .await
             .map_err(DaemonError::Llm)?;
 
-        let output = response.content.clone().unwrap_or_default();
+        let output = if response.tool_calls.is_empty() {
+            write_stage_output(self.stage, &response, &stage_ctx).await?;
+            response.content.clone().unwrap_or_default()
+        } else {
+            tokio::fs::create_dir_all(&self.stage.output_path)
+                .await
+                .map_err(|e| DaemonError::io(&self.stage.output_path, e))?;
 
-        write_stage_output(self.stage, &response, &stage_ctx).await?;
+            let mut results = Vec::new();
+            for call in &response.tool_calls {
+                let result = tool_driver::execute_tool_call(&self.tool_registry, call).await?;
+                results.push(format!("{}: {}", call.name, result));
+            }
+            let tool_output = results.join("\n\n");
+
+            let result_path = self.stage.output_path.join("result.md");
+            tokio::fs::write(&result_path, &tool_output)
+                .await
+                .map_err(|e| DaemonError::io(&result_path, e))?;
+            tracing::info!(
+                stage = %self.stage.id.raw,
+                path = %result_path.display(),
+                bytes = tool_output.len(),
+                "wrote tool call output"
+            );
+            tool_output
+        };
 
         if let Some(ref script) = lua_script {
             run_post_completion_hooks(
