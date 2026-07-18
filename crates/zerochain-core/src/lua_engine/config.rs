@@ -37,6 +37,13 @@ fn get_u32(table: &Table, key: &str) -> Result<Option<u32>> {
     }
 }
 
+fn get_usize(table: &Table, key: &str) -> Result<Option<usize>> {
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
+        Value::Integer(n) => Ok(Some(n as usize)),
+        _ => Ok(None),
+    }
+}
+
 fn parse_multimodal(table: &Table, key: &str) -> Result<Vec<MultimodalInput>> {
     match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
         Value::Table(arr) => {
@@ -97,6 +104,10 @@ pub fn table_to_frontmatter(table: &Table) -> Result<ContextFrontmatter> {
         multimodal_input: parse_multimodal(table, "multimodal_input")?,
         tools: parse_strings(table, "tools")?,
         tool_loop_max_iterations: get_u32(table, "tool_loop_max_iterations")?,
+        index_output: get_bool(table, "index_output")?,
+        memory_sources: parse_strings(table, "memory_sources")?,
+        memory_chunk_size: get_usize(table, "memory_chunk_size")?,
+        memory_chunk_overlap: get_usize(table, "memory_chunk_overlap")?,
     })
 }
 
