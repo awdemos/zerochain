@@ -30,6 +30,13 @@ fn get_u64(table: &Table, key: &str) -> Result<Option<u64>> {
     }
 }
 
+fn get_u32(table: &Table, key: &str) -> Result<Option<u32>> {
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
+        Value::Integer(n) => Ok(Some(n.try_into().unwrap_or(0))),
+        _ => Ok(None),
+    }
+}
+
 fn parse_multimodal(table: &Table, key: &str) -> Result<Vec<MultimodalInput>> {
     match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
         Value::Table(arr) => {
@@ -89,6 +96,7 @@ pub fn table_to_frontmatter(table: &Table) -> Result<ContextFrontmatter> {
         capture_reasoning: get_bool(table, "capture_reasoning")?,
         multimodal_input: parse_multimodal(table, "multimodal_input")?,
         tools: parse_strings(table, "tools")?,
+        tool_loop_max_iterations: get_u32(table, "tool_loop_max_iterations")?,
     })
 }
 

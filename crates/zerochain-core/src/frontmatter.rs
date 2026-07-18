@@ -28,6 +28,8 @@ pub struct ContextFrontmatter {
     pub multimodal_input: Vec<MultimodalInput>,
     #[serde(default)]
     pub tools: Vec<String>,
+    #[serde(default)]
+    pub tool_loop_max_iterations: Option<u32>,
 }
 
 impl ContextFrontmatter {
@@ -64,6 +66,9 @@ impl ContextFrontmatter {
             } else {
                 self.tools.clone()
             },
+            tool_loop_max_iterations: self
+                .tool_loop_max_iterations
+                .or(base.tool_loop_max_iterations),
         }
     }
 }
@@ -76,4 +81,16 @@ pub struct MultimodalInput {
     pub path: String,
     #[serde(default)]
     pub detail: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::context::Context;
+
+    #[test]
+    fn parse_tool_loop_max_iterations() {
+        let input = "---\ntool_loop_max_iterations: 5\n---\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.tool_loop_max_iterations, Some(5));
+    }
 }
