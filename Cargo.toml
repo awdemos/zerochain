@@ -10,6 +10,7 @@ members = [
     "crates/zerochain-engine",
     "crates/zerochain-daemon",
     "crates/zerochain-server",
+    "crates/zerochain-tools",
 ]
 
 [workspace.package]
