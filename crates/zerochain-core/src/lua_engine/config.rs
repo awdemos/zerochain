@@ -59,6 +59,22 @@ fn parse_multimodal(table: &Table, key: &str) -> Result<Vec<MultimodalInput>> {
     }
 }
 
+fn parse_strings(table: &Table, key: &str) -> Result<Vec<String>> {
+    match table.get::<Value>(key).map_err(|e| lua_err(&e))? {
+        Value::Table(arr) => {
+            let mut result = Vec::new();
+            for pair in arr.sequence_values::<String>() {
+                let s = pair.map_err(|e| Error::Lua {
+                    message: format!("{key} parse error: {e}"),
+                })?;
+                result.push(s);
+            }
+            Ok(result)
+        }
+        _ => Ok(vec![]),
+    }
+}
+
 pub fn table_to_frontmatter(table: &Table) -> Result<ContextFrontmatter> {
     Ok(ContextFrontmatter {
         role: get_string(table, "role")?,
@@ -72,6 +88,7 @@ pub fn table_to_frontmatter(table: &Table) -> Result<ContextFrontmatter> {
         thinking_mode: get_string(table, "thinking_mode")?,
         capture_reasoning: get_bool(table, "capture_reasoning")?,
         multimodal_input: parse_multimodal(table, "multimodal_input")?,
+        tools: parse_strings(table, "tools")?,
     })
 }
 
