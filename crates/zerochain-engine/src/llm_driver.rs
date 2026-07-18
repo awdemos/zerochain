@@ -144,7 +144,9 @@ impl<'a> LLMStageDriver<'a> {
 
             let mut results = Vec::new();
             for call in &response.tool_calls {
-                let result = tool_driver::execute_tool_call(&self.tool_registry, call).await?;
+                let result =
+                    tool_driver::execute_tool_call(&self.tool_registry, call, &workflow_root)
+                        .await?;
                 results.push(format!("{}: {}", call.name, result));
             }
             let tool_output = results.join("\n\n");
