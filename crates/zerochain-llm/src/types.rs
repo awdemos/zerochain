@@ -116,6 +116,17 @@ pub struct Tool {
     pub parameters: serde_json::Value,
 }
 
+impl Tool {
+    #[must_use]
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ToolCall {
