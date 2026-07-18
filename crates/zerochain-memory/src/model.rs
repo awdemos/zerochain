@@ -1,50 +1,105 @@
-//! Embedding model abstraction for vector memory.
+use async_trait::async_trait;
+use fastembed::{EmbeddingModel as FastEmbedModelName, TextEmbedding, TextInitOptions};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex as StdMutex};
 
-/// Async trait for embedding models.
-#[async_trait::async_trait]
-pub trait EmbeddingModel {
-    /// Embed a single chunk of text into a vector.
-    async fn embed(&self, text: &str) -> crate::Result<Vec<f32>>;
-}
+use crate::error::MemoryError;
+use crate::Result;
 
-/// FastEmbed-backed embedding model.
-pub struct FastEmbedModel;
-
-impl FastEmbedModel {
-    /// Create a new FastEmbed model instance.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[async_trait::async_trait]
-impl EmbeddingModel for FastEmbedModel {
-    async fn embed(&self, _text: &str) -> crate::Result<Vec<f32>> {
-        Ok(Vec::new())
-    }
-}
-
-/// A chunk of text and its associated embedding.
-#[derive(Debug, Clone)]
+/// A chunk of text with its vector embedding and metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[non_exhaustive]
 pub struct MemoryChunk {
-    /// The original text content.
+    pub id: String,
     pub text: String,
-    /// The vector embedding of the text.
+    #[serde(default = "Value::default")]
+    pub metadata: Value,
     pub embedding: Vec<f32>,
 }
 
 impl MemoryChunk {
-    /// Create a new memory chunk without an embedding.
-    pub fn new(text: impl Into<String>) -> Self {
-        Self {
+    pub fn new(id: impl Into<String>, text: impl Into<String>, metadata: Value) -> Self {
+        MemoryChunk {
+            id: id.into(),
             text: text.into(),
+            metadata,
             embedding: Vec::new(),
         }
     }
 }
 
-impl Default for FastEmbedModel {
-    fn default() -> Self {
-        Self::new()
+#[async_trait]
+pub trait EmbeddingModel: Send + Sync {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+}
+
+#[derive(Clone)]
+pub struct FastEmbedModel {
+    inner: Arc<StdMutex<TextEmbedding>>,
+}
+
+impl FastEmbedModel {
+    pub fn try_new() -> Result<Self> {
+        let cache_dir = default_cache_dir();
+        let options =
+            TextInitOptions::new(FastEmbedModelName::AllMiniLML6V2).with_cache_dir(cache_dir);
+        let inner =
+            TextEmbedding::try_new(options).map_err(|e| MemoryError::Embedding(e.to_string()))?;
+        Ok(FastEmbedModel {
+            inner: Arc::new(StdMutex::new(inner)),
+        })
+    }
+
+    pub fn try_new_arc() -> Result<Arc<Self>> {
+        Ok(Arc::new(Self::try_new()?))
+    }
+}
+
+#[async_trait]
+impl EmbeddingModel for FastEmbedModel {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        let owned: Vec<String> = texts.iter().map(|s| (*s).to_string()).collect();
+        let model = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+            model
+                .inner
+                .lock()
+                .map_err(|e| MemoryError::Embedding(e.to_string()))?
+                .embed(refs, None)
+                .map_err(|e| MemoryError::Embedding(e.to_string()))
+        })
+        .await
+        .map_err(|e| MemoryError::Embedding(e.to_string()))?
+    }
+}
+
+fn default_cache_dir() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    home.join(".cache").join("zerochain").join("models")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_chunk_new() {
+        let chunk = MemoryChunk::new("id-1", "hello", serde_json::json!({"source": "x.md"}));
+        assert_eq!(chunk.id, "id-1");
+        assert_eq!(chunk.text, "hello");
+        assert!(chunk.embedding.is_empty());
+    }
+
+    #[test]
+    fn default_cache_dir_under_home() {
+        std::env::set_var("HOME", "/tmp/fakehome");
+        let dir = default_cache_dir();
+        assert!(dir.ends_with(".cache/zerochain/models"));
     }
 }
