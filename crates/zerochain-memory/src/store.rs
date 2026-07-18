@@ -1,17 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
 use crate::error::{io_err, MemoryError};
 use crate::model::{EmbeddingModel, MemoryChunk};
 use crate::similarity::cosine_similarity;
 use crate::Result;
 
 /// On-disk vector memory store for a single workflow.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone)]
 pub struct MemoryStore {
     chunks: Vec<MemoryChunk>,
-    #[serde(skip)]
     path: PathBuf,
 }
 
@@ -23,7 +20,7 @@ impl MemoryStore {
             .await
             .map_err(|e| io_err(&dir, e))?;
         let path = dir.join("memory.jsonl");
-        if !tokio::fs::metadata(&path).await.is_ok() {
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
             return Ok(MemoryStore {
                 chunks: Vec::new(),
                 path,
@@ -109,7 +106,11 @@ impl MemoryStore {
             lines.push(line);
         }
         let content = lines.join("\n");
-        tokio::fs::write(&self.path, content)
+        let tmp_path = self.path.with_extension("jsonl.tmp");
+        tokio::fs::write(&tmp_path, content)
+            .await
+            .map_err(|e| io_err(&tmp_path, e))?;
+        tokio::fs::rename(&tmp_path, &self.path)
             .await
             .map_err(|e| io_err(&self.path, e))?;
         Ok(())
