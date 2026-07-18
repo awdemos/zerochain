@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use crate::fs_tool::{ReadFileTool, WriteFileTool};
 use crate::http_tool::HttpTool;
+use crate::memory_tool::{MemoryQueryTool, MemoryStoreTool};
 use crate::shell_tool::ShellTool;
 use crate::tool::Tool;
 
@@ -38,6 +39,8 @@ impl Default for ToolRegistry {
         registry.register(Arc::new(ReadFileTool));
         registry.register(Arc::new(WriteFileTool));
         registry.register(Arc::new(ShellTool));
+        registry.register(Arc::new(MemoryStoreTool));
+        registry.register(Arc::new(MemoryQueryTool));
         registry
     }
 }
