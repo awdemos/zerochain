@@ -30,6 +30,14 @@ pub struct ContextFrontmatter {
     pub tools: Vec<String>,
     #[serde(default)]
     pub tool_loop_max_iterations: Option<u32>,
+    #[serde(default)]
+    pub index_output: bool,
+    #[serde(default)]
+    pub memory_sources: Vec<String>,
+    #[serde(default)]
+    pub memory_chunk_size: Option<usize>,
+    #[serde(default)]
+    pub memory_chunk_overlap: Option<usize>,
 }
 
 impl ContextFrontmatter {
@@ -69,6 +77,14 @@ impl ContextFrontmatter {
             tool_loop_max_iterations: self
                 .tool_loop_max_iterations
                 .or(base.tool_loop_max_iterations),
+            index_output: self.index_output || base.index_output,
+            memory_sources: if self.memory_sources.is_empty() {
+                base.memory_sources.clone()
+            } else {
+                self.memory_sources.clone()
+            },
+            memory_chunk_size: self.memory_chunk_size.or(base.memory_chunk_size),
+            memory_chunk_overlap: self.memory_chunk_overlap.or(base.memory_chunk_overlap),
         }
     }
 }
@@ -86,11 +102,22 @@ pub struct MultimodalInput {
 #[cfg(test)]
 mod tests {
     use crate::context::Context;
+    use crate::frontmatter::ContextFrontmatter;
 
     #[test]
     fn parse_tool_loop_max_iterations() {
         let input = "---\ntool_loop_max_iterations: 5\n---\nBody";
         let ctx = Context::parse(input).unwrap();
         assert_eq!(ctx.frontmatter.tool_loop_max_iterations, Some(5));
+    }
+
+    #[test]
+    fn parse_memory_options_frontmatter() {
+        let input = "---\nindex_output: true\nmemory_sources:\n  - docs/readme.md\nmemory_chunk_size: 500\nmemory_chunk_overlap: 100\n";
+        let frontmatter: ContextFrontmatter = serde_yml::from_str(input).unwrap();
+        assert!(frontmatter.index_output);
+        assert_eq!(frontmatter.memory_sources, vec!["docs/readme.md"]);
+        assert_eq!(frontmatter.memory_chunk_size, Some(500));
+        assert_eq!(frontmatter.memory_chunk_overlap, Some(100));
     }
 }
