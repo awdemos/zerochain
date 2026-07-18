@@ -74,50 +74,9 @@ That's it. zerochain creates a stage directory, calls the LLM, and writes the re
 
 ![zerochain run demo](docs/assets/demo-run.gif)
 
-### ASCII walkthrough: from help to first result
+### Terminal walkthrough: from help to first result
 
-```text
-$ zerochain --help
-zerochain 0.1.0
-Multi-agent orchestration using the filesystem
-
-USAGE:
-    zerochain <COMMAND>
-
-COMMANDS:
-    init      Create a new workflow
-    run       Run the next pending stage
-    status    Show workflow status
-    list      List all workflows
-    approve   Approve a human-gated stage
-    reject    Reject a human-gated stage
-    templates List available templates
-    help      Print this message or the help of given subcommand(s)
-
-$ zerochain init --name multiagent-research
-initialized workflow: multiagent-research
-  00_spec
-  01_research
-  02_summarize
-
-$ zerochain run multiagent-research --stage 00_spec
-> gather information on multiagent systems
-[2026-07-18T14:32:10Z INFO ] stage 00_spec complete
-→ wrote .zerochain/workflows/multiagent-research/00_spec/output/result.md
-
-$ zerochain status multiagent-research
-workflow: multiagent-research
-  00_spec     [complete]
-  01_research [pending]
-  02_summarize [pending]
-
-$ zerochain run multiagent-research
-[2026-07-18T14:32:45Z INFO ] running stage 01_research
-[2026-07-18T14:33:02Z INFO ] stage 01_research complete
-
-$ zerochain list
-multiagent-research	active
-```
+![zerochain help, init, status, and first prompt demo](docs/assets/demo-multiagent.gif)
 
 ---
 
