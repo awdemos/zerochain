@@ -12,6 +12,7 @@ use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
 use zerochain_fs::{acquire_lock, clean_output, CowPlatform};
 use zerochain_llm::{LLMConfig, LLMFactory, ProviderId, LLM};
+use zerochain_tools::ToolRegistry;
 
 /// Shared request type for HTTP and MCP entrypoints.
 #[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
@@ -33,6 +34,7 @@ pub struct AppState {
     pub workspace_root: PathBuf,
     pub workflows: HashMap<String, Workflow>,
     pub cas: Option<CasStore>,
+    pub tool_registry: Arc<ToolRegistry>,
     context_cache: ContextCache,
     cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
 }
@@ -114,6 +116,7 @@ impl AppState {
             workspace_root: workspace_root.to_path_buf(),
             workflows: HashMap::new(),
             cas,
+            tool_registry: Arc::new(ToolRegistry::default()),
             context_cache: ContextCache::default(),
             cow_backend,
         }
@@ -814,6 +817,7 @@ impl AppState {
             llm,
             cas: self.cas.clone(),
             context_cache: Some(self.context_cache.clone()),
+            tool_registry: self.tool_registry.clone(),
         };
 
         // Snapshot the stage in the background while the LLM request is in flight.
