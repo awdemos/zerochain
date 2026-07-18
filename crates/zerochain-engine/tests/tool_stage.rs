@@ -8,7 +8,9 @@ use zerochain_llm::{
 };
 
 struct MockToolLlm {
-    response: CompleteResponse,
+    calls: std::sync::atomic::AtomicUsize,
+    tool_response: CompleteResponse,
+    final_response: CompleteResponse,
 }
 
 #[async_trait]
@@ -26,7 +28,13 @@ impl LLM for MockToolLlm {
         let tools = tools.expect("tools should be passed to the LLM");
         assert!(!tools.is_empty(), "tools list should not be empty");
         assert!(tools.iter().any(|t| t.name == "http"), "http tool missing");
-        Ok(self.response.clone())
+
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            Ok(self.tool_response.clone())
+        } else {
+            Ok(self.final_response.clone())
+        }
     }
 
     fn supports_multimodal(&self) -> bool {
@@ -95,12 +103,19 @@ async fn tool_stage_executes_http_call() {
         "url": format!("http://{}/mock", addr),
         "method": "GET"
     });
-    let mut response = CompleteResponse::new(None);
-    response.tool_calls = vec![ToolCall::new("call_1", "http", arguments)];
-    response.finish_reason = FinishReason::ToolCalls;
-    response.model = "mock".into();
+    let mut tool_response = CompleteResponse::new(None);
+    tool_response.tool_calls = vec![ToolCall::new("call_1", "http", arguments)];
+    tool_response.finish_reason = FinishReason::ToolCalls;
+    tool_response.model = "mock".into();
 
-    let llm = MockToolLlm { response };
+    let mut final_response = CompleteResponse::new(Some("Final answer: mock-payload".into()));
+    final_response.model = "mock".into();
+
+    let llm = MockToolLlm {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        tool_response,
+        final_response,
+    };
     state
         .execute_stage_with_llm("tool-wf", &stage, &llm)
         .await

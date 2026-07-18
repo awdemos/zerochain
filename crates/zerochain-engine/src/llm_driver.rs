@@ -106,7 +106,7 @@ impl<'a> LLMStageDriver<'a> {
             }
         }
 
-        let messages = assemble_messages(&ctx, &input_content, self.stage).await;
+        let mut messages = assemble_messages(&ctx, &input_content, self.stage).await;
 
         let tool_names = ctx
             .as_ref()
@@ -128,38 +128,67 @@ impl<'a> LLMStageDriver<'a> {
             "calling LLM"
         );
 
-        let response = self
-            .llm
-            .complete_with_profile(&config, &messages, tools, profile.as_ref(), &stage_ctx)
-            .await
-            .map_err(DaemonError::Llm)?;
+        let max_iterations = ctx
+            .as_ref()
+            .and_then(|c| c.frontmatter.tool_loop_max_iterations)
+            .unwrap_or(10);
 
-        let output = if response.tool_calls.is_empty() {
-            write_stage_output(self.stage, &response, &stage_ctx).await?;
-            response.content.clone().unwrap_or_default()
-        } else {
-            tokio::fs::create_dir_all(&self.stage.output_path)
+        let mut tool_round = 0;
+
+        let (output, response) = loop {
+            let response = self
+                .llm
+                .complete_with_profile(&config, &messages, tools, profile.as_ref(), &stage_ctx)
                 .await
-                .map_err(|e| DaemonError::io(&self.stage.output_path, e))?;
+                .map_err(DaemonError::Llm)?;
 
-            let mut results = Vec::new();
-            for call in &response.tool_calls {
-                let result = tool_driver::execute_tool_call(&self.tool_registry, call).await?;
-                results.push(format!("{}: {}", call.name, result));
+            if response.tool_calls.is_empty() {
+                write_stage_output(self.stage, &response, &stage_ctx).await?;
+                let output = response.content.clone().unwrap_or_default();
+                break (output, response);
             }
-            let tool_output = results.join("\n\n");
 
-            let result_path = self.stage.output_path.join("result.md");
-            tokio::fs::write(&result_path, &tool_output)
-                .await
-                .map_err(|e| DaemonError::io(&result_path, e))?;
-            tracing::info!(
-                stage = %self.stage.id.raw,
-                path = %result_path.display(),
-                bytes = tool_output.len(),
-                "wrote tool call output"
-            );
-            tool_output
+            tool_round += 1;
+            // Exceeded the configured number of tool-use iterations; execute the
+            // remaining tool calls and write their raw results as the stage output.
+            if tool_round >= max_iterations {
+                let mut results = Vec::new();
+                for call in &response.tool_calls {
+                    let result =
+                        tool_driver::execute_tool_call(&self.tool_registry, call, &workflow_root)
+                            .await?;
+                    results.push(format!("{}: {}", call.name, result));
+                }
+                let tool_output = results.join("\n\n");
+
+                tokio::fs::create_dir_all(&self.stage.output_path)
+                    .await
+                    .map_err(|e| DaemonError::io(&self.stage.output_path, e))?;
+
+                let result_path = self.stage.output_path.join("result.md");
+                tokio::fs::write(&result_path, &tool_output)
+                    .await
+                    .map_err(|e| DaemonError::io(&result_path, e))?;
+                tracing::info!(
+                    stage = %self.stage.id.raw,
+                    path = %result_path.display(),
+                    bytes = tool_output.len(),
+                    iterations = tool_round,
+                    "wrote tool call output after exhausting tool loop"
+                );
+                break (tool_output, response);
+            }
+
+            for call in &response.tool_calls {
+                let result =
+                    tool_driver::execute_tool_call(&self.tool_registry, call, &workflow_root)
+                        .await?;
+                let result_text = format!(
+                    "Tool result for call {} ({}): {}",
+                    call.id, call.name, result
+                );
+                messages.push(Message::new(Role::Tool, result_text));
+            }
         };
 
         if let Some(ref script) = lua_script {

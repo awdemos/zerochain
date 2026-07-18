@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::fs_tool::{ReadFileTool, WriteFileTool};
 use crate::http_tool::HttpTool;
+use crate::shell_tool::ShellTool;
 use crate::tool::Tool;
 
 /// Registry that maps tool names to their implementations.
@@ -33,6 +35,9 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
         registry.register(Arc::new(HttpTool));
+        registry.register(Arc::new(ReadFileTool));
+        registry.register(Arc::new(WriteFileTool));
+        registry.register(Arc::new(ShellTool));
         registry
     }
 }
