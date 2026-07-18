@@ -115,7 +115,9 @@ async fn main() -> Result<()> {
             workflow_id,
             stage_id,
         } => {
-            state.mark_stage_complete(&workflow_id, &stage_id).await?;
+            state
+                .mark_stage_complete(&workflow_id, &stage_id, None)
+                .await?;
             println!("approved: {workflow_id} / {stage_id}");
         }
         zerochain_daemon::cli::Commands::Reject {

@@ -164,9 +164,55 @@ The effective mode is persisted to `{workflow_root}/.subvolume-mode` when the wo
 | `zerochain-cas` | Blake3 content-addressed storage with atomic writes |
 | `zerochain-fs` | Copy-on-write filesystem, advisory locks, stage markers |
 | `zerochain-llm` | Provider-agnostic LLM backend with profiles |
-| `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing |
+| `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing, execution graph |
 | `zerochain-daemon` | CLI binary |
 | `zerochain-server` | HTTP daemon (zerochaind) |
+
+---
+
+## 🔄 Workflow Graphs and Loops
+
+Zerochain now represents every workflow as an explicit execution graph. Stages are nodes and dataflow/ordering are edges. For the common case, the graph is still derived from `NN_name/` directory ordering, but the internal model is typed and testable.
+
+### Why this matters
+
+- **No hidden ordering rules.** Stage dependencies are explicit edges in `zerochain-core/src/graph.rs`, not side effects of directory names.
+- **Loops.** A stage can be declared as a `Loop` node with a bounded body. Loops terminate when the body emits a control record.
+- **Control records.** A stage ends a loop by writing one of these strings on the first line of `output/result.md`:
+  - `zerochain.control.v1.return` — loop succeeds with the current iteration's output
+  - `zerochain.control.v1.escalate` — loop stops and the workflow continues past it
+  - `zerochain.control.v1.fail` — loop fails
+  - `zerochain.control.v1.await` — loop pauses for human approval
+
+### Using loops in a workflow
+
+Loops are not exposed as a separate directory layout yet. They are constructed in code via the `WorkflowGraph` API. A typical loop looks like this:
+
+```rust
+use zerochain_core::graph::{WorkflowGraph, LoopExhaustion, ControlOutcome};
+use zerochain_core::stage::StageId;
+
+let mut graph = WorkflowGraph::new();
+let body = graph.add_stage(StageId::parse("02_review").unwrap());
+graph.add_loop(
+    StageId::parse("03_review_loop").unwrap(),
+    body,
+    5,
+    LoopExhaustion::Fail,
+).unwrap();
+```
+
+When the `02_review` stage writes `zerochain.control.v1.return` as the first line of `output/result.md`, the loop ends. If it never returns within five iterations, the loop fails according to `LoopExhaustion::Fail`.
+
+You can also build arbitrary directed acyclic graphs by adding stages and declaring dependencies explicitly:
+
+```rust
+let spec = graph.add_stage(StageId::parse("00_spec").unwrap());
+let analyze = graph.add_stage(StageId::parse("01_analyze").unwrap());
+graph.add_dependency(analyze, spec).unwrap();
+```
+
+The actor runtime (`zerochain-engine`) executes the graph while keeping zerochain's filesystem-native state, symlinks, and per-workflow actor model unchanged.
 
 ---
 

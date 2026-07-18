@@ -3,6 +3,7 @@
 pub mod context;
 pub mod error;
 pub(crate) mod frontmatter;
+pub mod graph;
 pub mod jj;
 pub(crate) mod lua_engine;
 pub mod plan;
