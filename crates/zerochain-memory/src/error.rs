@@ -20,6 +20,9 @@ pub enum MemoryError {
 
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    #[error("memory error: {0}")]
+    Other(String),
 }
 
 impl From<MemoryError> for ZerochainError {
@@ -31,16 +34,28 @@ impl From<MemoryError> for ZerochainError {
             },
             MemoryError::InvalidInput(msg) => ZerochainError::InvalidInput { message: msg },
             MemoryError::Serialization(msg) => ZerochainError::Serialization { message: msg },
+            MemoryError::Other(msg) => ZerochainError::Other { message: msg },
         }
     }
 }
 
-impl From<std::io::Error> for MemoryError {
-    fn from(source: std::io::Error) -> Self {
-        MemoryError::Io {
-            path: PathBuf::new(),
-            source,
+impl From<ZerochainError> for MemoryError {
+    fn from(err: ZerochainError) -> Self {
+        match err {
+            ZerochainError::Io { path, source } => MemoryError::Io { path, source },
+            ZerochainError::InvalidInput { message } => MemoryError::InvalidInput(message),
+            ZerochainError::Serialization { message } => MemoryError::Serialization(message),
+            ZerochainError::Llm { message } => MemoryError::Embedding(message),
+            other => MemoryError::Other(format!("{other}")),
         }
+    }
+}
+
+/// Create a `MemoryError` carrying the path that caused the I/O failure.
+pub fn io_err(path: impl AsRef<std::path::Path>, source: std::io::Error) -> MemoryError {
+    MemoryError::Io {
+        path: path.as_ref().to_path_buf(),
+        source,
     }
 }
 
