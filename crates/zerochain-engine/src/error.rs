@@ -7,6 +7,9 @@ pub enum DaemonError {
     #[error("workflow not found: {0}")]
     WorkflowNotFound(String),
 
+    #[error("workflow \"{name}\" already exists; use --force to reset")]
+    WorkflowExists { name: String },
+
     #[error("stage not found: {0}")]
     StageNotFound(String),
 
@@ -86,6 +89,9 @@ impl From<DaemonError> for ZerochainError {
         match err {
             DaemonError::WorkflowNotFound(msg) => ZerochainError::NotFound {
                 message: format!("workflow not found: {msg}"),
+            },
+            DaemonError::WorkflowExists { name } => ZerochainError::Workflow {
+                message: format!("workflow \"{name}\" already exists; use --force to reset"),
             },
             DaemonError::StageNotFound(msg) => ZerochainError::NotFound {
                 message: format!("stage not found: {msg}"),
