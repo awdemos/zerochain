@@ -12,7 +12,6 @@ use zerochain_core::graph::ControlOutcome;
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
-use zerochain_error::ZerochainError;
 use zerochain_fs::{acquire_lock, clean_output, CowPlatform};
 use zerochain_llm::{LLMConfig, LLMFactory, ProviderId, LLM};
 use zerochain_memory::{EmbeddingModel, FastEmbedModel, MemoryStore};
@@ -152,12 +151,18 @@ impl AppState {
         }
 
         let dir = self.workflow_dir(workflow_id).await?;
-        let store = MemoryStore::open(&dir)
-            .await
-            .map_err(|e| DaemonError::from(ZerochainError::from(e)))?;
+        let store = MemoryStore::open(&dir).await.map_err(DaemonError::Memory)?;
         let arc = Arc::new(TokioMutex::new(store));
         stores.insert(workflow_id.to_string(), arc.clone());
         Ok(arc)
+    }
+
+    pub async fn workflow_root(&self, workflow_id: &str) -> Result<PathBuf, DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+        Ok(wf.root.clone())
     }
 
     async fn workflow_dir(&self, workflow_id: &str) -> Result<PathBuf, DaemonError> {
@@ -865,6 +870,7 @@ impl AppState {
             cas: self.cas.clone(),
             context_cache: Some(self.context_cache.clone()),
             tool_registry: self.tool_registry.clone(),
+            state: Arc::new(self.clone_state()),
         };
 
         // Snapshot the stage in the background while the LLM request is in flight.
@@ -978,6 +984,19 @@ impl AppState {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn clone_state(&self) -> AppState {
+        AppState {
+            workspace_root: self.workspace_root.clone(),
+            workflows: self.workflows.clone(),
+            cas: self.cas.clone(),
+            tool_registry: self.tool_registry.clone(),
+            embedding_model: self.embedding_model.clone(),
+            memory_stores: self.memory_stores.clone(),
+            context_cache: self.context_cache.clone(),
+            cow_backend: self.cow_backend.clone(),
+        }
     }
 
     fn container_env_vars() -> Vec<(String, String)> {
