@@ -238,9 +238,9 @@ impl OpenAICompatibleProvider {
                 let function = tc.function.ok_or_else(|| {
                     LLMError::parse("tool call missing 'function' field".to_string())
                 })?;
-                let id = tc.id.ok_or_else(|| {
-                    LLMError::parse("tool call missing 'id' field".to_string())
-                })?;
+                let id = tc
+                    .id
+                    .ok_or_else(|| LLMError::parse("tool call missing 'id' field".to_string()))?;
                 let name = function.name.ok_or_else(|| {
                     LLMError::parse("tool call function missing 'name' field".to_string())
                 })?;
@@ -273,7 +273,9 @@ impl OpenAICompatibleProvider {
             tool_calls,
             usage,
             finish_reason: finish,
-            model: parsed_response.model.unwrap_or_else(|| params.config.model.clone()),
+            model: parsed_response
+                .model
+                .unwrap_or_else(|| params.config.model.clone()),
             reasoning: None,
         };
 

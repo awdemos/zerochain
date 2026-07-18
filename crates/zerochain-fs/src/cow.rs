@@ -496,11 +496,9 @@ impl CowPlatform for BtrfsCow {
     async fn prepare_stage_dir(&self, path: &Path) -> Result<()> {
         let mode = self.effective_mode(path).await;
         match mode {
-            SubvolumeMode::Off | SubvolumeMode::Workflow => {
-                tokio::fs::create_dir_all(path)
-                    .await
-                    .map_err(|e| io_err(path, e))
-            }
+            SubvolumeMode::Off | SubvolumeMode::Workflow => tokio::fs::create_dir_all(path)
+                .await
+                .map_err(|e| io_err(path, e)),
             SubvolumeMode::Stage => {
                 if tokio::fs::try_exists(path)
                     .await
@@ -913,7 +911,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dir = tmp.path().join("plain");
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        tokio::fs::write(dir.join("file.txt"), b"data").await.unwrap();
+        tokio::fs::write(dir.join("file.txt"), b"data")
+            .await
+            .unwrap();
 
         let cow = BtrfsCow::new(SubvolumeMode::Off);
         cow.delete_subvolume_or_dir(&dir).await.unwrap();

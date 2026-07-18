@@ -172,8 +172,8 @@ async fn main() -> Result<()> {
 
     server_state.refresh().await?;
 
-    let app = routes::routes(server_state)
-        .layer(axum::extract::DefaultBodyLimit::max(cli.max_body_size));
+    let app =
+        routes::routes(server_state).layer(axum::extract::DefaultBodyLimit::max(cli.max_body_size));
 
     let listener = tokio::net::TcpListener::bind(&cli.listen).await?;
     tracing::info!("listening on {}", cli.listen);

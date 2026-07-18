@@ -31,7 +31,9 @@ pub async fn run_next(
 
     match handle.run_next(id.clone()).await {
         Ok(Some(stage_raw)) => {
-            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await {
+            if let Err(e) =
+                jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await
+            {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after run_next");
             }
             Json(SimpleMessage {
@@ -133,7 +135,8 @@ async fn run_stage_by_id(
 
     match result {
         Ok(()) => {
-            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, id, &stage_raw).await {
+            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, id, &stage_raw).await
+            {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after stage completion");
             }
             Json(SimpleMessage {
@@ -195,7 +198,9 @@ pub async fn approve(
             if let Err(e) = handle.reload_workflow(id.clone()).await {
                 tracing::warn!(error = %e, "failed to reload workflow after approve");
             }
-            if let Err(e) = jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await {
+            if let Err(e) =
+                jj::commit_stage_complete_result(&state.workspace, &id, &stage_raw).await
+            {
                 tracing::warn!(error = %e, workflow = %id, stage = %stage_raw, "jj commit failed after approve");
             }
             Json(SimpleMessage {

@@ -48,7 +48,8 @@ impl<R: AsyncRead + Unpin> AsyncRead for HashingReader<R> {
         let filled_after = buf.filled().len();
 
         if filled_after > filled_before {
-            this.hasher.update(&buf.filled()[filled_before..filled_after]);
+            this.hasher
+                .update(&buf.filled()[filled_before..filled_after]);
         }
 
         if let Poll::Ready(Ok(())) = &result {

@@ -236,10 +236,12 @@ async fn read_lock_pid(lock_path: &Path) -> Option<(u32, u64)> {
 pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
     let lock_path = dir.join(LOCK_FILE);
 
-    let parent = lock_path.parent().ok_or_else(|| FsError::AtomicWriteFailed {
-        path: lock_path.clone(),
-        reason: "path has no parent directory".into(),
-    })?;
+    let parent = lock_path
+        .parent()
+        .ok_or_else(|| FsError::AtomicWriteFailed {
+            path: lock_path.clone(),
+            reason: "path has no parent directory".into(),
+        })?;
     tokio::fs::create_dir_all(parent)
         .await
         .map_err(|e| io_err(parent, e))?;
@@ -251,10 +253,9 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
             lock_path,
             released: false,
         }),
-        Err(FsError::Io {
-            source: e,
-            path: _,
-        }) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+        Err(FsError::Io { source: e, path: _ })
+            if e.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
             // Lock file exists; check whether it is stale.
             if let Some((pid, _ts)) = read_lock_pid(&lock_path).await {
                 if pid != std::process::id() && is_pid_alive(pid).await {
@@ -266,25 +267,22 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
             }
 
             // Stale or corrupt lock file: remove and try once more.
-            tokio::fs::remove_file(&lock_path)
-                .await
-                .or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        Ok(())
-                    } else {
-                        Err(io_err(&lock_path, e))
-                    }
-                })?;
+            tokio::fs::remove_file(&lock_path).await.or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(io_err(&lock_path, e))
+                }
+            })?;
 
             match create_lock_file(&lock_path, &content).await {
                 Ok(()) => Ok(LockGuard {
                     lock_path,
                     released: false,
                 }),
-                Err(FsError::Io {
-                    source: e,
-                    path: _,
-                }) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(FsError::Io { source: e, path: _ })
+                    if e.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
                     // Lost the race; report the (new) holder's PID if we can read it.
                     let pid = read_lock_pid(&lock_path)
                         .await
@@ -296,7 +294,10 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
                             }
                         })
                         .unwrap_or(0);
-                    Err(FsError::LockHeld { path: lock_path, pid })
+                    Err(FsError::LockHeld {
+                        path: lock_path,
+                        pid,
+                    })
                 }
                 Err(e) => Err(e),
             }
@@ -641,8 +642,6 @@ mod tests {
             .await
             .unwrap());
     }
-
-
 
     #[tokio::test]
     async fn clean_output_removes_contents() {
