@@ -354,4 +354,27 @@ multimodal_input:
         assert_eq!(merged.frontmatter.multimodal_input.len(), 1);
         assert_eq!(merged.frontmatter.multimodal_input[0].path, "parent.png");
     }
+
+    #[test]
+    fn parse_tools_frontmatter() {
+        let input = "---\ntools:\n  - http\n  - search\n---\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.tools, vec!["http", "search"]);
+    }
+
+    #[test]
+    fn flatten_tools_inherits_when_child_empty() {
+        let parent = Context::parse("---\ntools:\n  - http\n---\n").unwrap();
+        let child = Context::parse("---\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.tools, vec!["http"]);
+    }
+
+    #[test]
+    fn flatten_tools_child_overrides() {
+        let parent = Context::parse("---\ntools:\n  - http\n---\n").unwrap();
+        let child = Context::parse("---\ntools:\n  - search\n---\n").unwrap();
+        let merged = child.flatten(Some(&parent));
+        assert_eq!(merged.frontmatter.tools, vec!["search"]);
+    }
 }

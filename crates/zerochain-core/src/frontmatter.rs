@@ -26,6 +26,8 @@ pub struct ContextFrontmatter {
     pub capture_reasoning: bool,
     #[serde(default)]
     pub multimodal_input: Vec<MultimodalInput>,
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 impl ContextFrontmatter {
@@ -56,6 +58,11 @@ impl ContextFrontmatter {
                 base.multimodal_input.clone()
             } else {
                 self.multimodal_input.clone()
+            },
+            tools: if self.tools.is_empty() {
+                base.tools.clone()
+            } else {
+                self.tools.clone()
             },
         }
     }
