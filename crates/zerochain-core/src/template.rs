@@ -358,6 +358,56 @@ impl TemplateRegistry {
         });
 
         self.register(Template {
+            name: "research-v2".into(),
+            description: "Multi-agent research workflow with ingestion, summary, critique, and runbook".into(),
+            stages: vec![
+                StageDef {
+                    name: "00_ingest".into(),
+                    role: "ingestion agent".into(),
+                    body: "Read the `source` input provided in the frontmatter variables. Summarize what \
+                           would be loaded from that repository or source, describing the expected contents \
+                           and scope. Do not make any network calls. Output the summary to result.md."
+                        .into(),
+                    human_gate: false,
+                    source_dir: None,
+                },
+                StageDef {
+                    name: "01_summarize".into(),
+                    role: "research analyst".into(),
+                    body: "Read `input/result.md` from the previous stage and write a structured report. \
+                           Extract key facts, organize findings into clear sections, and note any assumptions. \
+                           Output the report to result.md."
+                        .into(),
+                    human_gate: false,
+                    source_dir: None,
+                },
+                StageDef {
+                    name: "02_critique".into(),
+                    role: "critic".into(),
+                    body: "Read `input/result.md` from the previous stage and perform a review. Identify \
+                           gaps, inaccuracies, or missing detail. Begin the output with \
+                           `zerochain.control.v1.return` if the report is good and ready to proceed, or \
+                           `zerochain.control.v1.escalate` if there are major gaps. Add a concise review after \
+                           the control record. Output to result.md."
+                        .into(),
+                    human_gate: false,
+                    source_dir: None,
+                },
+                StageDef {
+                    name: "03_runbook".into(),
+                    role: "runbook author".into(),
+                    body: "Read `input/result.md` from the previous stage and write a practical runbook. \
+                           Turn the reviewed findings into step-by-step instructions that someone can follow. \
+                           Output the runbook to result.md."
+                        .into(),
+                    human_gate: false,
+                    source_dir: None,
+                },
+            ],
+            source_root: None,
+        });
+
+        self.register(Template {
             name: "implement".into(),
             description: "Design and implement a feature with verification".into(),
             stages: vec![
@@ -440,7 +490,22 @@ mod tests {
         let reg = TemplateRegistry::new();
         let list = reg.list();
         let names: Vec<&str> = list.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["code-review", "implement", "research"]);
+        assert_eq!(
+            names,
+            vec!["code-review", "implement", "research", "research-v2"]
+        );
+    }
+
+    #[test]
+    fn research_v2_template_stages() {
+        let reg = TemplateRegistry::new();
+        let tpl = reg.get("research-v2").unwrap();
+        assert_eq!(tpl.stages.len(), 4);
+        assert_eq!(tpl.stages[0].name, "00_ingest");
+        assert_eq!(tpl.stages[1].name, "01_summarize");
+        assert_eq!(tpl.stages[2].name, "02_critique");
+        assert_eq!(tpl.stages[3].name, "03_runbook");
+        assert!(!tpl.stages[2].human_gate);
     }
 
     #[test]

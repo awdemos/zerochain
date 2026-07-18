@@ -3811,6 +3811,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zerochain-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "zerochain-error",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"

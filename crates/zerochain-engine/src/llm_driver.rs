@@ -94,12 +94,8 @@ impl<'a> LLMStageDriver<'a> {
 
         if let Some(ref script) = lua_script {
             let lua = acquire_sandboxed_vm().map_err(DaemonError::Workflow)?;
-            let lua_ctx = LuaContext::new(
-                &self.stage.id.raw,
-                &self.stage.path,
-                &workflow_root,
-            )
-            .with_shared_store(shared_store.clone());
+            let lua_ctx = LuaContext::new(&self.stage.id.raw, &self.stage.path, &workflow_root)
+                .with_shared_store(shared_store.clone());
             let lua_ctx = run_hook_async(lua, "on_validate", lua_ctx, script.clone()).await?;
             if lua_ctx.skip {
                 tracing::info!(stage = %self.stage.id.raw, "skipped by on_validate hook");
