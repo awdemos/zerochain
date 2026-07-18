@@ -765,7 +765,10 @@ mod subvolume {
         if !BtrfsCow::is_btrfs_filesystem(tmp.path()).await {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
             let body = body_string(resp.into_body()).await;
-            assert!(body.contains("not on a Btrfs filesystem"), "unexpected body: {body}");
+            assert!(
+                body.contains("not on a Btrfs filesystem"),
+                "unexpected body: {body}"
+            );
         } else {
             // Real Btrfs test environments are rare in CI; just ensure it does
             // not 500 when on Btrfs.
