@@ -7,6 +7,7 @@ members = [
     "crates/zerochain-error",
     "crates/zerochain-fs",
     "crates/zerochain-llm",
+    "crates/zerochain-memory",
     "crates/zerochain-engine",
     "crates/zerochain-daemon",
     "crates/zerochain-server",
@@ -29,6 +30,7 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "2.0"
+fastembed = "5.2"
 anyhow = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
