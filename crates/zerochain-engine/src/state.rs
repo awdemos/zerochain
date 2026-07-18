@@ -6,6 +6,7 @@ use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
+use zerochain_core::graph::ControlOutcome;
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
@@ -253,10 +254,13 @@ impl AppState {
 
         match &result {
             Ok(()) => {
-                self.mark_stage_complete(workflow_id, stage_raw).await.map_err(|e| {
-                    tracing::error!(error = %e, "failed to mark stage complete after successful execution");
-                    e
-                })?;
+                let outcome = self.detect_control_outcome(workflow_id, stage_raw).await;
+                self.mark_stage_complete(workflow_id, stage_raw, outcome)
+                    .await
+                    .map_err(|e| {
+                        tracing::error!(error = %e, "failed to mark stage complete after successful execution");
+                        e
+                    })?;
             }
             Err(e) => {
                 let msg = format!("{e}");
@@ -297,6 +301,29 @@ impl AppState {
             Some(stage) => stage.clone(),
             None => return Ok(None),
         };
+
+        // If the plan selected a loop body for another iteration, clear the
+        // previous completion marker so the body can run again.
+        if plan.should_reset_body_for_loop_iteration(&next_stage) {
+            let complete_marker = wf.root.join(&next_stage.raw).join(".complete");
+            match tokio::fs::remove_file(&complete_marker).await {
+                Ok(()) => {
+                    tracing::debug!(
+                        stage = %next_stage.raw,
+                        "cleared loop body completion marker for next iteration"
+                    );
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        marker = %complete_marker.display(),
+                        error = %e,
+                        "failed to clear loop body completion marker"
+                    );
+                }
+            }
+        }
+
         self.run_stage(workflow_id, &next_stage.raw).await?;
         Ok(Some(next_stage.raw))
     }
@@ -351,12 +378,11 @@ impl AppState {
             move |path| {
                 let backend = cow_backend.clone();
                 Box::pin(async move {
-                    backend
-                        .prepare_workflow_root(&path)
-                        .await
-                        .map_err(|e| zerochain_core::error::Error::PlanError {
+                    backend.prepare_workflow_root(&path).await.map_err(|e| {
+                        zerochain_core::error::Error::PlanError {
                             reason: e.to_string(),
-                        })
+                        }
+                    })
                 })
             },
             {
@@ -364,12 +390,11 @@ impl AppState {
                 move |path| {
                     let backend = backend.clone();
                     Box::pin(async move {
-                        backend
-                            .prepare_stage_dir(&path)
-                            .await
-                            .map_err(|e| zerochain_core::error::Error::PlanError {
+                        backend.prepare_stage_dir(&path).await.map_err(|e| {
+                            zerochain_core::error::Error::PlanError {
                                 reason: e.to_string(),
-                            })
+                            }
+                        })
                     })
                 }
             },
@@ -389,10 +414,35 @@ impl AppState {
         Ok(workflow)
     }
 
+    /// Read the stage's `output/result.md` and return any control record found
+    /// at the start of the file.
+    async fn detect_control_outcome(
+        &self,
+        workflow_id: &str,
+        stage_id: &str,
+    ) -> Option<ControlOutcome> {
+        let wf = self.workflows.get(workflow_id)?;
+        let sid = StageId::parse(stage_id).ok()?;
+        let stage = wf.stage_by_id(&sid)?;
+        let result_path = stage.output_path.join("result.md");
+        let content = match tokio::fs::read_to_string(&result_path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                tracing::warn!(path = %result_path.display(), error = %e, "failed to read result for control record");
+                return None;
+            }
+        };
+
+        let first_line = content.lines().next().unwrap_or("").trim();
+        ControlOutcome::parse_record(first_line)
+    }
+
     pub async fn mark_stage_complete(
         &mut self,
         workflow_id: &str,
         stage_id: &str,
+        control_outcome: Option<ControlOutcome>,
     ) -> Result<(), DaemonError> {
         let start = std::time::Instant::now();
         let wf = self
@@ -421,9 +471,18 @@ impl AppState {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(DaemonError::io(&err_marker, e)),
         }
+
+        if let Some(outcome) = control_outcome {
+            let control_path = stage.path.join(".control");
+            tokio::fs::write(&control_path, outcome.as_record())
+                .await
+                .map_err(|e| DaemonError::io(&control_path, e))?;
+        }
+
         tracing::info!(
             workflow_id,
             stage_id,
+            control_outcome = ?control_outcome,
             elapsed_ms = start.elapsed().as_millis(),
             "marked stage complete"
         );
@@ -1014,7 +1073,7 @@ mod tests {
         let stage = &wf.stages[0];
 
         state
-            .mark_stage_complete("mark-test", &stage.id.raw)
+            .mark_stage_complete("mark-test", &stage.id.raw, None)
             .await
             .unwrap();
 

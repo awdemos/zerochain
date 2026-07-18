@@ -140,7 +140,7 @@ impl WorkflowActor {
             } => {
                 let result = self
                     .state
-                    .mark_stage_complete(&workflow_id, &stage_id)
+                    .mark_stage_complete(&workflow_id, &stage_id, None)
                     .await;
                 let _ = respond.send(result);
             }
@@ -224,10 +224,7 @@ impl WorkflowHandle {
         .await?
     }
 
-    pub async fn run_next(
-        &self,
-        workflow_id: String,
-    ) -> Result<Option<String>, DaemonError> {
+    pub async fn run_next(&self, workflow_id: String) -> Result<Option<String>, DaemonError> {
         self.call(|respond| ActorMessage::RunNext {
             workflow_id,
             respond,
