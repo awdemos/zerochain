@@ -1,7 +1,8 @@
-//! Reusable tool registry with a built-in HTTP tool.
+//! Reusable tool registry with built-in HTTP and file tools.
 //!
 //! Provides an async [`Tool`] trait, a [`ToolRegistry`] for lookup,
-//! and a default [`HttpTool`] implementation for making GET/POST requests.
+//! and default [`HttpTool`], [`ReadFileTool`], and [`WriteFileTool`]
+//! implementations.
 
 pub mod fs_tool;
 pub mod http_tool;
