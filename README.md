@@ -74,10 +74,6 @@ That's it. zerochain creates a stage directory, calls the LLM, and writes the re
 
 ![zerochain run demo](docs/assets/demo-run.gif)
 
-### Terminal walkthrough: from help to first result
-
-![zerochain help, init, status, and first prompt demo](docs/assets/demo-multiagent.gif)
-
 ---
 
 ## 🖥️ CLI
