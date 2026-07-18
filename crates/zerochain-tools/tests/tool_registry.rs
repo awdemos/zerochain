@@ -1,5 +1,6 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+use zerochain_error::ZerochainError;
 use zerochain_tools::{HttpTool, Tool, ToolRegistry};
 
 #[tokio::test]
@@ -134,4 +135,31 @@ async fn registry_runs_http_tool_by_name() {
         .contains(r#"{"by_name":true}"#));
 
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn missing_url_returns_invalid_input() {
+    let tool = HttpTool;
+    let input = serde_json::json!({ "method": "GET" });
+    let err = tool.run(input).await.unwrap_err();
+    assert!(matches!(err, ZerochainError::InvalidInput { .. }));
+}
+
+#[tokio::test]
+async fn missing_method_returns_invalid_input() {
+    let tool = HttpTool;
+    let input = serde_json::json!({ "url": "http://example.com" });
+    let err = tool.run(input).await.unwrap_err();
+    assert!(matches!(err, ZerochainError::InvalidInput { .. }));
+}
+
+#[tokio::test]
+async fn unsupported_method_returns_unsupported() {
+    let tool = HttpTool;
+    let input = serde_json::json!({
+        "url": "http://example.com",
+        "method": "PUT"
+    });
+    let err = tool.run(input).await.unwrap_err();
+    assert!(matches!(err, ZerochainError::Unsupported { .. }));
 }
