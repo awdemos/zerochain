@@ -135,6 +135,21 @@ pub struct ToolCall {
     pub arguments: serde_json::Value,
 }
 
+impl ToolCall {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct CompleteResponse {

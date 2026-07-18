@@ -1,10 +1,11 @@
-use std::cell::RefCell;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
 
 use zerochain_core::task::{Task, TaskExecution};
 use zerochain_core::workflow::Workflow;
@@ -12,6 +13,7 @@ use zerochain_engine::AppState;
 use zerochain_fs::clean_output;
 use zerochain_llm::{CompleteResponse, Content, LLMConfig, Message, ProviderId, Role, LLM};
 
+#[derive(Clone)]
 struct MockLLM {
     response: String,
 }
@@ -93,19 +95,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     std::fs::write(stage.input_path.join("data.md"), "benchmark input data").expect("write input");
 
     let mock = MockLLM::new("benchmark response");
-    let state = RefCell::new(rt.block_on(AppState::new(tmp.path(), None)));
+    let state = Arc::new(Mutex::new(rt.block_on(AppState::new(tmp.path(), None))));
 
     c.bench_function("execute_stage_with_llm", |b| {
-        b.to_async(&rt).iter(|| async {
-            clean_output(&stage.path)
-                .await
-                .expect("clean output before iteration");
-            let mut state = state.borrow_mut();
-            let output = state
-                .execute_stage_with_llm("bench-wf", stage, &mock)
-                .await
-                .expect("execute stage");
-            black_box(output);
+        let state = Arc::clone(&state);
+        b.to_async(&rt).iter(|| {
+            let state = Arc::clone(&state);
+            let mock = mock.clone();
+            async move {
+                clean_output(&stage.path)
+                    .await
+                    .expect("clean output before iteration");
+                let mut state = state.lock().await;
+                state
+                    .execute_stage_with_llm("bench-wf", stage, &mock)
+                    .await
+                    .expect("execute stage");
+                black_box(());
+            }
         });
     });
 
