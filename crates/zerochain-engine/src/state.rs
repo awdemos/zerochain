@@ -26,6 +26,7 @@ pub struct InitWorkflowParams<'a> {
     pub name: &'a str,
     pub path: Option<&'a Path>,
     pub template: Option<&'a str>,
+    pub force: bool,
 }
 
 pub struct AppState {
@@ -336,12 +337,41 @@ impl AppState {
             name,
             path,
             template,
+            force,
         } = params;
         let base = path.unwrap_or(&self.workspace_root);
         let wf_base = workflow_dir(base);
         tokio::fs::create_dir_all(&wf_base)
             .await
             .map_err(|e| DaemonError::io(&wf_base, e))?;
+
+        let sanitized_id = name
+            .replace(['/', '\\'], "-")
+            .replace("..", "-")
+            .replace('\0', "");
+        if sanitized_id.is_empty() || sanitized_id.len() > 128 {
+            return Err(DaemonError::Workflow(
+                zerochain_core::error::Error::InvalidWorkflowName {
+                    name: name.to_string(),
+                },
+            ));
+        }
+        let workflow_root = wf_base.join(&sanitized_id);
+        match tokio::fs::metadata(&workflow_root).await {
+            Ok(_) => {
+                if force {
+                    tokio::fs::remove_dir_all(&workflow_root)
+                        .await
+                        .map_err(|e| DaemonError::io(&workflow_root, e))?;
+                } else {
+                    return Err(DaemonError::WorkflowExists {
+                        name: name.to_string(),
+                    });
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DaemonError::io(&workflow_root, e)),
+        }
 
         let registry = zerochain_core::template::TemplateRegistry::new();
         let named_template = template.and_then(|t| registry.get(t));
@@ -1007,6 +1037,7 @@ mod tests {
                 name: "test-wf",
                 path: None,
                 template: None,
+                force: false,
             })
             .await
             .unwrap();
@@ -1024,6 +1055,7 @@ mod tests {
                 name: "custom",
                 path: None,
                 template: Some("01_a,02_b"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1041,6 +1073,7 @@ mod tests {
                 name: "beta",
                 path: None,
                 template: None,
+                force: false,
             })
             .await
             .unwrap();
@@ -1049,6 +1082,7 @@ mod tests {
                 name: "alpha",
                 path: None,
                 template: None,
+                force: false,
             })
             .await
             .unwrap();
@@ -1067,6 +1101,7 @@ mod tests {
                 name: "mark-test",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1089,6 +1124,7 @@ mod tests {
                 name: "err-test",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1114,6 +1150,7 @@ mod tests {
                 name: "snap-test",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1144,6 +1181,7 @@ mod tests {
                 name: "multi-snap",
                 path: None,
                 template: Some("00_spec,01_impl"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1177,6 +1215,7 @@ mod tests {
                 name: "restore-test",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1219,6 +1258,7 @@ mod tests {
                 name: "no-snap",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1241,6 +1281,7 @@ mod tests {
                 name: "multi-restore",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();
@@ -1286,6 +1327,7 @@ mod tests {
                 name: "cleanup-test",
                 path: None,
                 template: Some("00_spec"),
+                force: false,
             })
             .await
             .unwrap();

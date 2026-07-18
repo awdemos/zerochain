@@ -31,6 +31,8 @@ pub enum Commands {
             help = "Comma-separated stage names (e.g. \"research,design,implement\")"
         )]
         template: Option<String>,
+        #[arg(short, long, help = "Overwrite an existing workflow")]
+        force: bool,
     },
     #[command(about = "Execute the next pending stage (or a specific stage)")]
     Run {
