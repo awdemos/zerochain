@@ -7,7 +7,7 @@ keywords = ["zerochain", "ai", "tools", "mcp"]
 categories = ["development-tools"]
 license.workspace = true
 repository.workspace = true
-description = "Reusable tool registry with built-in HTTP and file tools"
+description = "Reusable tool registry with built-in HTTP, file, and memory tools"
 
 [dependencies]
 zerochain-error = { path = "../zerochain-error" }

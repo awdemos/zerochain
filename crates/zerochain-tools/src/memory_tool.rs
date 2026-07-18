@@ -7,6 +7,7 @@ use crate::tool::Tool;
 
 const DEFAULT_CHUNK_SIZE: usize = 1000;
 const DEFAULT_CHUNK_OVERLAP: usize = 200;
+const DEFAULT_TOP_K: usize = 5;
 
 /// Tool that stores text chunks into the workflow memory store.
 #[derive(Clone, Copy, Debug, Default)]
@@ -64,8 +65,6 @@ impl Tool for MemoryStoreTool {
                 message: "missing 'memory_store_path'".to_string(),
             })?;
 
-        let mut store = MemoryStore::open(path).await?;
-
         let mut chunks: Vec<(String, Value)> = Vec::new();
         for entry in texts {
             let text = entry.get("text").and_then(Value::as_str).ok_or_else(|| {
@@ -90,11 +89,16 @@ impl Tool for MemoryStoreTool {
             }
         }
 
-        let model =
-            zerochain_memory::FastEmbedModel::try_new().map_err(|e| ZerochainError::Other {
+        let model = tokio::task::spawn_blocking(zerochain_memory::FastEmbedModel::try_new)
+            .await
+            .map_err(|e| ZerochainError::Other {
+                message: e.to_string(),
+            })?
+            .map_err(|e| ZerochainError::Other {
                 message: format!("failed to initialize embedding model: {e}"),
             })?;
 
+        let mut store = MemoryStore::open(path).await?;
         let stored = store.add(&model, chunks).await?;
         Ok(json!({ "stored": stored }))
     }
@@ -140,7 +144,7 @@ impl Tool for MemoryQueryTool {
             .get("top_k")
             .and_then(Value::as_u64)
             .map(|n| n as usize)
-            .unwrap_or(5);
+            .unwrap_or(DEFAULT_TOP_K);
 
         let path = input
             .get("memory_store_path")
@@ -150,8 +154,12 @@ impl Tool for MemoryQueryTool {
             })?;
 
         let store = MemoryStore::open(path).await?;
-        let model =
-            zerochain_memory::FastEmbedModel::try_new().map_err(|e| ZerochainError::Other {
+        let model = tokio::task::spawn_blocking(zerochain_memory::FastEmbedModel::try_new)
+            .await
+            .map_err(|e| ZerochainError::Other {
+                message: e.to_string(),
+            })?
+            .map_err(|e| ZerochainError::Other {
                 message: format!("failed to initialize embedding model: {e}"),
             })?;
 
