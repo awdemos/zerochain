@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use zerochain_error::{Result, ZerochainError};
 
@@ -97,7 +98,11 @@ impl Tool for ShellTool {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Command to run." },
-                "timeout_ms": { "type": "number", "description": "Timeout in milliseconds (default 30000, max 120000)." }
+                "timeout_ms": { "type": "number", "description": "Timeout in milliseconds (default 30000, max 120000)." },
+                "workspace_root": {
+                    "type": "string",
+                    "description": "Injected by the engine; do not set manually."
+                }
             },
             "required": ["command"]
         })
@@ -120,37 +125,66 @@ impl Tool for ShellTool {
         let workspace_root = input
             .get("workspace_root")
             .and_then(Value::as_str)
-            .map(Path::new)
-            .unwrap_or(Path::new("."));
+            .unwrap_or(".");
+        let root = Path::new(workspace_root)
+            .canonicalize()
+            .map_err(|e| ZerochainError::Io {
+                path: PathBuf::from(workspace_root),
+                source: e,
+            })?;
+        if !root.is_dir() {
+            return Err(ZerochainError::InvalidInput {
+                message: "workspace_root is not a directory".to_string(),
+            });
+        }
 
         let tokens = validate_command(command)?;
         let program = &tokens[0];
         let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
 
         let timeout = Duration::from_millis(timeout_ms);
-        let output = tokio::time::timeout(
-            timeout,
-            Command::new(program)
-                .args(&args)
-                .current_dir(workspace_root)
-                .output(),
-        )
-        .await
-        .map_err(|_| ZerochainError::Other {
-            message: format!("command timed out after {timeout_ms}ms"),
-        })?
-        .map_err(|e| ZerochainError::Io {
-            path: Path::new(program).to_path_buf(),
-            source: e,
-        })?;
+        let mut child = Command::new(program)
+            .args(&args)
+            .current_dir(&root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| ZerochainError::Io {
+                path: Path::new(program).to_path_buf(),
+                source: e,
+            })?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let mut stdout = child.stdout.take().expect("stdout was piped");
+        let mut stderr = child.stderr.take().expect("stderr was piped");
 
-        Ok(json!({
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": output.status.code().unwrap_or(-1)
-        }))
+        let mut stdout_buf = String::new();
+        let mut stderr_buf = String::new();
+
+        let stdout_fut = stdout.read_to_string(&mut stdout_buf);
+        let stderr_fut = stderr.read_to_string(&mut stderr_buf);
+
+        let result = tokio::time::timeout(timeout, async {
+            let (_, _, status) = tokio::try_join!(stdout_fut, stderr_fut, child.wait())?;
+            Ok::<_, std::io::Error>(status)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(status)) => Ok(json!({
+                "stdout": stdout_buf,
+                "stderr": stderr_buf,
+                "exit_code": status.code().unwrap_or(-1)
+            })),
+            Ok(Err(e)) => Err(ZerochainError::Io {
+                path: Path::new(program).to_path_buf(),
+                source: e,
+            }),
+            Err(_) => {
+                let _ = child.start_kill();
+                Err(ZerochainError::Other {
+                    message: format!("command timed out after {timeout_ms}ms"),
+                })
+            }
+        }
     }
 }
