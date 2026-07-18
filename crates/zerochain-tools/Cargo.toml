@@ -1,0 +1,20 @@
+[package]
+name = "zerochain-tools"
+version.workspace = true
+edition.workspace = true
+readme = "../../README.md"
+keywords = ["zerochain", "ai", "tools", "mcp"]
+categories = ["development-tools"]
+license.workspace = true
+repository.workspace = true
+description = "Reusable tool registry with built-in HTTP tool"
+
+[dependencies]
+zerochain-error = { path = "../zerochain-error" }
+async-trait.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+serde_json = { workspace = true }

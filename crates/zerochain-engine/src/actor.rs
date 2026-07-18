@@ -87,6 +87,7 @@ impl WorkflowActor {
                     name: &name,
                     path: None,
                     template: template.as_deref(),
+                    force: false,
                 };
                 let result = self.state.init_workflow(params).await;
                 let _ = respond.send(result);

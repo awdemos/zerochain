@@ -13,6 +13,16 @@ async fn main() -> Result<()> {
         .ok();
 
     let cli = zerochain_daemon::cli::Cli::parse();
+    if let Ok(env_workspace) = std::env::var("ZEROCHAIN_WORKSPACE") {
+        let env_path = std::path::PathBuf::from(&env_workspace);
+        if cli.workspace != env_path {
+            return Err(anyhow::anyhow!(
+                "workspace conflict: ZEROCHAIN_WORKSPACE is set to '{}' but --workspace is '{}'; unset the environment variable or omit --workspace to use the same path",
+                env_workspace,
+                cli.workspace.display()
+            ));
+        }
+    }
     let mut state = AppState::new(&cli.workspace, None).await;
     state.load_workflows().await?;
 
@@ -21,12 +31,14 @@ async fn main() -> Result<()> {
             name,
             path,
             template,
+            force,
         } => {
             state
                 .init_workflow(zerochain_engine::InitWorkflowParams {
                     name: &name,
                     path: path.as_deref(),
                     template: template.as_deref(),
+                    force,
                 })
                 .await?;
             println!("initialized workflow: {name}");
