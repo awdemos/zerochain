@@ -64,22 +64,6 @@ That's it. zerochain creates a stage directory, calls the LLM, and writes the re
 
 ---
 
-## 🎬 Demo
-
-### Creating and inspecting a workflow
-
-![zerochain init, status, and list demo](docs/assets/demo-intro.gif)
-
-### Running a stage
-
-![zerochain run demo](docs/assets/demo-run.gif)
-
-### Terminal walkthrough: from help to first result
-
-![zerochain help, init, status, and first prompt demo](docs/assets/demo-multiagent.gif)
-
----
-
 ## 🖥️ CLI
 
 ```bash
@@ -151,29 +135,6 @@ The effective mode is persisted to `{workflow_root}/.subvolume-mode` when the wo
 
 ---
 
-## 🏗️ Architecture
-
-**Content-addressed storage.** All artifacts stored by Blake3 hash. No filenames matter — content identity is the hash.
-
-**Copy-on-write snapshots.** Each stage gets a CoW snapshot of the previous stage's output.
-
-**Deterministic LLM config.** `LLMConfig::deterministic()` derives a Blake3 seed from the content CID for reproducible execution.
-
-**What is an agent?** Zerochain does not define a separate `Agent` abstraction. In this codebase, an *agent* is a workflow **stage**: a directory (`NN_name/`) containing a `CONTEXT.md` prompt, an `input/` directory, and an `output/` directory. A multi-agent workflow is simply a pipeline of stages that pass state through the filesystem. Stages can also exchange messages across pods via the optional broker.
-
-### Crate Structure
-
-| Crate | Purpose |
-|-------|---------|
-| `zerochain-cas` | Blake3 content-addressed storage with atomic writes |
-| `zerochain-fs` | Copy-on-write filesystem, advisory locks, stage markers |
-| `zerochain-llm` | Provider-agnostic LLM backend with profiles |
-| `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing, execution graph |
-| `zerochain-daemon` | CLI binary |
-| `zerochain-server` | HTTP daemon (zerochaind) |
-
----
-
 ## 🔄 Workflow Graphs and Loops
 
 Zerochain now represents every workflow as an explicit execution graph. Stages are nodes and dataflow/ordering are edges. For the common case, the graph is still derived from `NN_name/` directory ordering, but the internal model is typed and testable.
@@ -217,6 +178,29 @@ graph.add_dependency(analyze, spec).unwrap();
 ```
 
 The actor runtime (`zerochain-engine`) executes the graph while keeping zerochain's filesystem-native state, symlinks, and per-workflow actor model unchanged.
+
+---
+
+## 🏗️ Architecture
+
+**Content-addressed storage.** All artifacts stored by Blake3 hash. No filenames matter — content identity is the hash.
+
+**Copy-on-write snapshots.** Each stage gets a CoW snapshot of the previous stage's output.
+
+**Deterministic LLM config.** `LLMConfig::deterministic()` derives a Blake3 seed from the content CID for reproducible execution.
+
+**What is an agent?** Zerochain does not define a separate `Agent` abstraction. In this codebase, an *agent* is a workflow **stage**: a directory (`NN_name/`) containing a `CONTEXT.md` prompt, an `input/` directory, and an `output/` directory. A multi-agent workflow is simply a pipeline of stages that pass state through the filesystem. Stages can also exchange messages across pods via the optional broker.
+
+### Crate Structure
+
+| Crate | Purpose |
+|-------|---------|
+| `zerochain-cas` | Blake3 content-addressed storage with atomic writes |
+| `zerochain-fs` | Copy-on-write filesystem, advisory locks, stage markers |
+| `zerochain-llm` | Provider-agnostic LLM backend with profiles |
+| `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing, execution graph |
+| `zerochain-daemon` | CLI binary |
+| `zerochain-server` | HTTP daemon (zerochaind) |
 
 ---
 
