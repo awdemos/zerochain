@@ -6,12 +6,14 @@
 
 pub mod fs_tool;
 pub mod http_tool;
+pub mod memory_tool;
 pub mod registry;
 pub mod shell_tool;
 pub mod tool;
 
 pub use fs_tool::{ReadFileTool, WriteFileTool};
 pub use http_tool::HttpTool;
+pub use memory_tool::{MemoryQueryTool, MemoryStoreTool};
 pub use registry::ToolRegistry;
 pub use shell_tool::ShellTool;
 pub use tool::Tool;

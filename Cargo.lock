@@ -5203,6 +5203,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "zerochain-error",
+ "zerochain-memory",
 ]
 
 [[package]]

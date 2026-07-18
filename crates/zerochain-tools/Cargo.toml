@@ -11,6 +11,7 @@ description = "Reusable tool registry with built-in HTTP and file tools"
 
 [dependencies]
 zerochain-error = { path = "../zerochain-error" }
+zerochain-memory = { path = "../zerochain-memory" }
 async-trait.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
