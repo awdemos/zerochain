@@ -61,6 +61,7 @@ pub fn routes(state: ServerState) -> Router {
         .route("/v1/workflows", get(workflow::list).post(workflow::init))
         .route("/v1/workflows/{id}", get(workflow::get))
         .route("/v1/workflows/{id}/subvolumes", get(subvolume::list))
+        .route("/v1/workflows/{id}/export-okf", get(workflow::export_okf))
         .route("/v1/workflows/{id}/run", post(stage::run_next))
         .route("/v1/workflows/{id}/run/{stage}", post(stage::run))
         .route("/v1/workflows/{id}/approve/{stage}", post(stage::approve))

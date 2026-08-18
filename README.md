@@ -120,10 +120,33 @@ dagger call publish --registry ttl.sh/$USER-zerochaind:1h
 | `GET` | `/v1/workflows/{id}` | Workflow status |
 | `GET` | `/v1/workflows/{id}/output/{stage}` | Read result |
 | `GET` | `/v1/workflows/{id}/subvolumes` | List Btrfs subvolumes (Btrfs-only) |
+| `GET` | `/v1/workflows/{id}/export-okf?output=<dir>` | Export workflow as OKF v0.2 bundle |
 
 ### 🔍 Audit Trails
 
 Because zerochaind is filesystem-native, every workflow mutation is a file operation. `jj op log` gives you a complete, immutable timeline of every operation — no audit database, no extra infrastructure. The VCS *is* the audit log. We use the same jj workflow to develop ZeroChain itself; see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+---
+
+## 📦 Open Knowledge Format (OKF) v0.2
+
+zerochain emits self-describing knowledge concepts for every stage output. Each `output/result.md` now includes YAML frontmatter (`type`, `generated`, `status`) so downstream tools can trace provenance without parsing zerochain internals.
+
+```bash
+# Export a completed workflow as a portable OKF bundle
+zerochain export-okf my-task --output ./my-task-okf
+```
+
+The bundle contains:
+- `index.md` — workflow-level OKF concept with a stage manifest
+- `concepts/*.md` — each stage's `output/result.md` (already OKF-wrapped)
+- `log.md` — human-readable stage status log
+
+Override the default actor string (`zerochain/<version>`) with:
+
+```bash
+export ZEROCHAIN_OKF_ACTOR="my-org/1.0"
+```
 
 ---
 

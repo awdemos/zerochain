@@ -157,6 +157,16 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        zerochain_daemon::cli::Commands::ExportOkf {
+            workflow_id,
+            output,
+        } => {
+            let output_dir = output.unwrap_or_else(|| {
+                std::path::PathBuf::from(format!("{}-okf", workflow_id))
+            });
+            state.export_okf(&workflow_id, &output_dir).await?;
+            println!("exported OKF bundle: {}", output_dir.display());
+        }
         zerochain_daemon::cli::Commands::Mcp => {
             zerochain_daemon::mcp::run_stdio_server(cli.workspace).await?;
         }

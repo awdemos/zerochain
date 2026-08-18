@@ -6,6 +6,7 @@ pub(crate) mod frontmatter;
 pub mod graph;
 pub mod jj;
 pub(crate) mod lua_engine;
+pub mod okf;
 pub mod plan;
 pub mod stage;
 pub mod task;
@@ -20,4 +21,5 @@ pub use lua_engine::{
 };
 pub use stage::{Stage, StageId};
 pub use task::Task;
+pub use okf::{zerochain_actor, OkfActor, OkfFrontmatter, OkfSource};
 pub use workflow::Workflow;

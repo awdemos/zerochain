@@ -1,13 +1,20 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use serde::Deserialize;
+use std::path::PathBuf;
 use zerochain_core::jj;
 use zerochain_core::workflow::is_valid_workflow_name;
 use zerochain_engine::InitWorkflowRequest;
 
 use crate::handlers::{SimpleMessage, StageStatus, WorkflowStatus};
 use crate::state::ServerState;
+
+#[derive(Deserialize)]
+pub struct ExportOkfQuery {
+    pub output: Option<PathBuf>,
+}
 
 pub async fn list(State(state): State<ServerState>) -> impl IntoResponse {
     let registry = state.registry.read().await;
@@ -101,5 +108,38 @@ pub async fn get(State(state): State<ServerState>, Path(id): Path<String>) -> im
             }),
         )
             .into_response(),
+    }
+}
+
+pub async fn export_okf(
+    State(state): State<ServerState>,
+    Path(id): Path<String>,
+    Query(query): Query<ExportOkfQuery>,
+) -> impl IntoResponse {
+    let output_dir = query.output.unwrap_or_else(|| {
+        state.workspace.join(format!("{}-okf", id))
+    });
+    let registry = state.registry.read().await;
+    match registry.export_okf(id.clone(), output_dir.clone()).await {
+        Ok(_) => Json(SimpleMessage {
+            message: format!("exported OKF bundle to {}", output_dir.display()),
+        })
+            .into_response(),
+        Err(e) => match e {
+            zerochain_engine::DaemonError::WorkflowNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                Json(SimpleMessage {
+                    message: e.to_string(),
+                }),
+            )
+                .into_response(),
+            _ => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(SimpleMessage {
+                    message: e.to_string(),
+                }),
+            )
+                .into_response(),
+        },
     }
 }

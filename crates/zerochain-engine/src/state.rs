@@ -9,6 +9,7 @@ use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
 use zerochain_core::graph::ControlOutcome;
+use zerochain_core::okf::{split_frontmatter, to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
@@ -519,7 +520,8 @@ impl AppState {
             }
         };
 
-        let first_line = content.lines().next().unwrap_or("").trim();
+        let (_, body) = split_frontmatter(&content).ok()?;
+        let first_line = body.lines().next().unwrap_or("").trim();
         ControlOutcome::parse_record(first_line)
     }
 
@@ -830,6 +832,100 @@ impl AppState {
         out
     }
 
+    /// Export a workflow as an OKF v0.2 bundle.
+    ///
+    /// The bundle is a directory containing:
+    /// - `index.md`: workflow-level OKF concept with a manifest of stages.
+    /// - `concepts/`: copy of each stage's `output/result.md` (already OKF-wrapped).
+    /// - `log.md`: a simple human-readable log of stage statuses.
+    pub async fn export_okf(
+        &self,
+        workflow_id: &str,
+        output_dir: &Path,
+    ) -> Result<PathBuf, DaemonError> {
+        let wf = self
+            .workflows
+            .get(workflow_id)
+            .ok_or_else(|| DaemonError::WorkflowNotFound(workflow_id.into()))?;
+
+        tokio::fs::create_dir_all(output_dir)
+            .await
+            .map_err(|e| DaemonError::io(output_dir, e))?;
+
+        let concepts_dir = output_dir.join("concepts");
+        tokio::fs::create_dir_all(&concepts_dir)
+            .await
+            .map_err(|e| DaemonError::io(&concepts_dir, e))?;
+
+        let plan = wf.execution_plan();
+        let status = if plan.is_complete() { "complete" } else { "active" };
+
+        let mut manifest_lines: Vec<String> = Vec::new();
+        let mut log_lines: Vec<String> = Vec::new();
+        log_lines.push(format!("# Workflow log for {workflow_id}\n"));
+
+        for stage in &wf.stages {
+            let stage_status = if stage.is_error {
+                "error"
+            } else if stage.is_complete {
+                "complete"
+            } else {
+                "pending"
+            };
+            log_lines.push(format!("- `{}`: {stage_status}", stage.id.raw));
+
+            let result_path = stage.output_path.join("result.md");
+            let stage_doc = match tokio::fs::read_to_string(&result_path).await {
+                Ok(c) => c,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(DaemonError::io(&result_path, e)),
+            };
+
+            let concept_path = concepts_dir.join(format!("{}.md", stage.id.raw));
+            tokio::fs::write(&concept_path, &stage_doc)
+                .await
+                .map_err(|e| DaemonError::io(&concept_path, e))?;
+
+            manifest_lines.push(format!("- [{}](concepts/{}.md)", stage.id.raw, stage.id.raw));
+        }
+
+        let index_body = format!(
+            "# Workflow: {workflow_id}\n\nStatus: `{status}`\n\n## Stages\n\n{}\n",
+            manifest_lines.join("\n")
+        );
+        let index_fm = OkfFrontmatter {
+            okf_type: "Workflow".into(),
+            title: Some(workflow_id.into()),
+            description: wf
+                .task
+                .as_ref()
+                .map(|t| t.title.clone())
+                .filter(|s| !s.is_empty()),
+            generated: Some(OkfActor::new(zerochain_actor())),
+            status: Some(status.into()),
+            ..Default::default()
+        };
+        let index_path = output_dir.join("index.md");
+        let index_doc =
+            to_md_with_frontmatter(&index_fm, &index_body).map_err(DaemonError::Workflow)?;
+        tokio::fs::write(&index_path, index_doc)
+            .await
+            .map_err(|e| DaemonError::io(&index_path, e))?;
+
+        let log_path = output_dir.join("log.md");
+        tokio::fs::write(&log_path, log_lines.join("\n"))
+            .await
+            .map_err(|e| DaemonError::io(&log_path, e))?;
+
+        tracing::info!(
+            workflow_id,
+            output_dir = %output_dir.display(),
+            stages = wf.stages.len(),
+            "exported OKF bundle"
+        );
+        Ok(output_dir.to_path_buf())
+    }
+
     pub async fn execute_stage(
         &mut self,
         workflow_id: &str,
@@ -972,9 +1068,19 @@ impl AppState {
 
         let result = executor.run_stage(&config).await?;
 
-        tokio::fs::write(stage.output_path.join("result.md"), &result.stdout)
+        let fm = OkfFrontmatter {
+            okf_type: "Stage Output".into(),
+            title: Some(stage.id.raw.clone()),
+            description: stage.context_path.to_str().map(|s| s.to_string()),
+            generated: Some(OkfActor::new(zerochain_actor())),
+            status: Some("stable".into()),
+            ..Default::default()
+        };
+        let okf_stdout = to_md_with_frontmatter(&fm, &result.stdout).map_err(DaemonError::Workflow)?;
+        let result_path = stage.output_path.join("result.md");
+        tokio::fs::write(&result_path, &okf_stdout)
             .await
-            .map_err(|e| DaemonError::io(stage.output_path.join("result.md"), e))?;
+            .map_err(|e| DaemonError::io(&result_path, e))?;
 
         if !result.stderr.is_empty() {
             let stderr_path = stage.output_path.join("stderr.log");
@@ -1421,6 +1527,50 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, MAX_SNAPSHOTS_PER_WORKFLOW);
+    }
+
+    #[tokio::test]
+    async fn export_okf_creates_bundle_with_index_and_concepts() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        let wf = state
+            .init_workflow(InitWorkflowParams {
+                name: "okf-test",
+                path: None,
+                template: Some("00_spec,01_impl"),
+                force: false,
+            })
+            .await
+            .unwrap();
+
+        let stage0 = &wf.stages[0];
+        tokio::fs::create_dir_all(&stage0.output_path).await.unwrap();
+        tokio::fs::write(
+            stage0.output_path.join("result.md"),
+            "---\ntype: Stage Output\ntitle: 00_spec\n---\n\n# Result\n\nDone.\n",
+        )
+        .await
+        .unwrap();
+
+        let bundle_dir = tmp.path().join("okf-export");
+        state.export_okf("okf-test", &bundle_dir).await.unwrap();
+
+        assert!(bundle_dir.join("index.md").exists());
+        assert!(bundle_dir.join("log.md").exists());
+        assert!(bundle_dir.join("concepts").join("00_spec.md").exists());
+
+        let index = tokio::fs::read_to_string(bundle_dir.join("index.md"))
+            .await
+            .unwrap();
+        assert!(index.starts_with("---"));
+        assert!(index.contains("type: Workflow"));
+        assert!(index.contains("concepts/00_spec.md"));
+
+        let concept = tokio::fs::read_to_string(bundle_dir.join("concepts").join("00_spec.md"))
+            .await
+            .unwrap();
+        assert!(concept.contains("type: Stage Output"));
+        assert!(concept.contains("# Result"));
     }
 
     #[tokio::test]

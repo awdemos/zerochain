@@ -66,6 +66,13 @@ pub enum Commands {
     },
     #[command(about = "List available workflow templates")]
     Templates,
+    #[command(about = "Export a workflow as an OKF v0.2 bundle")]
+    ExportOkf {
+        #[arg(help = "Workflow ID")]
+        workflow_id: String,
+        #[arg(short, long, help = "Output directory for the OKF bundle")]
+        output: Option<PathBuf>,
+    },
     #[command(about = "Start MCP server over stdio for AI tool integration")]
     Mcp,
 }

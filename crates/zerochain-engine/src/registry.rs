@@ -101,6 +101,15 @@ impl WorkflowRegistry {
         }
         Ok(())
     }
+
+    pub async fn export_okf(
+        &self,
+        workflow_id: String,
+        output_dir: PathBuf,
+    ) -> Result<PathBuf, DaemonError> {
+        let handle = self.get_or_create(&workflow_id).await?;
+        handle.export_okf(workflow_id, output_dir).await
+    }
 }
 
 #[cfg(test)]

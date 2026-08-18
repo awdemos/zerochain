@@ -10,6 +10,7 @@ use zerochain_core::workflow::Workflow;
 use zerochain_core::{
     acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext, PooledLua,
 };
+use zerochain_core::okf::{to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
 use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
@@ -20,6 +21,20 @@ use zerochain_tools::ToolRegistry;
 use crate::error::DaemonError;
 use crate::state::AppState;
 use crate::tool_driver;
+
+fn okf_frontmatter_for_stage(
+    stage_id: &str,
+    definition_of_done: Option<String>,
+) -> OkfFrontmatter {
+    OkfFrontmatter {
+        okf_type: "Stage Output".into(),
+        title: Some(stage_id.into()),
+        description: definition_of_done,
+        generated: Some(OkfActor::new(zerochain_actor())),
+        status: Some("stable".into()),
+        ..Default::default()
+    }
+}
 
 pub struct LLMStageDriver<'a> {
     pub workflow_id: &'a str,
@@ -176,8 +191,14 @@ impl<'a> LLMStageDriver<'a> {
                     .await
                     .map_err(|e| DaemonError::io(&self.stage.output_path, e))?;
 
+                let fm = okf_frontmatter_for_stage(
+                    &self.stage.id.raw,
+                    self.stage.context_path.to_str().map(|s| s.to_string()),
+                );
                 let result_path = self.stage.output_path.join("result.md");
-                tokio::fs::write(&result_path, &tool_output)
+                let okf_output =
+                    to_md_with_frontmatter(&fm, &tool_output).map_err(DaemonError::Workflow)?;
+                tokio::fs::write(&result_path, &okf_output)
                     .await
                     .map_err(|e| DaemonError::io(&result_path, e))?;
                 tracing::info!(
@@ -530,8 +551,13 @@ async fn write_stage_output(
         .await
         .map_err(|e| DaemonError::io(&stage.output_path, e))?;
 
+    let fm = okf_frontmatter_for_stage(
+        &stage.id.raw,
+        stage.context_path.to_str().map(|s| s.to_string()),
+    );
+    let okf_content = to_md_with_frontmatter(&fm, &content).map_err(DaemonError::Workflow)?;
     let result_path = stage.output_path.join("result.md");
-    tokio::fs::write(&result_path, &content)
+    tokio::fs::write(&result_path, &okf_content)
         .await
         .map_err(|e| DaemonError::io(&result_path, e))?;
 

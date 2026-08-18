@@ -57,6 +57,11 @@ pub enum ActorMessage {
     LoadWorkflows {
         respond: oneshot::Sender<Result<(), DaemonError>>,
     },
+    ExportOkf {
+        workflow_id: String,
+        output_dir: PathBuf,
+        respond: oneshot::Sender<Result<PathBuf, DaemonError>>,
+    },
 }
 
 pub struct WorkflowActor {
@@ -166,6 +171,14 @@ impl WorkflowActor {
             }
             ActorMessage::LoadWorkflows { respond } => {
                 let result = self.state.load_workflows().await;
+                let _ = respond.send(result);
+            }
+            ActorMessage::ExportOkf {
+                workflow_id,
+                output_dir,
+                respond,
+            } => {
+                let result = self.state.export_okf(&workflow_id, &output_dir).await;
                 let _ = respond.send(result);
             }
         }
@@ -313,5 +326,18 @@ impl WorkflowHandle {
     pub async fn load_workflows(&self) -> Result<(), DaemonError> {
         self.call(|respond| ActorMessage::LoadWorkflows { respond })
             .await?
+    }
+
+    pub async fn export_okf(
+        &self,
+        workflow_id: String,
+        output_dir: PathBuf,
+    ) -> Result<PathBuf, DaemonError> {
+        self.call(|respond| ActorMessage::ExportOkf {
+            workflow_id,
+            output_dir,
+            respond,
+        })
+        .await?
     }
 }
