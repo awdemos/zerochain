@@ -9,6 +9,7 @@ use std::path::Path;
 use tempfile::TempDir;
 use zerochain_cas::CasStore;
 use zerochain_core::context::Context;
+use zerochain_core::okf::split_frontmatter;
 use zerochain_core::task::{Task, TaskExecution};
 use zerochain_core::workflow::Workflow;
 use zerochain_engine::AppState;
@@ -48,6 +49,16 @@ async fn reload_workflow(root: &Path) -> Workflow {
     Workflow::from_dir(root)
         .await
         .expect("reload workflow from disk")
+}
+
+/// Read a stage's output/result.md and return the body with OKF frontmatter removed.
+async fn read_result_body(path: &std::path::PathBuf) -> String {
+    let content = tokio::fs::read_to_string(path)
+        .await
+        .expect("read result.md");
+    split_frontmatter(&content)
+        .map(|(_fm, body)| body)
+        .unwrap_or(content)
 }
 
 // ---------------------------------------------------------------------------
@@ -555,9 +566,7 @@ async fn execute_stage_writes_result_from_llm() {
 
     let result_path = stage1.output_path.join("result.md");
     assert!(result_path.exists(), "result.md should be written");
-    let content = tokio::fs::read_to_string(&result_path)
-        .await
-        .expect("read result.md");
+    let content = read_result_body(&result_path).await;
     assert_eq!(
         content,
         "MOCK RECEIVED: --- data.md ---\nMock analysis result from LLM."
@@ -620,9 +629,7 @@ async fn execute_stage_handles_missing_context_gracefully() {
         .await
         .expect("execute without context");
 
-    let content = tokio::fs::read_to_string(stage.output_path.join("result.md"))
-        .await
-        .expect("read result");
+    let content = read_result_body(&stage.output_path.join("result.md")).await;
     assert_eq!(content, "No context needed.");
 }
 
@@ -651,9 +658,7 @@ async fn execute_stage_with_generic_profile_no_flags() {
         .await
         .expect("execute with generic profile");
 
-    let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
-        .await
-        .expect("read result");
+    let result = read_result_body(&stage.output_path.join("result.md")).await;
     assert_eq!(result, "MOCK RECEIVED: Execute the task described above.");
 
     assert!(
@@ -723,9 +728,7 @@ async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
         .await
         .expect("execute with kimi-k2 profile");
 
-    let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
-        .await
-        .expect("read result.md");
+    let result = read_result_body(&stage.output_path.join("result.md")).await;
     assert_eq!(result, "The answer is 42.");
 
     let reasoning = tokio::fs::read_to_string(stage.output_path.join("reasoning.md"))
@@ -871,12 +874,10 @@ async fn execute_stage_stores_output_in_cas() {
 
     let result_path = stage.output_path.join("result.md");
     assert!(result_path.exists());
-    let content = tokio::fs::read_to_string(&result_path)
-        .await
-        .expect("read result");
-    assert_eq!(content, "MOCK RECEIVED: Execute the task described above.");
+    let body = read_result_body(&result_path).await;
+    assert_eq!(body, "MOCK RECEIVED: Execute the task described above.");
 
-    let expected_cid = zerochain_cas::Cid::from_bytes(content.as_bytes());
+    let expected_cid = zerochain_cas::Cid::from_bytes(body.as_bytes());
     let retrieved = cas.get(&expected_cid).await.expect("retrieve from CAS");
-    assert_eq!(String::from_utf8_lossy(&retrieved), content);
+    assert_eq!(String::from_utf8_lossy(&retrieved), body);
 }
