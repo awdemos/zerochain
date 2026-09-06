@@ -9,7 +9,9 @@ use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
 use zerochain_core::graph::ControlOutcome;
-use zerochain_core::okf::{split_frontmatter, to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
+use zerochain_core::okf::{
+    split_frontmatter, to_md_with_frontmatter, zerochain_actor, OkfActor, OkfFrontmatter,
+};
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
@@ -858,7 +860,11 @@ impl AppState {
             .map_err(|e| DaemonError::io(&concepts_dir, e))?;
 
         let plan = wf.execution_plan();
-        let status = if plan.is_complete() { "complete" } else { "active" };
+        let status = if plan.is_complete() {
+            "complete"
+        } else {
+            "active"
+        };
 
         let mut manifest_lines: Vec<String> = Vec::new();
         let mut log_lines: Vec<String> = Vec::new();
@@ -886,7 +892,10 @@ impl AppState {
                 .await
                 .map_err(|e| DaemonError::io(&concept_path, e))?;
 
-            manifest_lines.push(format!("- [{}](concepts/{}.md)", stage.id.raw, stage.id.raw));
+            manifest_lines.push(format!(
+                "- [{}](concepts/{}.md)",
+                stage.id.raw, stage.id.raw
+            ));
         }
 
         let index_body = format!(
@@ -1076,7 +1085,8 @@ impl AppState {
             status: Some("stable".into()),
             ..Default::default()
         };
-        let okf_stdout = to_md_with_frontmatter(&fm, &result.stdout).map_err(DaemonError::Workflow)?;
+        let okf_stdout =
+            to_md_with_frontmatter(&fm, &result.stdout).map_err(DaemonError::Workflow)?;
         let result_path = stage.output_path.join("result.md");
         tokio::fs::write(&result_path, &okf_stdout)
             .await
@@ -1544,7 +1554,9 @@ mod tests {
             .unwrap();
 
         let stage0 = &wf.stages[0];
-        tokio::fs::create_dir_all(&stage0.output_path).await.unwrap();
+        tokio::fs::create_dir_all(&stage0.output_path)
+            .await
+            .unwrap();
         tokio::fs::write(
             stage0.output_path.join("result.md"),
             "---\ntype: Stage Output\ntitle: 00_spec\n---\n\n# Result\n\nDone.\n",

@@ -161,9 +161,8 @@ async fn main() -> Result<()> {
             workflow_id,
             output,
         } => {
-            let output_dir = output.unwrap_or_else(|| {
-                std::path::PathBuf::from(format!("{}-okf", workflow_id))
-            });
+            let output_dir =
+                output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}-okf", workflow_id)));
             state.export_okf(&workflow_id, &output_dir).await?;
             println!("exported OKF bundle: {}", output_dir.display());
         }

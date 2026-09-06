@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use zerochain_cas::{CasStore, Cid};
 use zerochain_core::context::{Context as StageContext, ContextCache};
+use zerochain_core::okf::{to_md_with_frontmatter, zerochain_actor, OkfActor, OkfFrontmatter};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
 use zerochain_core::{
     acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext, PooledLua,
 };
-use zerochain_core::okf::{to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
 use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
@@ -22,10 +22,7 @@ use crate::error::DaemonError;
 use crate::state::AppState;
 use crate::tool_driver;
 
-fn okf_frontmatter_for_stage(
-    stage_id: &str,
-    definition_of_done: Option<String>,
-) -> OkfFrontmatter {
+fn okf_frontmatter_for_stage(stage_id: &str, definition_of_done: Option<String>) -> OkfFrontmatter {
     OkfFrontmatter {
         okf_type: "Stage Output".into(),
         title: Some(stage_id.into()),

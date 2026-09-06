@@ -125,10 +125,11 @@ pub fn split_frontmatter(content: &str) -> Result<(OkfFrontmatter, String)> {
 
     let yaml_str = &after_first[..end_marker];
     let body = after_first[end_marker + 4..].trim_start().to_string();
-    let frontmatter: OkfFrontmatter = serde_yml::from_str(yaml_str).map_err(|e| Error::YamlParse {
-        path: std::path::PathBuf::from("<inline>"),
-        source: e,
-    })?;
+    let frontmatter: OkfFrontmatter =
+        serde_yml::from_str(yaml_str).map_err(|e| Error::YamlParse {
+            path: std::path::PathBuf::from("<inline>"),
+            source: e,
+        })?;
 
     Ok((frontmatter, body))
 }
@@ -140,7 +141,10 @@ mod tests {
     #[test]
     fn zerochain_actor_default_uses_version() {
         let actor = zerochain_actor();
-        assert!(actor.starts_with("zerochain/"), "actor should start with zerochain/: {actor}");
+        assert!(
+            actor.starts_with("zerochain/"),
+            "actor should start with zerochain/: {actor}"
+        );
         assert!(
             actor.len() > "zerochain/".len(),
             "actor should include a version: {actor}"
@@ -190,7 +194,10 @@ mod tests {
     fn verified_round_trips_as_list_or_single() {
         let fm = OkfFrontmatter {
             okf_type: "Metric".into(),
-            verified: vec![OkfActor::new("human:alice"), OkfActor::new("process:nightly")],
+            verified: vec![
+                OkfActor::new("human:alice"),
+                OkfActor::new("process:nightly"),
+            ],
             ..Default::default()
         };
         let yaml = serde_yml::to_string(&fm).unwrap();
