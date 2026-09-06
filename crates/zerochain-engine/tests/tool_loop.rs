@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use std::sync::Mutex;
 use tempfile::TempDir;
+use zerochain_core::okf::split_frontmatter;
 use zerochain_engine::state::{AppState, InitWorkflowParams};
 use zerochain_llm::{
     CompleteResponse, FinishReason, LLMConfig, Message, ProviderId, Role, Tool, ToolCall, LLM,
@@ -116,5 +117,6 @@ async fn tool_loop_feeds_result_back_to_llm() {
     let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
         .await
         .unwrap();
-    assert_eq!(result.trim(), "done with tool result");
+    let (_, body) = split_frontmatter(&result).unwrap();
+    assert_eq!(body.trim(), "done with tool result");
 }
