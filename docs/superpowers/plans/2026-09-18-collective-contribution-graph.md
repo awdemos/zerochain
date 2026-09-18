@@ -1724,28 +1724,41 @@ In `crates/zerochain-engine/src/state.rs` tests module, add (imports: `use zeroc
    - Imports: extend `use zerochain_memory::{...}` with `ContributionRecord, ContributionType, Graph`; add `use zerochain_core::jj;` if not already imported.
    - `InitWorkflowParams` gains `pub parents: Vec<String>,`.
    - `InitWorkflowRequest` gains `#[serde(default)] pub parents: Vec<String>,`.
-   - `AppState` gains field `graph: Option<Arc<TokioMutex<Graph>>>,`.
-   - In `AppState::new`, after the `embedding_model` block:
+   - NO persistent graph handle on `AppState` (code-review amendment: one-live-handle-per-directory — a cached in-memory handle goes stale when tools/HTTP publish through their own handles). Instead `AppState` gains two helpers that treat the disk files as the source of truth, fresh-opening per call:
 
 ```rust
-        let graph = match Graph::open(workspace_root.join(".zerochain").join("graph")).await {
-            Ok(graph) => Some(Arc::new(TokioMutex::new(graph))),
+    fn graph_dir(&self) -> PathBuf {
+        self.workspace_root.join(".zerochain").join("graph")
+    }
+
+    /// Most recent contribution in a workflow, for parent chaining (spec §5).
+    pub async fn graph_latest_in_workflow(&self, workflow_id: &str) -> Option<String> {
+        let graph = Graph::open(self.graph_dir()).await.map_err(|e| {
+            tracing::warn!(error = %e, "failed to open contribution graph");
+        }).ok()?;
+        graph.index().latest_in_workflow(workflow_id).map(|r| r.id.clone())
+    }
+
+    /// Publish a contribution to the workspace graph. Best-effort: errors are
+    /// logged and returned as None; never fails the caller (spec §7).
+    pub async fn publish_contribution(
+        &self,
+        record: ContributionRecord,
+    ) -> Option<String> {
+        let mut graph = Graph::open(self.graph_dir()).await.map_err(|e| {
+            tracing::warn!(error = %e, "failed to open contribution graph");
+        }).ok()?;
+        match graph.publish(record).await {
+            Ok(published) => Some(published.id),
             Err(e) => {
-                tracing::warn!(error = %e, "failed to open contribution graph; graph features unavailable");
+                tracing::warn!(error = %e, "failed to publish contribution");
                 None
             }
-        };
-```
-
-   and add `graph,` to the struct literal.
-   - `clone_state()`: add `graph: self.graph.clone(),`.
-   - Add accessor:
-
-```rust
-    pub async fn graph(&self) -> Option<Arc<TokioMutex<Graph>>> {
-        self.graph.clone()
+        }
     }
 ```
+
+   (`Graph::open` auto-creates the directory; at this scale a fresh scan per stage-run is negligible.)
 
 2. `crates/zerochain-engine/src/actor.rs`: `ActorMessage::InitWorkflow` gains `parents: Vec<String>`; the `params` construction gains `parents,`; `WorkflowHandle::init_workflow` gains a `parents: Vec<String>` parameter passed into the message.
 3. `crates/zerochain-engine/src/registry.rs`: `init_workflow(&self, name, template, parents)` passes `parents` through; update its two test call sites to `registry.init_workflow("alpha".into(), None, vec![])` (and `"beta"`).
@@ -1759,66 +1772,56 @@ In `crates/zerochain-engine/src/state.rs` tests module, add (imports: `use zeroc
 At the end of `AppState::init_workflow`, after `self.workflows.insert(...)` and before `Ok(workflow)`:
 
 ```rust
-        if let Some(graph) = self.graph().await {
-            let task = Workflow::find_task(&workflow.root).await.unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "failed to read task file");
-                None
-            });
-            let mut setup_parents: Vec<String> = parents;
-            if let Some(task) = &task {
-                setup_parents.extend(task.parents.iter().cloned());
-            }
-            setup_parents.dedup();
+        let task = Workflow::find_task(&workflow.root).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to read task file");
+            None
+        });
+        let mut setup_parents: Vec<String> = parents;
+        if let Some(task) = &task {
+            setup_parents.extend(task.parents.iter().cloned());
+        }
+        setup_parents.dedup();
 
-            let body = task
-                .as_ref()
-                .map(|t| {
-                    if t.description.trim().is_empty() {
-                        t.title.clone()
-                    } else {
-                        t.description.clone()
-                    }
-                })
-                .unwrap_or_else(|| workflow.id.clone());
-
-            let mut locked = graph.lock().await;
-            let existing: std::collections::HashSet<String> = locked
-                .index()
-                .all()
-                .iter()
-                .map(|r| r.id.clone())
-                .collect();
-            let kept: Vec<String> = setup_parents
-                .into_iter()
-                .filter(|p| {
-                    let ok = existing.contains(p);
-                    if !ok {
-                        tracing::warn!(parent = %p, "dropping unknown parent contribution");
-                    }
-                    ok
-                })
-                .collect();
-
-            let mut record = ContributionRecord::new(
-                ContributionType::Setup,
-                zerochain_core::okf::zerochain_actor(),
-                body,
-            );
-            record.parents = kept;
-            record.workflow = Some(workflow.id.clone());
-            match locked.publish(record).await {
-                Ok(published) => {
-                    drop(locked);
-                    jj::auto_commit(
-                        &self.workspace_root,
-                        &format!("graph: setup {}", published.id),
-                    )
-                    .await;
+        let body = task
+            .as_ref()
+            .map(|t| {
+                if t.description.trim().is_empty() {
+                    t.title.clone()
+                } else {
+                    t.description.clone()
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to publish setup contribution");
-                }
+            })
+            .unwrap_or_else(|| workflow.id.clone());
+
+        // Fresh-open so unknown-parent filtering sees every record on disk
+        // (code-review amendment: no cached handle).
+        let existing: std::collections::HashSet<String> = match Graph::open(self.graph_dir()).await {
+            Ok(graph) => graph.index().all().iter().map(|r| r.id.clone()).collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open contribution graph");
+                std::collections::HashSet::new()
             }
+        };
+        let kept: Vec<String> = setup_parents
+            .into_iter()
+            .filter(|p| {
+                let ok = existing.contains(p);
+                if !ok {
+                    tracing::warn!(parent = %p, "dropping unknown parent contribution");
+                }
+                ok
+            })
+            .collect();
+
+        let mut record = ContributionRecord::new(
+            ContributionType::Setup,
+            zerochain_core::okf::zerochain_actor(),
+            body,
+        );
+        record.parents = kept;
+        record.workflow = Some(workflow.id.clone());
+        if let Some(id) = self.publish_contribution(record).await {
+            jj::auto_commit(&self.workspace_root, &format!("graph: setup {id}")).await;
         }
 
         Ok(workflow)
@@ -1994,9 +1997,6 @@ In `crates/zerochain-engine/src/llm_driver.rs`:
         ctx: &Option<StageContext>,
         output: &str,
     ) -> Result<(), DaemonError> {
-        let Some(graph) = self.state.graph().await else {
-            return Ok(());
-        };
         let Some(ctx) = ctx else {
             return Ok(());
         };
@@ -2004,14 +2004,14 @@ In `crates/zerochain-engine/src/llm_driver.rs`:
             return Ok(());
         }
 
-        let parents = {
-            let graph = graph.lock().await;
-            graph
-                .index()
-                .latest_in_workflow(self.workflow_id)
-                .map(|r| vec![r.id.clone()])
-                .unwrap_or_default()
-        };
+        // Fresh read so chaining sees contributions published mid-run by tools
+        // (code-review amendment: no cached handle).
+        let parents: Vec<String> = self
+            .state
+            .graph_latest_in_workflow(self.workflow_id)
+            .await
+            .into_iter()
+            .collect();
         let metric = ctx.frontmatter.metric.clone().map(|m| {
             zerochain_memory::ContributionMetric {
                 name: m.name,
@@ -2048,21 +2048,12 @@ In `crates/zerochain-engine/src/llm_driver.rs`:
         record.metric = metric;
         record.artifacts = artifacts;
 
-        let published = {
-            let mut graph = graph.lock().await;
-            graph.publish(record).await
-        };
-        match published {
-            Ok(record) => {
-                zerochain_core::jj::auto_commit(
-                    &self.state.workspace_root,
-                    &format!("graph: result {}", record.id),
-                )
-                .await;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to publish result contribution");
-            }
+        if let Some(id) = self.state.publish_contribution(record).await {
+            zerochain_core::jj::auto_commit(
+                &self.state.workspace_root,
+                &format!("graph: result {id}"),
+            )
+            .await;
         }
         Ok(())
     }
@@ -3328,25 +3319,33 @@ In `crates/zerochain-tools/src/graph_tool.rs` `GraphQueryTool::run`, replace the
 
 (If `is_none_or` is unavailable on the pinned toolchain, use `.map_or(true, |t| r.record_type == t)` style closures.)
 
-- [ ] **Step 4: ServerState graph + handlers + routes**
+- [ ] **Step 4: Handlers + routes** (code-review amendment: NO `ServerState.graph` handle — handlers fresh-open `Graph` per request so they never serve a stale in-memory index; disk is the source of truth, same as the engine)
 
-1. `crates/zerochain-server/Cargo.toml` `[dependencies]`: add `zerochain-memory = { path = "../zerochain-memory" }`, `serde_json.workspace = true`, and `tokio = { workspace = true, features = ["sync"] }` if absent.
+1. `crates/zerochain-server/Cargo.toml` `[dependencies]`: add `zerochain-memory = { path = "../zerochain-memory" }`, `serde_json.workspace = true`, and `tokio = { workspace = true, features = ["sync"] }` if absent. `crates/zerochain-server/src/state.rs` is NOT modified in this task.
 
-2. `crates/zerochain-server/src/state.rs`: add field `pub graph: Option<Arc<tokio::sync::Mutex<zerochain_memory::Graph>>>`; in `ServerState::new`:
+2. In `crates/zerochain-server/src/handlers/graph.rs`, replace the shared-handle pattern with per-request opens. Add a small helper and use it in all three handlers:
 
 ```rust
-        let graph = match zerochain_memory::Graph::open(workspace.join(".zerochain").join("graph")).await {
-            Ok(g) => Some(Arc::new(tokio::sync::Mutex::new(g))),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to open contribution graph");
-                None
-            }
-        };
+async fn open_graph(
+    state: &ServerState,
+) -> std::result::Result<zerochain_memory::Graph, axum::response::Response> {
+    zerochain_memory::Graph::open(state.workspace.join(".zerochain").join("graph"))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(SimpleMessage {
+                    message: format!("contribution graph unavailable: {e}"),
+                }),
+            )
+                .into_response()
+        })
+}
 ```
 
-and `graph,` in the struct literal.
+Each handler starts with `let graph = open_graph(&state).await?;` — remove the `let Some(graph) = state.graph.clone() else { return unavailable(); };` lines, the `unavailable()` helper, the `.lock().await` calls (a `Graph` from `open_graph` is owned and mutable), and the `drop(graph)` before `auto_commit`. `query` uses `graph.index().filtered(...)` directly; `contribute`/`verify` call `graph.publish(record).await` directly and map errors to BAD_REQUEST as before.
 
-3. Create `crates/zerochain-server/src/handlers/graph.rs`:
+3. Create the rest of `crates/zerochain-server/src/handlers/graph.rs`:
 
 ```rust
 use axum::extract::{Query, State};
