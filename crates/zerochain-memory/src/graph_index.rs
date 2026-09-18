@@ -55,6 +55,9 @@ impl GraphIndex {
     }
 
     pub fn add(&mut self, record: ContributionRecord) {
+        if self.records.contains_key(&record.id) {
+            return;
+        }
         for parent in &record.parents {
             self.children
                 .entry(parent.clone())
@@ -84,7 +87,9 @@ impl GraphIndex {
     }
 
     /// Most recent contribution published in the given workflow — the parent
-    /// chaining rule for auto-captured `result` nodes (spec §5).
+    /// chaining rule for auto-captured `result` nodes (spec §5). Includes any
+    /// record type (including verifications): the chaining rule is strictly
+    /// "most recent contribution in this workflow".
     pub fn latest_in_workflow(&self, workflow: &str) -> Option<&ContributionRecord> {
         self.records
             .values()
@@ -116,7 +121,10 @@ impl GraphIndex {
                 }
             }
         }
-        per_actor.into_iter().map(|(a, (_, v))| (a, v)).collect()
+        let mut verdicts: Vec<(String, Verdict)> =
+            per_actor.into_iter().map(|(a, (_, v))| (a, v)).collect();
+        verdicts.sort_by(|a, b| a.0.cmp(&b.0));
+        verdicts
     }
 
     fn is_verified(&self, record: &ContributionRecord) -> bool {
@@ -125,7 +133,8 @@ impl GraphIndex {
             .any(|(_, v)| matches!(v, Verdict::Confirmed | Verdict::Partial))
     }
 
-    /// Records matching a named view.
+    /// Records matching a named view. Order is unspecified except `Recent`
+    /// (created descending); consumers needing a specific order must sort.
     pub fn view(&self, view: GraphView) -> Vec<&ContributionRecord> {
         match view {
             GraphView::Recent => {
@@ -173,6 +182,9 @@ impl GraphIndex {
                     let Some(metric) = &record.metric else {
                         continue;
                     };
+                    if !metric.value.is_finite() {
+                        continue;
+                    }
                     groups
                         .entry((metric.name.clone(), metric.direction))
                         .or_default()
@@ -395,5 +407,102 @@ mod tests {
         let negative = g.index.view(GraphView::Negative);
         assert_eq!(negative.len(), 1);
         assert_eq!(negative[0].body, "flopped");
+    }
+
+    #[test]
+    fn effective_verdicts_breaks_ties_toward_first_seen() {
+        let mut index = GraphIndex::default();
+        let ts = chrono::Utc::now();
+        let mut setup = ContributionRecord::new(ContributionType::Setup, "a", "root");
+        setup.created = ts;
+        let setup_id = setup.compute_id();
+        setup.id = setup_id.clone();
+        index.add(setup);
+
+        let mut target = ContributionRecord::new(ContributionType::Result, "a", "r");
+        target.parents = vec![setup_id.clone()];
+        target.created = ts;
+        let target_id = target.compute_id();
+        target.id = target_id.clone();
+        index.add(target);
+
+        // Two verifications from the same actor with identical timestamps:
+        // the first one added (BTreeMap/id order) wins.
+        let mut v1 = ContributionRecord::new(ContributionType::Verification, "b", "first");
+        v1.created = ts;
+        v1.target = Some(target_id.clone());
+        v1.verdict = Some(Verdict::Confirmed);
+        v1.parents = vec![target_id.clone()];
+        let v1_id = v1.compute_id();
+        v1.id = v1_id.clone();
+        index.add(v1);
+
+        let mut v2 = ContributionRecord::new(ContributionType::Verification, "b", "second");
+        v2.created = ts;
+        v2.target = Some(target_id.clone());
+        v2.verdict = Some(Verdict::Failed);
+        v2.parents = vec![target_id.clone()];
+        let v2_id = v2.compute_id();
+        v2.id = v2_id.clone();
+        index.add(v2);
+
+        let verdicts = index.effective_verdicts(&target_id);
+        assert_eq!(verdicts.len(), 1);
+        // v1 wins the tie iff its id sorts first (BTreeMap iteration order).
+        let expected = if v1_id < v2_id {
+            Verdict::Confirmed
+        } else {
+            Verdict::Failed
+        };
+        assert_eq!(
+            verdicts[0].1, expected,
+            "tie resolved deterministically toward smaller id"
+        );
+        assert_eq!(verdicts[0].0, "b");
+    }
+
+    #[test]
+    fn effective_verdicts_skips_empty_actor() {
+        let mut index = GraphIndex::default();
+        let mut target = ContributionRecord::new(ContributionType::Result, "a", "r");
+        target.created = chrono::Utc::now();
+        let target_id = target.compute_id();
+        target.id = target_id.clone();
+        index.add(target);
+
+        let mut v = ContributionRecord::new(ContributionType::Verification, "", "anon");
+        v.created = chrono::Utc::now();
+        v.target = Some(target_id.clone());
+        v.verdict = Some(Verdict::Confirmed);
+        v.parents = vec![target_id.clone()];
+        let v_id = v.compute_id();
+        v.id = v_id.clone();
+        index.add(v);
+
+        assert!(index.effective_verdicts(&target_id).is_empty());
+    }
+
+    #[test]
+    fn effective_verdicts_treats_missing_verdict_as_failed() {
+        let mut index = GraphIndex::default();
+        let mut target = ContributionRecord::new(ContributionType::Result, "a", "r");
+        target.created = chrono::Utc::now();
+        let target_id = target.compute_id();
+        target.id = target_id.clone();
+        index.add(target);
+
+        // Hand-built record without verdict (e.g. a record file written by an
+        // external tool that skipped validate()).
+        let mut v = ContributionRecord::new(ContributionType::Verification, "b", "no verdict");
+        v.created = chrono::Utc::now();
+        v.target = Some(target_id.clone());
+        v.parents = vec![target_id.clone()];
+        let v_id = v.compute_id();
+        v.id = v_id.clone();
+        index.add(v);
+
+        let verdicts = index.effective_verdicts(&target_id);
+        assert_eq!(verdicts.len(), 1);
+        assert_eq!(verdicts[0].1, Verdict::Failed);
     }
 }
