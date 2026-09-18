@@ -30,12 +30,22 @@ pub fn to_llm_tools(registry: &ToolRegistry, names: &[String]) -> Vec<LlmTool> {
         .collect()
 }
 
+/// Graph context injected into graph tool calls (contribute/verify/graph_query).
+#[derive(Debug, Clone)]
+pub struct GraphInvokeContext {
+    pub workflow_id: String,
+    pub stage_id: String,
+    pub actor: String,
+    pub graph_dir: std::path::PathBuf,
+}
+
 /// Look up the tool referenced by `call` in `registry`, execute it, and return the JSON result as a string.
 pub async fn execute_tool_call(
     registry: &ToolRegistry,
     call: &ToolCall,
     workspace_root: &Path,
     memory_store_path: Option<&Path>,
+    graph: Option<&GraphInvokeContext>,
 ) -> Result<String, DaemonError> {
     let tool = registry.get(&call.name).ok_or_else(|| {
         DaemonError::Workflow(zerochain_core::error::Error::PlanError {
@@ -50,6 +60,14 @@ pub async fn execute_tool_call(
     if matches!(call.name.as_str(), "memory_store" | "memory_query") {
         if let Some(path) = memory_store_path {
             input["memory_store_path"] = serde_json::json!(path.to_string_lossy().to_string());
+        }
+    }
+    if let Some(g) = graph {
+        if matches!(call.name.as_str(), "contribute" | "verify" | "graph_query") {
+            input["graph_dir"] = serde_json::json!(g.graph_dir.to_string_lossy().to_string());
+            input["graph_workflow"] = serde_json::json!(g.workflow_id);
+            input["graph_stage"] = serde_json::json!(g.stage_id);
+            input["graph_actor"] = serde_json::json!(g.actor);
         }
     }
 

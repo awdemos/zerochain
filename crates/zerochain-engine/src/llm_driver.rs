@@ -154,6 +154,13 @@ impl<'a> LLMStageDriver<'a> {
 
         let mut tool_round = 0;
 
+        let graph_ctx = Some(tool_driver::GraphInvokeContext {
+            workflow_id: self.workflow_id.to_string(),
+            stage_id: self.stage.id.raw.clone(),
+            actor: zerochain_core::okf::zerochain_actor(),
+            graph_dir: self.state.workspace_root.join(".zerochain").join("graph"),
+        });
+
         let (output, response) = loop {
             let response = self
                 .llm
@@ -178,6 +185,7 @@ impl<'a> LLMStageDriver<'a> {
                         call,
                         &workflow_root,
                         Some(&memory_dir),
+                        graph_ctx.as_ref(),
                     )
                     .await?;
                     results.push(format!("{}: {}", call.name, result));
@@ -214,6 +222,7 @@ impl<'a> LLMStageDriver<'a> {
                     call,
                     &workflow_root,
                     Some(&memory_dir),
+                    graph_ctx.as_ref(),
                 )
                 .await?;
                 let result_text = format!(

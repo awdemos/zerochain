@@ -116,6 +116,7 @@ impl Tool for VerifyTool {
                 "body": { "type": "string", "description": "Evidence for the verdict." },
                 "graph_dir": { "type": "string", "description": "Injected by the engine; do not set manually." },
                 "graph_workflow": { "type": "string", "description": "Injected by the engine; do not set manually." },
+                "graph_stage": { "type": "string", "description": "Injected by the engine; do not set manually." },
                 "graph_actor": { "type": "string", "description": "Injected by the engine; do not set manually." }
             },
             "required": ["target", "verdict", "body"]
@@ -140,6 +141,7 @@ impl Tool for VerifyTool {
         record.verdict = Some(verdict);
         record.parents = vec![target];
         record.workflow = optional_str(&input, "graph_workflow");
+        record.stage = optional_str(&input, "graph_stage");
         let published = graph.publish(record).await?;
         Ok(json!({ "id": published.id }))
     }
@@ -176,8 +178,8 @@ impl Tool for GraphQueryTool {
         let graph_dir = required_str(&input, "graph_dir")?;
         let top_k = input
             .get("top_k")
-            .and_then(Value::as_u64)
-            .map(|n| n as usize)
+            .and_then(Value::as_f64)
+            .map(|n| n.max(1.0).round() as usize)
             .unwrap_or(DEFAULT_TOP_K);
         let graph = Graph::open(graph_dir).await?;
 
@@ -212,6 +214,9 @@ impl Tool for GraphQueryTool {
         }
         if !tags.is_empty() {
             records.retain(|r| tags.iter().all(|t| r.tags.contains(t)));
+        }
+        if records.is_empty() {
+            return Ok(json!({ "results": [] }));
         }
 
         let ordered: Vec<ContributionRecord> = match input
@@ -264,6 +269,9 @@ fn record_json(r: &ContributionRecord) -> Value {
         "actor": r.actor,
         "created": r.created.to_rfc3339(),
         "workflow": r.workflow,
+        "tags": r.tags,
+        "verdict": r.verdict.map(|v| json!(v.as_str())).unwrap_or(Value::Null),
+        "target": r.target.as_ref().map(|t| json!(t)).unwrap_or(Value::Null),
         "metric": r.metric.as_ref().map(|m| {
             json!({
                 "name": m.name,
