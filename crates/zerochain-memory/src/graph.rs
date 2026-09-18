@@ -5,6 +5,12 @@ use crate::Result;
 
 /// Workspace-level collective memory: canonical store plus derived index,
 /// kept consistent on every publish (spec §4.2).
+///
+/// A `Graph` is a point-in-time view: it does not observe records published
+/// through other handles after `open`. Keep at most one live handle per
+/// directory per process, or re-`open` to see external writes. The canonical
+/// files under `contributions/` are always the source of truth. `open`
+/// creates the directory if missing — callers should verify the path.
 #[derive(Debug)]
 pub struct Graph {
     store: ContributionStore,

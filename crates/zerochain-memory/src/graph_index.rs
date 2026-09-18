@@ -505,4 +505,56 @@ mod tests {
         assert_eq!(verdicts.len(), 1);
         assert_eq!(verdicts[0].1, Verdict::Failed);
     }
+
+    #[test]
+    fn add_is_idempotent_for_duplicate_ids() {
+        let mut index = GraphIndex::default();
+        let mut setup = ContributionRecord::new(ContributionType::Setup, "a", "root");
+        setup.created = chrono::Utc::now();
+        let setup_id = setup.compute_id();
+        setup.id = setup_id.clone();
+        index.add(setup.clone());
+        index.add(setup);
+
+        let mut child = ContributionRecord::new(ContributionType::Result, "a", "child");
+        child.parents = vec![setup_id.clone()];
+        child.created = chrono::Utc::now();
+        let child_id = child.compute_id();
+        child.id = child_id.clone();
+        index.add(child.clone());
+        index.add(child);
+
+        let leaves = index.view(GraphView::Leaves);
+        assert_eq!(leaves.len(), 1, "duplicate add must not duplicate children");
+    }
+
+    #[test]
+    fn leaders_skips_non_finite_metric_values() {
+        let mut index = GraphIndex::default();
+        let mut good = ContributionRecord::new(ContributionType::Result, "a", "finite");
+        good.created = chrono::Utc::now();
+        good.metric = Some(ContributionMetric {
+            name: "bpb".to_string(),
+            value: 1.9,
+            direction: MetricDirection::Lower,
+        });
+        let good_id = good.compute_id();
+        good.id = good_id.clone();
+        index.add(good);
+
+        let mut nan = ContributionRecord::new(ContributionType::Result, "a", "not-a-number");
+        nan.created = chrono::Utc::now();
+        nan.metric = Some(ContributionMetric {
+            name: "bpb".to_string(),
+            value: f64::NAN,
+            direction: MetricDirection::Lower,
+        });
+        let nan_id = nan.compute_id();
+        nan.id = nan_id.clone();
+        index.add(nan);
+
+        let leaders = index.view(GraphView::Leaders);
+        assert_eq!(leaders.len(), 1);
+        assert_eq!(leaders[0].id, good_id);
+    }
 }

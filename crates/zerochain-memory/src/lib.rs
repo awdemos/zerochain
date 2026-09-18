@@ -3,6 +3,7 @@
 pub mod chunk;
 pub mod error;
 pub mod graph;
+pub mod graph_embed;
 pub mod graph_index;
 pub mod graph_store;
 pub mod model;
@@ -13,6 +14,7 @@ pub mod store;
 pub use chunk::chunk_text;
 pub use error::MemoryError;
 pub use graph::Graph;
+pub use graph_embed::GraphEmbedIndex;
 pub use graph_index::{GraphIndex, GraphView};
 pub use graph_store::ContributionStore;
 pub use model::{EmbeddingModel, FastEmbedModel, MemoryChunk};
