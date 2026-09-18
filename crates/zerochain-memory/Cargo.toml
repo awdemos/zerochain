@@ -19,6 +19,7 @@ serde_json.workspace = true
 serde_yml.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 fastembed.workspace = true
 
 [dev-dependencies]
