@@ -6,6 +6,9 @@ use crate::Result;
 /// Workspace-level collective memory: canonical store plus derived index,
 /// kept consistent on every publish (spec §4.2).
 ///
+/// Records live under `<dir>/contributions/`; derived caches (e.g. the
+/// embedding cache) live under `<dir>/index/`.
+///
 /// A `Graph` is a point-in-time view: it does not observe records published
 /// through other handles after `open`. Short-lived handles — one per request
 /// or tool call — are fine: the canonical files under `contributions/` are
@@ -21,7 +24,7 @@ pub struct Graph {
 
 impl Graph {
     pub async fn open(dir: impl AsRef<std::path::Path>) -> Result<Self> {
-        let store = ContributionStore::open(&dir).await?;
+        let store = ContributionStore::open(dir.as_ref().join("contributions")).await?;
         let records = store.list().await?;
         Ok(Graph {
             store,

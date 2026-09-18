@@ -293,7 +293,12 @@ async fn main() -> Result<()> {
                 .transpose()?;
             let mut records: Vec<zerochain_memory::ContributionRecord> = match view {
                 Some(v) => graph.index().view(v).into_iter().cloned().collect(),
-                None => graph.index().all().into_iter().cloned().collect(),
+                None => graph
+                    .index()
+                    .view(zerochain_memory::GraphView::Recent)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
             };
             if let Some(t) = record_type {
                 records.retain(|r| r.record_type == t);

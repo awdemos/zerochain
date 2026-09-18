@@ -395,7 +395,7 @@ impl<'a> LLMStageDriver<'a> {
             });
         let artifacts = match &self.cas {
             Some(cas) => match cas.put(output.as_bytes()).await {
-                Ok(cid) => vec![format!("{cid}")],
+                Ok(cid) => vec![format!("b3:{cid}")],
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to store output in CAS");
                     Vec::new()
