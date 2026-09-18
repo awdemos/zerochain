@@ -77,7 +77,7 @@ fn tool_error(msg: String) -> rmcp::model::CallToolResult {
 impl ZerochainMcpServer {
     #[tool(
         name = "zerochain_init",
-        description = "Create a new workflow with numbered stages. Optionally specify a template name (code-review, research, implement)."
+        description = "Create a new workflow with numbered stages. Optionally specify a template name (code-review, research, implement). Optionally pass parents (repeatable contribution IDs) to link the workflow to prior runs."
     )]
     async fn init_workflow(
         &self,

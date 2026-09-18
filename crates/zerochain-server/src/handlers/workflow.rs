@@ -42,10 +42,10 @@ pub async fn init(
         )
             .into_response();
     }
+    jj::init_repo(&state.workspace).await;
     let registry = state.registry.read().await;
     match registry.init_workflow(body.name, body.template, body.parents).await {
         Ok(wf) => {
-            jj::init_repo(&state.workspace).await;
             let id = wf.id.clone();
             jj::auto_commit(&state.workspace, &format!("workflow init: {id}")).await;
             (StatusCode::CREATED, Json(SimpleMessage { message: id })).into_response()

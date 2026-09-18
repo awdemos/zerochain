@@ -111,6 +111,16 @@ async fn resolve_cow_backend(
 
 const MAX_SNAPSHOTS_PER_WORKFLOW: usize = 10;
 
+/// Cap contribution bodies at roughly one paragraph / 1024 chars.
+fn truncate_body(body: &str) -> String {
+    const LIMIT: usize = 1024;
+    if body.chars().count() <= LIMIT {
+        return body.to_string();
+    }
+    let truncated: String = body.chars().take(LIMIT).collect();
+    format!("{}…", truncated)
+}
+
 impl AppState {
     #[tracing::instrument(skip(workspace_root, cas), fields(dir = %workspace_root.display()))]
     pub async fn new(workspace_root: &Path, cas: Option<CasStore>) -> AppState {
@@ -541,7 +551,11 @@ impl AppState {
         if let Some(task) = &task {
             setup_parents.extend(task.parents.iter().cloned());
         }
-        setup_parents.dedup();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let setup_parents: Vec<String> = setup_parents
+            .into_iter()
+            .filter(|p| seen.insert(p.clone()))
+            .collect();
 
         let body = task
             .as_ref()
@@ -553,24 +567,29 @@ impl AppState {
                 }
             })
             .unwrap_or_else(|| workflow.id.clone());
+        let body = truncate_body(&body);
 
         // Fresh-open so unknown-parent filtering sees every record on disk
         // (code-review amendment: no cached handle).
-        let existing: std::collections::HashSet<String> = match Graph::open(self.graph_dir()).await {
-            Ok(graph) => graph.index().all().iter().map(|r| r.id.clone()).collect(),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to open contribution graph");
-                std::collections::HashSet::new()
-            }
-        };
+        let existing: Option<std::collections::HashSet<String>> =
+            match Graph::open(self.graph_dir()).await {
+                Ok(graph) => Some(graph.index().all().iter().map(|r| r.id.clone()).collect()),
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to open contribution graph for parent filter; keeping declared parents");
+                    None
+                }
+            };
         let kept: Vec<String> = setup_parents
             .into_iter()
-            .filter(|p| {
-                let ok = existing.contains(p);
-                if !ok {
-                    tracing::warn!(parent = %p, "dropping unknown parent contribution");
+            .filter(|p| match &existing {
+                None => true,
+                Some(ids) => {
+                    let ok = ids.contains(p);
+                    if !ok {
+                        tracing::warn!(parent = %p, "dropping unknown parent contribution");
+                    }
+                    ok
                 }
-                ok
             })
             .collect();
 
