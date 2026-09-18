@@ -103,7 +103,11 @@ impl ContributionStore {
         let mut entries = tokio::fs::read_dir(&self.dir)
             .await
             .map_err(|e| io_err(&self.dir, e))?;
-        while let Some(entry) = entries.next_entry().await.map_err(|e| io_err(&self.dir, e))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| io_err(&self.dir, e))?
+        {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
@@ -118,9 +122,13 @@ impl ContributionStore {
             match tokio::fs::read_to_string(&path).await {
                 Ok(content) => match ContributionRecord::from_markdown_with_id(&content, &id) {
                     Ok(record) => records.push(record),
-                    Err(e) => tracing::warn!(path = %path.display(), error = %e, "skipping corrupt contribution record"),
+                    Err(e) => {
+                        tracing::warn!(path = %path.display(), error = %e, "skipping corrupt contribution record")
+                    }
                 },
-                Err(e) => tracing::warn!(path = %path.display(), error = %e, "skipping unreadable contribution record"),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "skipping unreadable contribution record")
+                }
             }
         }
         Ok(records)
@@ -158,7 +166,10 @@ mod tests {
         while entries.next_entry().await.unwrap().is_some() {
             count += 1;
         }
-        assert_eq!(count, 1, "identical re-publish must not write a second file");
+        assert_eq!(
+            count, 1,
+            "identical re-publish must not write a second file"
+        );
     }
 
     #[tokio::test]
@@ -184,7 +195,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = ContributionStore::open(tmp.path()).await.unwrap();
         let setup = store
-            .publish(ContributionRecord::new(ContributionType::Setup, "a", "root"))
+            .publish(ContributionRecord::new(
+                ContributionType::Setup,
+                "a",
+                "root",
+            ))
             .await
             .unwrap();
         let mut child = ContributionRecord::new(ContributionType::Result, "a", "builds on root");
@@ -198,10 +213,15 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = ContributionStore::open(tmp.path()).await.unwrap();
         let result = store
-            .publish(ContributionRecord::new(ContributionType::Result, "a", "measured"))
+            .publish(ContributionRecord::new(
+                ContributionType::Result,
+                "a",
+                "measured",
+            ))
             .await
             .unwrap();
-        let mut verification = ContributionRecord::new(ContributionType::Verification, "b", "reproduced");
+        let mut verification =
+            ContributionRecord::new(ContributionType::Verification, "b", "reproduced");
         verification.target = Some(result.id.clone());
         verification.verdict = Some(Verdict::Confirmed);
         verification.parents = vec![result.id.clone()];
@@ -218,14 +238,54 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = ContributionStore::open(tmp.path()).await.unwrap();
         store
-            .publish(ContributionRecord::new(ContributionType::Insight, "a", "good"))
+            .publish(ContributionRecord::new(
+                ContributionType::Insight,
+                "a",
+                "good",
+            ))
             .await
             .unwrap();
-        tokio::fs::write(tmp.path().join("c-corrupt0000000.md"), "not markdown at all")
-            .await
-            .unwrap();
+        tokio::fs::write(
+            tmp.path().join("c-corrupt0000000.md"),
+            "not markdown at all",
+        )
+        .await
+        .unwrap();
         let records = store.list().await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].body, "good");
+    }
+
+    #[tokio::test]
+    async fn publish_rejects_collision_with_different_content() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path()).await.unwrap();
+        let rec = ContributionRecord::new(ContributionType::Insight, "a", "original");
+        let first = store.publish(rec.clone()).await.unwrap();
+        let path = tmp.path().join(format!("{}.md", first.id));
+        let content = tokio::fs::read_to_string(&path).await.unwrap();
+        tokio::fs::write(&path, content.replace("original", "tampered"))
+            .await
+            .unwrap();
+        let err = store.publish(rec).await.unwrap_err();
+        assert!(
+            err.to_string().contains("collision"),
+            "expected collision error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_rejects_verification_of_missing_target() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path()).await.unwrap();
+        let mut rec = ContributionRecord::new(ContributionType::Verification, "a", "verdict");
+        rec.target = Some("c-missingtarget00".to_string());
+        rec.verdict = Some(Verdict::Confirmed);
+        rec.parents = vec![];
+        let err = store.publish(rec).await.unwrap_err();
+        assert!(
+            err.to_string().contains("not found"),
+            "expected target-not-found error, got: {err}"
+        );
     }
 }

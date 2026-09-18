@@ -74,7 +74,7 @@ impl Verdict {
 }
 
 /// Whether a lower or higher metric value is better.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MetricDirection {
     Lower,
@@ -168,7 +168,11 @@ struct RecordFrontmatter {
 }
 
 impl ContributionRecord {
-    pub fn new(record_type: ContributionType, actor: impl Into<String>, body: impl Into<String>) -> Self {
+    pub fn new(
+        record_type: ContributionType,
+        actor: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
         ContributionRecord {
             id: String::new(),
             record_type,
@@ -256,7 +260,8 @@ impl ContributionRecord {
             verdict: self.verdict.map(|v| v.as_str().to_string()),
             target: self.target.clone(),
         };
-        let yaml = serde_yml::to_string(&fm).map_err(|e| MemoryError::Serialization(e.to_string()))?;
+        let yaml =
+            serde_yml::to_string(&fm).map_err(|e| MemoryError::Serialization(e.to_string()))?;
         Ok(format!("---\n{yaml}---\n\n{}", self.body))
     }
 
@@ -281,10 +286,12 @@ impl ContributionRecord {
             // Frontmatter closed by a trailing `---` at end of input.
             (yaml, String::new())
         } else {
-            return Err(MemoryError::InvalidInput("unclosed frontmatter".to_string()));
+            return Err(MemoryError::InvalidInput(
+                "unclosed frontmatter".to_string(),
+            ));
         };
-        let fm: RecordFrontmatter = serde_yml::from_str(yaml_str)
-            .map_err(|e| MemoryError::Serialization(e.to_string()))?;
+        let fm: RecordFrontmatter =
+            serde_yml::from_str(yaml_str).map_err(|e| MemoryError::Serialization(e.to_string()))?;
 
         let record_type = ContributionType::parse(
             fm.record_type
@@ -304,10 +311,7 @@ impl ContributionRecord {
             metric: fm.metric,
             tags: fm.tags,
             artifacts: fm.artifacts,
-            verdict: fm
-                .verdict
-                .map(|v| Verdict::parse(&v))
-                .transpose()?,
+            verdict: fm.verdict.map(|v| Verdict::parse(&v)).transpose()?,
             target: fm.target,
             body,
         };
@@ -369,7 +373,10 @@ mod tests {
     #[test]
     fn parent_order_changes_id() {
         let mut rec = sample_record();
-        rec.parents = vec!["c-bbbbbbbbbbbbbbbb".to_string(), "c-aaaaaaaaaaaaaaaa".to_string()];
+        rec.parents = vec![
+            "c-bbbbbbbbbbbbbbbb".to_string(),
+            "c-aaaaaaaaaaaaaaaa".to_string(),
+        ];
         assert_ne!(rec.compute_id(), sample_record().compute_id());
     }
 
@@ -426,7 +433,10 @@ mod tests {
 
     #[test]
     fn type_and_verdict_parse_round_trip() {
-        assert_eq!(ContributionType::parse("insight").unwrap(), ContributionType::Insight);
+        assert_eq!(
+            ContributionType::parse("insight").unwrap(),
+            ContributionType::Insight
+        );
         assert!(ContributionType::parse("nope").is_err());
         assert_eq!(Verdict::parse("partial").unwrap(), Verdict::Partial);
         assert!(Verdict::parse("nope").is_err());
