@@ -22,11 +22,14 @@ fn parse_metric_spec(spec: &str) -> anyhow::Result<zerochain_memory::Contributio
         match k.trim() {
             "name" => name = Some(v.trim().to_string()),
             "value" => {
-                value = Some(
-                    v.trim()
-                        .parse::<f64>()
-                        .map_err(|e| anyhow::anyhow!("metric value: {e}"))?,
-                )
+                let parsed: f64 = v
+                    .trim()
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("metric value: {e}"))?;
+                if !parsed.is_finite() {
+                    return Err(anyhow::anyhow!("metric value must be finite"));
+                }
+                value = Some(parsed);
             }
             "direction" => direction = Some(v.trim().to_string()),
             other => return Err(anyhow::anyhow!("unknown metric key: {other}")),
@@ -217,9 +220,14 @@ async fn main() -> Result<()> {
         } => {
             let record_type = zerochain_memory::ContributionType::parse(&kind)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
-            if record_type == zerochain_memory::ContributionType::Verification {
+            if !matches!(
+                record_type,
+                zerochain_memory::ContributionType::Insight
+                    | zerochain_memory::ContributionType::Hypothesis
+                    | zerochain_memory::ContributionType::Report
+            ) {
                 return Err(anyhow::anyhow!(
-                    "use the verify command for verification records"
+                    "contribute type must be insight, hypothesis, or report (use the verify command for verdicts)"
                 ));
             }
             let graph_dir = cli.workspace.join(".zerochain").join("graph");

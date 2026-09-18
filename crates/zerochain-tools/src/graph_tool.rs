@@ -202,19 +202,12 @@ impl Tool for GraphQueryTool {
         let workflow = optional_str(&input, "workflow");
         let tags = string_array(input.get("tags"));
 
-        let mut records: Vec<ContributionRecord> = match view {
-            Some(v) => graph.index().view(v).into_iter().cloned().collect(),
-            None => graph.index().all().into_iter().cloned().collect(),
-        };
-        if let Some(t) = record_type {
-            records.retain(|r| r.record_type == t);
-        }
-        if let Some(wf) = &workflow {
-            records.retain(|r| r.workflow.as_deref() == Some(wf.as_str()));
-        }
-        if !tags.is_empty() {
-            records.retain(|r| tags.iter().all(|t| r.tags.contains(t)));
-        }
+        let mut records: Vec<ContributionRecord> = graph
+            .index()
+            .filtered(view, record_type, workflow.as_deref(), &tags)
+            .into_iter()
+            .cloned()
+            .collect();
         if records.is_empty() {
             return Ok(json!({ "results": [] }));
         }

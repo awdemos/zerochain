@@ -33,7 +33,6 @@ schemars.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
-clap = { version = "4.0", features = ["derive", "env"] }
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros", "fs"] }
 zerochain-cas = { path = "../zerochain-cas" }

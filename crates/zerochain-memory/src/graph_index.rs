@@ -133,6 +133,25 @@ impl GraphIndex {
             .any(|(_, v)| matches!(v, Verdict::Confirmed | Verdict::Partial))
     }
 
+    /// View plus type/workflow/tag filters, shared by tools, CLI, and HTTP.
+    pub fn filtered(
+        &self,
+        view: Option<GraphView>,
+        record_type: Option<ContributionType>,
+        workflow: Option<&str>,
+        tags: &[String],
+    ) -> Vec<&ContributionRecord> {
+        let base = match view {
+            Some(v) => self.view(v),
+            None => self.all(),
+        };
+        base.into_iter()
+            .filter(|r| record_type.is_none_or(|t| r.record_type == t))
+            .filter(|r| workflow.is_none_or(|w| r.workflow.as_deref() == Some(w)))
+            .filter(|r| tags.iter().all(|t| r.tags.contains(t)))
+            .collect()
+    }
+
     /// Records matching a named view. Order is unspecified except `Recent`
     /// (created descending); consumers needing a specific order must sort.
     pub fn view(&self, view: GraphView) -> Vec<&ContributionRecord> {
@@ -266,6 +285,25 @@ mod tests {
             self.index.add(rec);
             id
         }
+    }
+
+    #[test]
+    fn filtered_combines_view_and_filters() {
+        let mut g = GraphBuilder::new("wf");
+        let setup = g.push(ContributionType::Setup, "a", "root", vec![]);
+        g.push(ContributionType::Hypothesis, "a", "h1", vec![setup.clone()]);
+        let mut other = ContributionRecord::new(ContributionType::Hypothesis, "a", "h2-other-wf");
+        other.workflow = Some("other".to_string());
+        other.created = chrono::Utc::now();
+        let other_id = other.compute_id();
+        other.id = other_id.clone();
+        g.index.add(other);
+
+        let recs = g
+            .index
+            .filtered(Some(GraphView::OpenHypotheses), None, Some("wf"), &[]);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0].body, "h1");
     }
 
     #[test]

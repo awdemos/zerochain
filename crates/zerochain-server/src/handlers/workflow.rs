@@ -44,7 +44,10 @@ pub async fn init(
     }
     jj::init_repo(&state.workspace).await;
     let registry = state.registry.read().await;
-    match registry.init_workflow(body.name, body.template, body.parents).await {
+    match registry
+        .init_workflow(body.name, body.template, body.parents)
+        .await
+    {
         Ok(wf) => {
             let id = wf.id.clone();
             jj::auto_commit(&state.workspace, &format!("workflow init: {id}")).await;
@@ -116,15 +119,15 @@ pub async fn export_okf(
     Path(id): Path<String>,
     Query(query): Query<ExportOkfQuery>,
 ) -> impl IntoResponse {
-    let output_dir = query.output.unwrap_or_else(|| {
-        state.workspace.join(format!("{}-okf", id))
-    });
+    let output_dir = query
+        .output
+        .unwrap_or_else(|| state.workspace.join(format!("{}-okf", id)));
     let registry = state.registry.read().await;
     match registry.export_okf(id.clone(), output_dir.clone()).await {
         Ok(_) => Json(SimpleMessage {
             message: format!("exported OKF bundle to {}", output_dir.display()),
         })
-            .into_response(),
+        .into_response(),
         Err(e) => match e {
             zerochain_engine::DaemonError::WorkflowNotFound(_) => (
                 StatusCode::NOT_FOUND,

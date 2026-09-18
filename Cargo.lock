@@ -5199,6 +5199,7 @@ dependencies = [
  "zerochain-engine",
  "zerochain-fs",
  "zerochain-llm",
+ "zerochain-memory",
 ]
 
 [[package]]
