@@ -558,8 +558,9 @@ async fn execute_stage_writes_result_from_llm() {
     let content = tokio::fs::read_to_string(&result_path)
         .await
         .expect("read result.md");
+    let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
     assert_eq!(
-        content,
+        body,
         "MOCK RECEIVED: --- data.md ---\nMock analysis result from LLM."
     );
 }
@@ -623,7 +624,8 @@ async fn execute_stage_handles_missing_context_gracefully() {
     let content = tokio::fs::read_to_string(stage.output_path.join("result.md"))
         .await
         .expect("read result");
-    assert_eq!(content, "No context needed.");
+    let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+    assert_eq!(body, "No context needed.");
 }
 
 // ---------------------------------------------------------------------------
@@ -654,7 +656,8 @@ async fn execute_stage_with_generic_profile_no_flags() {
     let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
         .await
         .expect("read result");
-    assert_eq!(result, "MOCK RECEIVED: Execute the task described above.");
+    let (_, body) = zerochain_core::okf::split_frontmatter(&result).expect("OKF frontmatter");
+    assert_eq!(body, "MOCK RECEIVED: Execute the task described above.");
 
     assert!(
         !stage.output_path.join("reasoning.md").exists(),
@@ -726,7 +729,8 @@ async fn execute_stage_with_kimi_k2_profile_and_capture_reasoning() {
     let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
         .await
         .expect("read result.md");
-    assert_eq!(result, "The answer is 42.");
+    let (_, body) = zerochain_core::okf::split_frontmatter(&result).expect("OKF frontmatter");
+    assert_eq!(body, "The answer is 42.");
 
     let reasoning = tokio::fs::read_to_string(stage.output_path.join("reasoning.md"))
         .await
@@ -874,9 +878,11 @@ async fn execute_stage_stores_output_in_cas() {
     let content = tokio::fs::read_to_string(&result_path)
         .await
         .expect("read result");
-    assert_eq!(content, "MOCK RECEIVED: Execute the task described above.");
+    let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+    assert_eq!(body, "MOCK RECEIVED: Execute the task described above.");
 
-    let expected_cid = zerochain_cas::Cid::from_bytes(content.as_bytes());
+    // CAS stores the raw LLM output; result.md adds the OKF wrapper on top.
+    let expected_cid = zerochain_cas::Cid::from_bytes(body.as_bytes());
     let retrieved = cas.get(&expected_cid).await.expect("retrieve from CAS");
-    assert_eq!(String::from_utf8_lossy(&retrieved), content);
+    assert_eq!(String::from_utf8_lossy(&retrieved), body);
 }

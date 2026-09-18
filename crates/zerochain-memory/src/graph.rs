@@ -7,10 +7,12 @@ use crate::Result;
 /// kept consistent on every publish (spec §4.2).
 ///
 /// A `Graph` is a point-in-time view: it does not observe records published
-/// through other handles after `open`. Keep at most one live handle per
-/// directory per process, or re-`open` to see external writes. The canonical
-/// files under `contributions/` are always the source of truth. `open`
-/// creates the directory if missing — callers should verify the path.
+/// through other handles after `open`. Short-lived handles — one per request
+/// or tool call — are fine: the canonical files under `contributions/` are
+/// always the source of truth, and publishes are content-addressed atomic
+/// writes, so a fresh `open` always sees the latest state. Only long-lived
+/// cached handles risk serving stale views; re-`open` to see external writes.
+/// `open` creates the directory if missing — callers should verify the path.
 #[derive(Debug)]
 pub struct Graph {
     store: ContributionStore,

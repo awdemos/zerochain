@@ -1,4 +1,6 @@
-//! Filesystem-native vector memory and semantic search for zerochain.
+//! Filesystem-native collective memory for zerochain: a typed, append-only
+//! contribution graph with derived semantic search, plus the legacy
+//! per-workflow vector store.
 
 pub mod chunk;
 pub mod error;

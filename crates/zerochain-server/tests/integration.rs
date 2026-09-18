@@ -612,7 +612,9 @@ mod e2e {
         let req = make_request("GET", "/v1/workflows/e2e-run/output/00_spec", None);
         let resp = send!(app_from_state(&state), req);
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_string(resp.into_body()).await, "The answer is 42.");
+        let content = body_string(resp.into_body()).await;
+        let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+        assert_eq!(body, "The answer is 42.");
 
         // Verify stage marked complete
         let req = make_request("GET", "/v1/workflows/e2e-run", None);
@@ -632,7 +634,9 @@ mod e2e {
         let req = make_request("GET", "/v1/workflows/e2e-run/output/01_build", None);
         let resp = send!(app_from_state(&state), req);
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_string(resp.into_body()).await, "The answer is 42.");
+        let content = body_string(resp.into_body()).await;
+        let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+        assert_eq!(body, "The answer is 42.");
 
         // Test 3: no pending stages after all complete
         let req = make_request("GET", "/v1/workflows/e2e-run", None);

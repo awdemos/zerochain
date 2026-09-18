@@ -315,7 +315,10 @@ login, token management, and session validation.
         let task = Task::parse(input).unwrap();
         assert_eq!(
             task.parents,
-            vec!["c-aaaaaaaaaaaaaaaa".to_string(), "c-bbbbbbbbbbbbbbbb".to_string()]
+            vec![
+                "c-aaaaaaaaaaaaaaaa".to_string(),
+                "c-bbbbbbbbbbbbbbbb".to_string()
+            ]
         );
     }
 

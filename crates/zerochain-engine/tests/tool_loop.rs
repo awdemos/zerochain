@@ -117,5 +117,8 @@ async fn tool_loop_feeds_result_back_to_llm() {
     let result = tokio::fs::read_to_string(stage.output_path.join("result.md"))
         .await
         .unwrap();
-    assert_eq!(result.trim(), "done with tool result");
+    assert!(
+        result.contains("done with tool result"),
+        "result.md body should contain the final LLM text, got: {result}"
+    );
 }

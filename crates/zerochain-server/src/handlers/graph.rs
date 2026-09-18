@@ -122,6 +122,10 @@ pub async fn query(
         .cloned()
         .collect();
 
+    if records.is_empty() {
+        return (StatusCode::OK, Json(serde_json::json!({ "results": [] }))).into_response();
+    }
+
     match params.query.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(q) => {
             let model = match tokio::task::spawn_blocking(zerochain_memory::FastEmbedModel::try_new)
