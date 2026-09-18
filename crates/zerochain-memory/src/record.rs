@@ -337,6 +337,40 @@ impl ContributionRecord {
     }
 }
 
+/// JSON view of a record shared by tools, CLI, and HTTP surfaces.
+pub fn record_to_json(r: &ContributionRecord) -> serde_json::Value {
+    serde_json::json!({
+        "id": r.id,
+        "type": r.record_type.as_str(),
+        "parents": r.parents,
+        "actor": r.actor,
+        "created": r.created.to_rfc3339(),
+        "workflow": r.workflow,
+        "stage": r.stage,
+        "tags": r.tags,
+        "metric": r.metric.as_ref().map(|m| serde_json::json!({
+            "name": m.name,
+            "value": m.value,
+            "direction": serde_json::to_value(m.direction).unwrap_or(serde_json::Value::Null),
+        })),
+        "verdict": r.verdict.map(|v| serde_json::json!(v.as_str())).unwrap_or(serde_json::Value::Null),
+        "target": r.target.as_ref().map(|t| serde_json::json!(t)).unwrap_or(serde_json::Value::Null),
+        "excerpt": excerpt(&r.body),
+    })
+}
+
+/// First few non-empty lines of a body, capped at 240 chars.
+pub fn excerpt(body: &str) -> String {
+    let flat: String = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+    flat.chars().take(240).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +522,21 @@ mod tests {
         // delimiter the parse must error rather than silently truncate.
         let md = "---\ntype: insight\n---junk\nbody";
         assert!(ContributionRecord::from_markdown(md).is_err());
+    }
+
+    #[test]
+    fn record_to_json_includes_verification_fields() {
+        let mut rec = ContributionRecord::new(
+            ContributionType::Verification,
+            "human:tester",
+            "reproduced the reported behavior\non a second run",
+        );
+        rec.target = Some("c-abc123000000000".to_string());
+        rec.verdict = Some(Verdict::Confirmed);
+        let json = record_to_json(&rec);
+        assert_eq!(json["type"], "verification");
+        assert_eq!(json["verdict"], "confirmed");
+        assert_eq!(json["target"], "c-abc123000000000");
+        assert!(!json["excerpt"].as_str().unwrap().is_empty());
     }
 }

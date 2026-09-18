@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use zerochain_error::{Result, ZerochainError};
 use zerochain_memory::{
-    ContributionMetric, ContributionRecord, ContributionType, Graph, GraphEmbedIndex, GraphView,
-    MetricDirection, Verdict,
+    record_to_json, ContributionMetric, ContributionRecord, ContributionType, Graph,
+    GraphEmbedIndex, GraphView, MetricDirection, Verdict,
 };
 
 use crate::tool::Tool;
@@ -256,42 +256,9 @@ impl Tool for GraphQueryTool {
             }
         };
 
-        let results: Vec<Value> = ordered.iter().map(record_json).collect();
+        let results: Vec<Value> = ordered.iter().map(record_to_json).collect();
         Ok(json!({ "results": results }))
     }
-}
-
-fn record_json(r: &ContributionRecord) -> Value {
-    json!({
-        "id": r.id,
-        "type": r.record_type.as_str(),
-        "parents": r.parents,
-        "actor": r.actor,
-        "created": r.created.to_rfc3339(),
-        "workflow": r.workflow,
-        "tags": r.tags,
-        "verdict": r.verdict.map(|v| json!(v.as_str())).unwrap_or(Value::Null),
-        "target": r.target.as_ref().map(|t| json!(t)).unwrap_or(Value::Null),
-        "metric": r.metric.as_ref().map(|m| {
-            json!({
-                "name": m.name,
-                "value": m.value,
-                "direction": serde_json::to_value(m.direction).unwrap_or(Value::Null),
-            })
-        }),
-        "excerpt": excerpt(&r.body),
-    })
-}
-
-fn excerpt(body: &str) -> String {
-    let flat: String = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .take(4)
-        .collect::<Vec<_>>()
-        .join(" ");
-    flat.chars().take(240).collect()
 }
 
 fn required_str<'v>(input: &'v Value, key: &str) -> Result<&'v str> {
@@ -467,6 +434,59 @@ mod tests {
         assert_eq!(
             results[0].get("type").and_then(Value::as_str),
             Some("result")
+        );
+    }
+
+    #[test]
+    fn record_json_includes_verdict_and_target_for_verification() {
+        let mut rec = ContributionRecord::new(
+            ContributionType::Verification,
+            "zerochain/test",
+            "bit-identical reproduction",
+        );
+        rec.target = Some("c-target00000000".to_string());
+        rec.verdict = Some(Verdict::Confirmed);
+        let json = record_to_json(&rec);
+        assert_eq!(json["verdict"], "confirmed");
+        assert_eq!(json["target"], "c-target00000000");
+        assert_eq!(json["type"], "verification");
+        assert!(!json["excerpt"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn graph_query_top_k_is_clamped() {
+        let tmp = TempDir::new().unwrap();
+        let mut graph = Graph::open(tmp.path().join("graph")).await.unwrap();
+        for i in 0..3 {
+            graph
+                .publish(ContributionRecord::new(
+                    ContributionType::Insight,
+                    "a",
+                    format!("observation {i}"),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let tool = GraphQueryTool;
+
+        // Float top_k within range truncates to exactly 2 results.
+        let mut input = base_input(&tmp);
+        input["view"] = json!("recent");
+        input["top_k"] = json!(2.0);
+        let out = tool.run(input).await.unwrap();
+        let results = out.get("results").and_then(Value::as_array).unwrap();
+        assert_eq!(results.len(), 2, "top_k 2.0 yields exactly 2 results");
+
+        // Zero/negative top_k clamps to at least 1 result.
+        let mut input = base_input(&tmp);
+        input["view"] = json!("recent");
+        input["top_k"] = json!(0);
+        let out = tool.run(input).await.unwrap();
+        let results = out.get("results").and_then(Value::as_array).unwrap();
+        assert!(
+            !results.is_empty(),
+            "top_k 0 clamps to a non-empty result set"
         );
     }
 }

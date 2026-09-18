@@ -176,6 +176,12 @@ async fn graph_tools_publish_and_verify_through_tool_loop() {
         .collect();
     assert_eq!(insights.len(), 1);
     assert_eq!(verifications[0].target, Some(insights[0].id.clone()));
+    assert_eq!(verifications[0].stage.as_deref(), Some("00_spec"));
+    assert!(
+        insights[0].actor.starts_with("zerochain/"),
+        "actor injected: {}",
+        insights[0].actor
+    );
     assert_eq!(
         insights[0].workflow.as_deref(),
         Some("graph-tools-wf"),

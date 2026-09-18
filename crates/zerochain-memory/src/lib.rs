@@ -19,7 +19,8 @@ pub use graph_index::{GraphIndex, GraphView};
 pub use graph_store::ContributionStore;
 pub use model::{EmbeddingModel, FastEmbedModel, MemoryChunk};
 pub use record::{
-    ContributionMetric, ContributionRecord, ContributionType, MetricDirection, Verdict,
+    excerpt, record_to_json, ContributionMetric, ContributionRecord, ContributionType,
+    MetricDirection, Verdict,
 };
 pub use similarity::cosine_similarity;
 pub use store::MemoryStore;
