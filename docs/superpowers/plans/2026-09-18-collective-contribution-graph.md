@@ -1611,8 +1611,8 @@ Plan continues in the next section with engine integration (Tasks 7–8), tools 
 
 - [ ] **Step 1: Verify assumptions**
 
-Run: `grep -n "find_task" crates/zerochain-core/src/workflow.rs | head -3`
-Expected: a `pub async fn find_task(&self) -> ...` method. If it returns `Option<Task>`, use it as below; if it returns `Result<Option<Task>>`, adapt with `.await.ok().flatten()`. If it does not exist, skip the task-file branch in Step 4 (body falls back to the workflow id) and note the deviation in the commit message.
+Run: `grep -n "fn find_task" crates/zerochain-core/src/workflow.rs | head -3`
+Expected (verified during planning): `find_task` exists as a **private** `async fn find_task(path: &Path) -> Result<Option<Task>>` — it takes a path, not `&self`. In Step 3, first make it `pub` in `crates/zerochain-core/src/workflow.rs` (one-word visibility change; it is already used internally at line 48). In Step 4, call it as `Workflow::find_task(&workflow.root).await` and collapse the `Result<Option<Task>>` with `unwrap_or_else(|e| { tracing::warn!(error = %e, "failed to read task file"); None })`. If the signature differs from this, adapt to whatever exists and note the deviation in your report.
 
 Run: `grep -rn "InitWorkflowParams {" crates/ | grep -v target`
 Expected: a list of struct-literal sites — every one gains a `parents` field in Step 3.
@@ -1719,7 +1719,8 @@ In `crates/zerochain-engine/src/state.rs` tests module, add (imports: `use zeroc
 
 - [ ] **Step 3: Plumb `parents` through all call sites**
 
-1. `crates/zerochain-engine/src/state.rs`:
+1. `crates/zerochain-core/src/workflow.rs`: make `find_task` public — change `async fn find_task(path: &Path)` to `pub async fn find_task(path: &Path)`. (Verified during planning: it is private and path-based.)
+2. `crates/zerochain-engine/src/state.rs`:
    - Imports: extend `use zerochain_memory::{...}` with `ContributionRecord, ContributionType, Graph`; add `use zerochain_core::jj;` if not already imported.
    - `InitWorkflowParams` gains `pub parents: Vec<String>,`.
    - `InitWorkflowRequest` gains `#[serde(default)] pub parents: Vec<String>,`.
@@ -1759,7 +1760,10 @@ At the end of `AppState::init_workflow`, after `self.workflows.insert(...)` and 
 
 ```rust
         if let Some(graph) = self.graph().await {
-            let task = workflow.find_task().await;
+            let task = Workflow::find_task(&workflow.root).await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to read task file");
+                None
+            });
             let mut setup_parents: Vec<String> = parents;
             if let Some(task) = &task {
                 setup_parents.extend(task.parents.iter().cloned());
