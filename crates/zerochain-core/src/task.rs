@@ -26,6 +26,8 @@ pub struct Task {
     pub execution: Option<TaskExecution>,
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    pub parents: Vec<String>,
     #[serde(skip)]
     pub description: String,
     #[serde(skip)]
@@ -44,6 +46,8 @@ struct TaskFrontmatter {
     execution: Option<TaskExecution>,
     #[serde(default)]
     acceptance_criteria: Vec<String>,
+    #[serde(default)]
+    parents: Vec<String>,
 }
 
 impl Task {
@@ -88,6 +92,7 @@ impl Task {
             priority: fm.priority,
             execution: fm.execution,
             acceptance_criteria: fm.acceptance_criteria,
+            parents: fm.parents,
             description,
             source_path: None,
         })
@@ -129,6 +134,7 @@ impl Task {
             priority,
             execution,
             acceptance_criteria,
+            parents: Vec::new(),
             description,
             source_path,
         }
@@ -148,6 +154,7 @@ pub struct TaskBuilder {
     priority: Option<String>,
     execution: Option<TaskExecution>,
     acceptance_criteria: Vec<String>,
+    parents: Vec<String>,
     description: String,
     source_path: Option<std::path::PathBuf>,
 }
@@ -161,6 +168,7 @@ impl TaskBuilder {
             priority: None,
             execution: None,
             acceptance_criteria: Vec::new(),
+            parents: Vec::new(),
             description: String::new(),
             source_path: None,
         }
@@ -197,6 +205,12 @@ impl TaskBuilder {
     }
 
     #[must_use]
+    pub fn parents(mut self, parents: Vec<String>) -> Self {
+        self.parents = parents;
+        self
+    }
+
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();
         self
@@ -216,6 +230,7 @@ impl TaskBuilder {
             priority: self.priority,
             execution: self.execution,
             acceptance_criteria: self.acceptance_criteria,
+            parents: self.parents,
             description: self.description,
             source_path: self.source_path,
         }
@@ -291,5 +306,21 @@ login, token management, and session validation.
     fn reject_unclosed_frontmatter() {
         let input = "---\nid: TASK-003\ntitle: Test\n";
         assert!(Task::parse(input).is_err());
+    }
+
+    #[test]
+    fn parse_task_parents() {
+        let input = "---\nid: T1\ntitle: Build on prior run\nparents:\n  - c-aaaaaaaaaaaaaaaa\n  - c-bbbbbbbbbbbbbbbb\n---\nDescription";
+        let task = Task::parse(input).unwrap();
+        assert_eq!(
+            task.parents,
+            vec!["c-aaaaaaaaaaaaaaaa".to_string(), "c-bbbbbbbbbbbbbbbb".to_string()]
+        );
+    }
+
+    #[test]
+    fn task_parents_default_empty() {
+        let task = Task::parse("---\nid: T2\ntitle: No parents\n---\nBody").unwrap();
+        assert!(task.parents.is_empty());
     }
 }

@@ -559,6 +559,7 @@ mod tests {
                 strategy: Some("sequential".to_string()),
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Init test".to_string(),
             source_path: None,
         };
@@ -595,6 +596,7 @@ mod tests {
                 strategy: None,
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Link test".to_string(),
             source_path: None,
         };
@@ -639,6 +641,7 @@ mod tests {
                 strategy: None,
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Factory test".to_string(),
             source_path: None,
         };
