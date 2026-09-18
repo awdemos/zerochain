@@ -3,12 +3,16 @@
 pub mod chunk;
 pub mod error;
 pub mod model;
+pub mod record;
 pub mod similarity;
 pub mod store;
 
 pub use chunk::chunk_text;
 pub use error::MemoryError;
 pub use model::{EmbeddingModel, FastEmbedModel, MemoryChunk};
+pub use record::{
+    ContributionMetric, ContributionRecord, ContributionType, MetricDirection, Verdict,
+};
 pub use similarity::cosine_similarity;
 pub use store::MemoryStore;
 
