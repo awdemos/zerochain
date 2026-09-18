@@ -62,7 +62,8 @@ impl GraphEmbedIndex {
     }
 
     /// Rank candidate record IDs by cosine similarity to the query.
-    /// `None` candidates searches all records.
+    /// `None` candidates searches all records. Returned ids are not validated
+    /// against the store; pass `candidates` to restrict to live records.
     pub async fn search(
         &self,
         model: &dyn EmbeddingModel,
@@ -75,13 +76,23 @@ impl GraphEmbedIndex {
             .into_iter()
             .next()
             .ok_or_else(|| MemoryError::Embedding("empty query embedding".to_string()))?;
-        let mut scored: Vec<(f32, String)> = self
-            .vectors
-            .iter()
-            .filter(|(id, _)| candidates.is_none_or(|c| c.contains(id.as_str())))
-            .filter_map(|(id, vec)| cosine_similarity(vec, &query_vec).map(|s| (s, id.clone())))
-            .collect();
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut scored: Vec<(f32, String)> = Vec::new();
+        for (id, vec) in self.vectors.iter() {
+            if !candidates.is_none_or(|c| c.contains(id.as_str())) {
+                continue;
+            }
+            match cosine_similarity(vec, &query_vec) {
+                Some(s) => scored.push((s, id.clone())),
+                None => {
+                    tracing::warn!(record_id = %id, "embedding dimension mismatch; record excluded from search")
+                }
+            }
+        }
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.cmp(&b.1))
+        });
         scored.truncate(top_k);
         Ok(scored.into_iter().map(|(_, id)| id).collect())
     }
@@ -97,8 +108,16 @@ impl GraphEmbedIndex {
             if line.trim().is_empty() {
                 continue;
             }
-            let line: CacheLine = serde_json::from_str(line)?;
-            vectors.insert(line.id, line.embedding);
+            // Self-healing: a corrupt line is skipped (and its record
+            // re-embedded on the next build), never fatal.
+            match serde_json::from_str::<CacheLine>(line) {
+                Ok(line) => {
+                    vectors.insert(line.id, line.embedding);
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping corrupt embedding cache line")
+                }
+            }
         }
         Ok(vectors)
     }
@@ -217,6 +236,41 @@ mod tests {
         // re-embed. If it tried, the count check would still pass, so assert
         // the cache round-trips by reusing the index for search.
         let index = GraphEmbedIndex::build(&store, &KeywordModel, &cache)
+            .await
+            .unwrap();
+        let ranked = index.search(&KeywordModel, "alpha", None, 1).await.unwrap();
+        assert_eq!(ranked.len(), 1);
+    }
+
+    struct PanicModel;
+
+    #[async_trait]
+    impl EmbeddingModel for PanicModel {
+        async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            panic!("embed must not be called when the cache is complete");
+        }
+    }
+
+    #[tokio::test]
+    async fn build_uses_cache_without_embedding() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path().join("contributions"))
+            .await
+            .unwrap();
+        store
+            .publish(ContributionRecord::new(
+                ContributionType::Insight,
+                "a",
+                "alpha",
+            ))
+            .await
+            .unwrap();
+        let cache = tmp.path().join("index").join("embeddings.jsonl");
+        GraphEmbedIndex::build(&store, &KeywordModel, &cache)
+            .await
+            .unwrap();
+        // Second build: cache is complete, the model must not be invoked.
+        let index = GraphEmbedIndex::build(&store, &PanicModel, &cache)
             .await
             .unwrap();
         let ranked = index.search(&KeywordModel, "alpha", None, 1).await.unwrap();

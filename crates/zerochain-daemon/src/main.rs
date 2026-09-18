@@ -34,6 +34,8 @@ async fn main() -> Result<()> {
             force,
             parents,
         } => {
+            // Ensure a jj repo exists so engine auto-commit finds one.
+            zerochain_core::jj::init_repo(path.as_deref().unwrap_or(&cli.workspace)).await;
             state
                 .init_workflow(zerochain_engine::InitWorkflowParams {
                     name: &name,
@@ -163,9 +165,8 @@ async fn main() -> Result<()> {
             workflow_id,
             output,
         } => {
-            let output_dir = output.unwrap_or_else(|| {
-                std::path::PathBuf::from(format!("{}-okf", workflow_id))
-            });
+            let output_dir =
+                output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}-okf", workflow_id)));
             state.export_okf(&workflow_id, &output_dir).await?;
             println!("exported OKF bundle: {}", output_dir.display());
         }

@@ -5,12 +5,12 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use zerochain_cas::{CasStore, Cid};
 use zerochain_core::context::{Context as StageContext, ContextCache};
+use zerochain_core::okf::{to_md_with_frontmatter, zerochain_actor, OkfActor, OkfFrontmatter};
 use zerochain_core::stage::Stage;
 use zerochain_core::workflow::Workflow;
 use zerochain_core::{
     acquire_sandboxed_vm, load_shared_store, run_hook, save_shared_store, LuaContext, PooledLua,
 };
-use zerochain_core::okf::{to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
 use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
@@ -22,10 +22,7 @@ use crate::error::DaemonError;
 use crate::state::AppState;
 use crate::tool_driver;
 
-fn okf_frontmatter_for_stage(
-    stage_id: &str,
-    definition_of_done: Option<String>,
-) -> OkfFrontmatter {
+fn okf_frontmatter_for_stage(stage_id: &str, definition_of_done: Option<String>) -> OkfFrontmatter {
     OkfFrontmatter {
         okf_type: "Stage Output".into(),
         title: Some(stage_id.into()),
@@ -229,9 +226,7 @@ impl<'a> LLMStageDriver<'a> {
 
         self.index_output(&ctx, &output).await?;
 
-        if let Err(e) = self.publish_result_contribution(&ctx, &output).await {
-            tracing::warn!(error = %e, "failed to publish result contribution");
-        }
+        self.publish_result_contribution(&ctx, &output).await;
 
         if let Some(ref script) = lua_script {
             run_post_completion_hooks(
@@ -354,17 +349,16 @@ impl<'a> LLMStageDriver<'a> {
 
     /// Publish a `result` contribution for this stage's output, parented on the
     /// workflow's most recent contribution (spec §5). Best-effort: failures
-    /// never fail the stage (spec §7).
-    async fn publish_result_contribution(
-        &self,
-        ctx: &Option<StageContext>,
-        output: &str,
-    ) -> Result<(), DaemonError> {
+    /// are logged and swallowed, never propagated (spec §7). Infallible: all
+    /// fallible steps already handle their own errors. Result bodies are
+    /// stored in full intentionally (unlike truncated setup bodies); the
+    /// embedding index truncates at 4000 chars when embedding.
+    async fn publish_result_contribution(&self, ctx: &Option<StageContext>, output: &str) {
         let Some(ctx) = ctx else {
-            return Ok(());
+            return;
         };
         if !ctx.frontmatter.index_output || output.is_empty() {
-            return Ok(());
+            return;
         }
 
         // Fresh read so chaining sees contributions published mid-run by tools.
@@ -374,8 +368,11 @@ impl<'a> LLMStageDriver<'a> {
             .await
             .into_iter()
             .collect();
-        let metric = ctx.frontmatter.metric.clone().map(|m| {
-            zerochain_memory::ContributionMetric {
+        let metric = ctx
+            .frontmatter
+            .metric
+            .clone()
+            .map(|m| zerochain_memory::ContributionMetric {
                 name: m.name,
                 value: m.value,
                 direction: match m.direction {
@@ -386,8 +383,7 @@ impl<'a> LLMStageDriver<'a> {
                         zerochain_memory::MetricDirection::Higher
                     }
                 },
-            }
-        });
+            });
         let artifacts = match &self.cas {
             Some(cas) => match cas.put(output.as_bytes()).await {
                 Ok(cid) => vec![format!("{cid}")],
@@ -411,13 +407,13 @@ impl<'a> LLMStageDriver<'a> {
         record.artifacts = artifacts;
 
         if let Some(id) = self.state.publish_contribution(record).await {
+            tracing::debug!(record_id = %id, workflow = %self.workflow_id, "published result contribution");
             zerochain_core::jj::auto_commit(
                 &self.state.workspace_root,
                 &format!("graph: result {id}"),
             )
             .await;
         }
-        Ok(())
     }
 }
 
@@ -983,11 +979,9 @@ mod tests {
         };
         driver.execute(&mut workflows).await.unwrap();
 
-        let graph = zerochain_memory::Graph::open(
-            tmp.path().join(".zerochain").join("graph"),
-        )
-        .await
-        .unwrap();
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
         let mut all = graph.index().all().into_iter();
         let setup = all
             .find(|r| r.record_type == zerochain_memory::ContributionType::Setup)
@@ -1003,6 +997,96 @@ mod tests {
         let metric = result.metric.expect("metric captured");
         assert_eq!(metric.name, "bpb");
         assert!((metric.value - 1.899).abs() < 1e-9);
+        assert_eq!(metric.direction, zerochain_memory::MetricDirection::Lower);
+    }
+
+    #[tokio::test]
+    async fn result_nodes_chain_across_stages() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "graph-chain-stages",
+                path: None,
+                template: Some("00_spec,01_eval"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.md"),
+            "---\nindex_output: true\n---\nSpecify.",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            wf.root.join("01_eval").join("CONTEXT.md"),
+            "---\nindex_output: true\n---\nEvaluate.",
+        )
+        .await
+        .unwrap();
+
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let wf_root = workflows.get("graph-chain-stages").unwrap().root.clone();
+
+        let spec_stage = Stage::from_dir(&wf_root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "spec output".into(),
+        };
+        let driver = LLMStageDriver {
+            workflow_id: "graph-chain-stages",
+            stage: &spec_stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let eval_stage = Stage::from_dir(&wf_root.join("01_eval")).await.unwrap();
+        let llm = FakeLlm {
+            response: "eval output".into(),
+        };
+        let driver = LLMStageDriver {
+            workflow_id: "graph-chain-stages",
+            stage: &eval_stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
+        let results: Vec<_> = graph
+            .index()
+            .all()
+            .into_iter()
+            .filter(|r| r.record_type == zerochain_memory::ContributionType::Result)
+            .cloned()
+            .collect();
+        assert_eq!(results.len(), 2, "one result node per stage run");
+        let first = results
+            .iter()
+            .find(|r| r.stage.as_deref() == Some("00_spec"))
+            .expect("00_spec result");
+        let second = results
+            .iter()
+            .find(|r| r.stage.as_deref() == Some("01_eval"))
+            .expect("01_eval result");
+        assert_eq!(
+            second.parents,
+            vec![first.id.clone()],
+            "second stage's result chains to the first stage's result"
+        );
     }
 
     #[tokio::test]
@@ -1043,11 +1127,9 @@ mod tests {
         };
         driver.execute(&mut workflows).await.unwrap();
 
-        let graph = zerochain_memory::Graph::open(
-            tmp.path().join(".zerochain").join("graph"),
-        )
-        .await
-        .unwrap();
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
         assert_eq!(
             graph.index().all().len(),
             1,

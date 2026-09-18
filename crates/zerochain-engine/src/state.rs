@@ -10,13 +10,17 @@ use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
 use zerochain_core::graph::ControlOutcome;
 use zerochain_core::jj;
-use zerochain_core::okf::{split_frontmatter, to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
+use zerochain_core::okf::{
+    split_frontmatter, to_md_with_frontmatter, zerochain_actor, OkfActor, OkfFrontmatter,
+};
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
 use zerochain_fs::{acquire_lock, clean_output, CowPlatform};
 use zerochain_llm::{LLMConfig, LLMFactory, ProviderId, LLM};
-use zerochain_memory::{ContributionRecord, ContributionType, EmbeddingModel, FastEmbedModel, Graph, MemoryStore};
+use zerochain_memory::{
+    ContributionRecord, ContributionType, EmbeddingModel, FastEmbedModel, Graph, MemoryStore,
+};
 use zerochain_tools::ToolRegistry;
 
 /// Shared request type for HTTP and MCP entrypoints.
@@ -405,21 +409,27 @@ impl AppState {
 
     /// Most recent contribution in a workflow, for parent chaining (spec §5).
     pub async fn graph_latest_in_workflow(&self, workflow_id: &str) -> Option<String> {
-        let graph = Graph::open(self.graph_dir()).await.map_err(|e| {
-            tracing::warn!(error = %e, "failed to open contribution graph");
-        }).ok()?;
-        graph.index().latest_in_workflow(workflow_id).map(|r| r.id.clone())
+        let graph = Graph::open(self.graph_dir())
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "failed to open contribution graph");
+            })
+            .ok()?;
+        graph
+            .index()
+            .latest_in_workflow(workflow_id)
+            .map(|r| r.id.clone())
     }
 
     /// Publish a contribution to the workspace graph. Best-effort: errors are
     /// logged and returned as None; never fails the caller (spec §7).
-    pub async fn publish_contribution(
-        &self,
-        record: ContributionRecord,
-    ) -> Option<String> {
-        let mut graph = Graph::open(self.graph_dir()).await.map_err(|e| {
-            tracing::warn!(error = %e, "failed to open contribution graph");
-        }).ok()?;
+    pub async fn publish_contribution(&self, record: ContributionRecord) -> Option<String> {
+        let mut graph = Graph::open(self.graph_dir())
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "failed to open contribution graph");
+            })
+            .ok()?;
         match graph.publish(record).await {
             Ok(published) => Some(published.id),
             Err(e) => {
@@ -543,10 +553,12 @@ impl AppState {
 
         self.workflows.insert(workflow.id.clone(), workflow.clone());
 
-        let task = Workflow::find_task(&workflow.root).await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "failed to read task file");
-            None
-        });
+        let task = Workflow::find_task(&workflow.root)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "failed to read task file");
+                None
+            });
         let mut setup_parents: Vec<String> = parents;
         if let Some(task) = &task {
             setup_parents.extend(task.parents.iter().cloned());
@@ -571,14 +583,17 @@ impl AppState {
 
         // Fresh-open so unknown-parent filtering sees every record on disk
         // (code-review amendment: no cached handle).
-        let existing: Option<std::collections::HashSet<String>> =
-            match Graph::open(self.graph_dir()).await {
-                Ok(graph) => Some(graph.index().all().iter().map(|r| r.id.clone()).collect()),
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to open contribution graph for parent filter; keeping declared parents");
-                    None
-                }
-            };
+        let existing: Option<std::collections::HashSet<String>> = match Graph::open(
+            self.graph_dir(),
+        )
+        .await
+        {
+            Ok(graph) => Some(graph.index().all().iter().map(|r| r.id.clone()).collect()),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open contribution graph for parent filter; keeping declared parents");
+                None
+            }
+        };
         let kept: Vec<String> = setup_parents
             .into_iter()
             .filter(|p| match &existing {
@@ -965,7 +980,11 @@ impl AppState {
             .map_err(|e| DaemonError::io(&concepts_dir, e))?;
 
         let plan = wf.execution_plan();
-        let status = if plan.is_complete() { "complete" } else { "active" };
+        let status = if plan.is_complete() {
+            "complete"
+        } else {
+            "active"
+        };
 
         let mut manifest_lines: Vec<String> = Vec::new();
         let mut log_lines: Vec<String> = Vec::new();
@@ -993,7 +1012,10 @@ impl AppState {
                 .await
                 .map_err(|e| DaemonError::io(&concept_path, e))?;
 
-            manifest_lines.push(format!("- [{}](concepts/{}.md)", stage.id.raw, stage.id.raw));
+            manifest_lines.push(format!(
+                "- [{}](concepts/{}.md)",
+                stage.id.raw, stage.id.raw
+            ));
         }
 
         let index_body = format!(
@@ -1183,7 +1205,8 @@ impl AppState {
             status: Some("stable".into()),
             ..Default::default()
         };
-        let okf_stdout = to_md_with_frontmatter(&fm, &result.stdout).map_err(DaemonError::Workflow)?;
+        let okf_stdout =
+            to_md_with_frontmatter(&fm, &result.stdout).map_err(DaemonError::Workflow)?;
         let result_path = stage.output_path.join("result.md");
         tokio::fs::write(&result_path, &okf_stdout)
             .await
@@ -1664,7 +1687,9 @@ mod tests {
             .unwrap();
 
         let stage0 = &wf.stages[0];
-        tokio::fs::create_dir_all(&stage0.output_path).await.unwrap();
+        tokio::fs::create_dir_all(&stage0.output_path)
+            .await
+            .unwrap();
         tokio::fs::write(
             stage0.output_path.join("result.md"),
             "---\ntype: Stage Output\ntitle: 00_spec\n---\n\n# Result\n\nDone.\n",
@@ -1745,10 +1770,9 @@ mod tests {
             .await
             .unwrap();
 
-        let graph =
-            Graph::open(tmp.path().join(".zerochain").join("graph"))
-                .await
-                .unwrap();
+        let graph = Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
         let all = graph.index().all();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].record_type, ContributionType::Setup);
@@ -1785,10 +1809,9 @@ mod tests {
             .await
             .unwrap();
 
-        let graph =
-            Graph::open(tmp.path().join(".zerochain").join("graph"))
-                .await
-                .unwrap();
+        let graph = Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
         let setup = graph
             .index()
             .all()
@@ -1813,10 +1836,9 @@ mod tests {
             })
             .await
             .unwrap();
-        let graph =
-            Graph::open(tmp.path().join(".zerochain").join("graph"))
-                .await
-                .unwrap();
+        let graph = Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
         let setup = graph.index().all()[0].clone();
         assert!(
             setup.parents.is_empty(),

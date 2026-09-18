@@ -121,7 +121,10 @@ mod tests {
     async fn load_all_creates_handles_for_existing_workflows() {
         let tmp = tempfile::tempdir().unwrap();
         let registry = WorkflowRegistry::new(tmp.path().to_path_buf());
-        registry.init_workflow("alpha".into(), None, vec![]).await.unwrap();
+        registry
+            .init_workflow("alpha".into(), None, vec![])
+            .await
+            .unwrap();
 
         let fresh = WorkflowRegistry::new(tmp.path().to_path_buf());
         fresh.load_all().await.unwrap();
@@ -135,8 +138,14 @@ mod tests {
     async fn list_workflows_returns_all_disk_workflows() {
         let tmp = tempfile::tempdir().unwrap();
         let registry = WorkflowRegistry::new(tmp.path().to_path_buf());
-        registry.init_workflow("beta".into(), None, vec![]).await.unwrap();
-        registry.init_workflow("alpha".into(), None, vec![]).await.unwrap();
+        registry
+            .init_workflow("beta".into(), None, vec![])
+            .await
+            .unwrap();
+        registry
+            .init_workflow("alpha".into(), None, vec![])
+            .await
+            .unwrap();
 
         let list = registry.list_workflows().await;
         assert_eq!(list.len(), 2);
