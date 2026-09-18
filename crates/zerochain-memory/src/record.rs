@@ -119,8 +119,9 @@ pub struct ContributionRecord {
     pub body: String,
 }
 
-/// Serialization shape used for the canonical content hash. `serde_json::Map`
-/// is a `BTreeMap` (sorted keys), so this is canonical for a given record.
+/// Serialization shape used for the canonical content hash. Serialization
+/// follows struct field declaration order, which is fixed, so the encoding
+/// is deterministic for a given record.
 #[derive(Serialize)]
 struct CanonicalRecord<'a> {
     #[serde(rename = "type")]
@@ -140,6 +141,8 @@ struct CanonicalRecord<'a> {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct RecordFrontmatter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     #[serde(rename = "type")]
     record_type: Option<String>,
     #[serde(default)]
@@ -202,7 +205,7 @@ impl ContributionRecord {
             body: &self.body,
         };
         let json = serde_json::to_string(&canonical)
-            .unwrap_or_else(|e| MemoryError::Serialization(e.to_string()).to_string());
+            .expect("canonical record serialization is infallible");
         let hash = blake3::hash(json.as_bytes()).to_hex();
         format!("c-{}", &hash[..16])
     }
@@ -234,7 +237,13 @@ impl ContributionRecord {
     }
 
     pub fn to_markdown(&self) -> Result<String> {
+        let id = if self.id.is_empty() {
+            self.compute_id()
+        } else {
+            self.id.clone()
+        };
         let fm = RecordFrontmatter {
+            id: Some(id),
             record_type: Some(self.record_type.as_str().to_string()),
             parents: self.parents.clone(),
             actor: Some(self.actor.clone()),
@@ -251,6 +260,8 @@ impl ContributionRecord {
         Ok(format!("---\n{yaml}---\n\n{}", self.body))
     }
 
+    /// Structural parse only: no `validate()` and no content-hash check —
+    /// use `from_markdown_with_id` for untrusted files.
     pub fn from_markdown(content: &str) -> Result<Self> {
         let trimmed = content.trim_start();
         if !trimmed.starts_with("---") {
@@ -259,11 +270,19 @@ impl ContributionRecord {
             ));
         }
         let after_first = &trimmed[3..];
-        let end_marker = after_first
-            .find("\n---")
-            .ok_or_else(|| MemoryError::InvalidInput("unclosed frontmatter".to_string()))?;
-        let yaml_str = &after_first[..end_marker];
-        let body = after_first[end_marker + 4..].trim_start().to_string();
+        // The closing delimiter must be a line that is exactly `---`; a line
+        // like `---junk` must not terminate the frontmatter.
+        let (yaml_str, body) = if let Some(i) = after_first.find("\n---\n") {
+            (
+                &after_first[..i],
+                after_first[i + 5..].trim_start().to_string(),
+            )
+        } else if let Some(yaml) = after_first.strip_suffix("\n---") {
+            // Frontmatter closed by a trailing `---` at end of input.
+            (yaml, String::new())
+        } else {
+            return Err(MemoryError::InvalidInput("unclosed frontmatter".to_string()));
+        };
         let fm: RecordFrontmatter = serde_yml::from_str(yaml_str)
             .map_err(|e| MemoryError::Serialization(e.to_string()))?;
 
@@ -273,11 +292,13 @@ impl ContributionRecord {
                 .ok_or_else(|| MemoryError::InvalidInput("missing type".to_string()))?,
         )?;
         let record = ContributionRecord {
-            id: String::new(),
+            id: fm.id.unwrap_or_default(),
             record_type,
             parents: fm.parents,
             actor: fm.actor.unwrap_or_default(),
-            created: fm.created.unwrap_or_else(Utc::now),
+            created: fm
+                .created
+                .ok_or_else(|| MemoryError::InvalidInput("missing created".to_string()))?,
             workflow: fm.workflow,
             stage: fm.stage,
             metric: fm.metric,
@@ -296,6 +317,12 @@ impl ContributionRecord {
     /// Parse a record file and verify its embedded `id:` matches its content.
     pub fn from_markdown_with_id(content: &str, id: &str) -> Result<Self> {
         let mut record = Self::from_markdown(content)?;
+        if !record.id.is_empty() && record.id != id {
+            return Err(MemoryError::InvalidInput(format!(
+                "record id mismatch: file says {}, expected {id}",
+                record.id
+            )));
+        }
         if record.compute_id() != id {
             return Err(MemoryError::InvalidInput(format!(
                 "record id {id} does not match content hash"
@@ -351,7 +378,14 @@ mod tests {
         let mut rec = sample_record();
         rec.id = rec.compute_id();
         let md = rec.to_markdown().unwrap();
+        assert!(
+            md.starts_with(&format!("---\nid: {}\n", rec.id)),
+            "markdown must embed id as the first frontmatter line"
+        );
+        let bare = ContributionRecord::from_markdown(&md).unwrap();
+        assert_eq!(bare.id, rec.id);
         let parsed = ContributionRecord::from_markdown_with_id(&md, &rec.id).unwrap();
+        assert_eq!(parsed.id, rec.id);
         assert_eq!(parsed.record_type, rec.record_type);
         assert_eq!(parsed.parents, rec.parents);
         assert_eq!(parsed.actor, rec.actor);
@@ -396,5 +430,53 @@ mod tests {
         assert!(ContributionType::parse("nope").is_err());
         assert_eq!(Verdict::parse("partial").unwrap(), Verdict::Partial);
         assert!(Verdict::parse("nope").is_err());
+    }
+
+    #[test]
+    fn to_markdown_computes_id_when_unset() {
+        let rec = sample_record();
+        assert!(rec.id.is_empty());
+        let md = rec.to_markdown().unwrap();
+        assert!(
+            md.starts_with(&format!("---\nid: {}\n", rec.compute_id())),
+            "markdown must embed the computed id"
+        );
+    }
+
+    #[test]
+    fn tampered_body_rejected_by_from_markdown_with_id() {
+        let mut rec = sample_record();
+        rec.id = rec.compute_id();
+        let md = rec.to_markdown().unwrap();
+        let tampered = md.replacen("Six-donor", "Six-donox", 1);
+        assert_ne!(md, tampered);
+        assert!(ContributionRecord::from_markdown_with_id(&tampered, &rec.id).is_err());
+    }
+
+    #[test]
+    fn embedded_id_mismatch_rejected() {
+        let mut rec = sample_record();
+        rec.id = rec.compute_id();
+        let good_id = rec.id.clone();
+        let md = rec.to_markdown().unwrap();
+        let tampered = md.replacen(&format!("id: {good_id}"), "id: c-eeeeeeeeeeeeeeee", 1);
+        assert_ne!(md, tampered);
+        let err = ContributionRecord::from_markdown_with_id(&tampered, &good_id).unwrap_err();
+        assert!(err.to_string().contains("record id mismatch"));
+    }
+
+    #[test]
+    fn missing_created_rejected() {
+        let md = "---\ntype: insight\nactor: a\n---\n\nbody";
+        let err = ContributionRecord::from_markdown(md).unwrap_err();
+        assert!(err.to_string().contains("missing created"));
+    }
+
+    #[test]
+    fn dashed_line_inside_frontmatter_value_not_truncated() {
+        // `---junk` is not a closing delimiter; with no real closing
+        // delimiter the parse must error rather than silently truncate.
+        let md = "---\ntype: insight\n---junk\nbody";
+        assert!(ContributionRecord::from_markdown(md).is_err());
     }
 }

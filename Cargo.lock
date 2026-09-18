@@ -5162,9 +5162,12 @@ name = "zerochain-memory"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "blake3",
+ "chrono",
  "fastembed",
  "serde",
  "serde_json",
+ "serde_yml",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
