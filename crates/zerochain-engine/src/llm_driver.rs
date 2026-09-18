@@ -758,6 +758,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -813,6 +814,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();

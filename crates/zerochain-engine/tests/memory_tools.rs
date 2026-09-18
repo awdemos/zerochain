@@ -110,6 +110,7 @@ async fn memory_tools_can_query_indexed_output() {
             path: None,
             template: Some("00_memory"),
             force: false,
+            parents: Vec::new(),
         })
         .await
         .unwrap();

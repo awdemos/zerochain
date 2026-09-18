@@ -65,6 +65,7 @@ async fn tool_stage_executes_http_call() {
             path: None,
             template: Some("00_tool"),
             force: false,
+            parents: Vec::new(),
         })
         .await
         .unwrap();

@@ -9,13 +9,14 @@ use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
 use zerochain_core::context::ContextCache;
 use zerochain_core::graph::ControlOutcome;
+use zerochain_core::jj;
 use zerochain_core::okf::{split_frontmatter, to_md_with_frontmatter, OkfActor, OkfFrontmatter, zerochain_actor};
 use zerochain_core::stage::{Stage, StageId};
 use zerochain_core::task::Task;
 use zerochain_core::workflow::Workflow;
 use zerochain_fs::{acquire_lock, clean_output, CowPlatform};
 use zerochain_llm::{LLMConfig, LLMFactory, ProviderId, LLM};
-use zerochain_memory::{EmbeddingModel, FastEmbedModel, MemoryStore};
+use zerochain_memory::{ContributionRecord, ContributionType, EmbeddingModel, FastEmbedModel, Graph, MemoryStore};
 use zerochain_tools::ToolRegistry;
 
 /// Shared request type for HTTP and MCP entrypoints.
@@ -25,6 +26,8 @@ pub struct InitWorkflowRequest {
     pub name: String,
     #[serde(default)]
     pub template: Option<String>,
+    #[serde(default)]
+    pub parents: Vec<String>,
 }
 
 pub struct InitWorkflowParams<'a> {
@@ -32,6 +35,7 @@ pub struct InitWorkflowParams<'a> {
     pub path: Option<&'a Path>,
     pub template: Option<&'a str>,
     pub force: bool,
+    pub parents: Vec<String>,
 }
 
 pub struct AppState {
@@ -385,6 +389,36 @@ impl AppState {
         Ok(Some(next_stage.raw))
     }
 
+    fn graph_dir(&self) -> PathBuf {
+        self.workspace_root.join(".zerochain").join("graph")
+    }
+
+    /// Most recent contribution in a workflow, for parent chaining (spec §5).
+    pub async fn graph_latest_in_workflow(&self, workflow_id: &str) -> Option<String> {
+        let graph = Graph::open(self.graph_dir()).await.map_err(|e| {
+            tracing::warn!(error = %e, "failed to open contribution graph");
+        }).ok()?;
+        graph.index().latest_in_workflow(workflow_id).map(|r| r.id.clone())
+    }
+
+    /// Publish a contribution to the workspace graph. Best-effort: errors are
+    /// logged and returned as None; never fails the caller (spec §7).
+    pub async fn publish_contribution(
+        &self,
+        record: ContributionRecord,
+    ) -> Option<String> {
+        let mut graph = Graph::open(self.graph_dir()).await.map_err(|e| {
+            tracing::warn!(error = %e, "failed to open contribution graph");
+        }).ok()?;
+        match graph.publish(record).await {
+            Ok(published) => Some(published.id),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to publish contribution");
+                None
+            }
+        }
+    }
+
     pub async fn init_workflow(
         &mut self,
         params: InitWorkflowParams<'_>,
@@ -394,6 +428,7 @@ impl AppState {
             path,
             template,
             force,
+            parents,
         } = params;
         let base = path.unwrap_or(&self.workspace_root);
         let wf_base = workflow_dir(base);
@@ -497,6 +532,59 @@ impl AppState {
         }
 
         self.workflows.insert(workflow.id.clone(), workflow.clone());
+
+        let task = Workflow::find_task(&workflow.root).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to read task file");
+            None
+        });
+        let mut setup_parents: Vec<String> = parents;
+        if let Some(task) = &task {
+            setup_parents.extend(task.parents.iter().cloned());
+        }
+        setup_parents.dedup();
+
+        let body = task
+            .as_ref()
+            .map(|t| {
+                if t.description.trim().is_empty() {
+                    t.title.clone()
+                } else {
+                    t.description.clone()
+                }
+            })
+            .unwrap_or_else(|| workflow.id.clone());
+
+        // Fresh-open so unknown-parent filtering sees every record on disk
+        // (code-review amendment: no cached handle).
+        let existing: std::collections::HashSet<String> = match Graph::open(self.graph_dir()).await {
+            Ok(graph) => graph.index().all().iter().map(|r| r.id.clone()).collect(),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to open contribution graph");
+                std::collections::HashSet::new()
+            }
+        };
+        let kept: Vec<String> = setup_parents
+            .into_iter()
+            .filter(|p| {
+                let ok = existing.contains(p);
+                if !ok {
+                    tracing::warn!(parent = %p, "dropping unknown parent contribution");
+                }
+                ok
+            })
+            .collect();
+
+        let mut record = ContributionRecord::new(
+            ContributionType::Setup,
+            zerochain_core::okf::zerochain_actor(),
+            body,
+        );
+        record.parents = kept;
+        record.workflow = Some(workflow.id.clone());
+        if let Some(id) = self.publish_contribution(record).await {
+            jj::auto_commit(&self.workspace_root, &format!("graph: setup {id}")).await;
+        }
+
         Ok(workflow)
     }
 
@@ -1214,6 +1302,7 @@ mod tests {
                 path: None,
                 template: None,
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1232,6 +1321,7 @@ mod tests {
                 path: None,
                 template: Some("01_a,02_b"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1250,6 +1340,7 @@ mod tests {
                 path: None,
                 template: None,
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1259,6 +1350,7 @@ mod tests {
                 path: None,
                 template: None,
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1278,6 +1370,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1301,6 +1394,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1327,6 +1421,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1358,6 +1453,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec,01_impl"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1392,6 +1488,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1435,6 +1532,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1458,6 +1556,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1504,6 +1603,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1539,6 +1639,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec,01_impl"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -1608,5 +1709,99 @@ mod tests {
 
         let latest = find_latest_snapshot(dir, "00_spec").await.unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250101T000000Z");
+    }
+
+    #[tokio::test]
+    async fn init_workflow_publishes_setup_node() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        state
+            .init_workflow(InitWorkflowParams {
+                name: "graph-setup",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        let graph =
+            Graph::open(tmp.path().join(".zerochain").join("graph"))
+                .await
+                .unwrap();
+        let all = graph.index().all();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].record_type, ContributionType::Setup);
+        assert_eq!(all[0].workflow.as_deref(), Some("graph-setup"));
+        assert!(all[0].parents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn init_workflow_links_declared_parents() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let parent_id = {
+            let mut graph = Graph::open(tmp.path().join(".zerochain").join("graph"))
+                .await
+                .unwrap();
+            graph
+                .publish(ContributionRecord::new(
+                    ContributionType::Insight,
+                    "prior-agent",
+                    "earlier finding",
+                ))
+                .await
+                .unwrap()
+                .id
+        };
+        let mut state = AppState::new(tmp.path(), None).await;
+        state
+            .init_workflow(InitWorkflowParams {
+                name: "graph-child",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: vec![parent_id.clone()],
+            })
+            .await
+            .unwrap();
+
+        let graph =
+            Graph::open(tmp.path().join(".zerochain").join("graph"))
+                .await
+                .unwrap();
+        let setup = graph
+            .index()
+            .all()
+            .into_iter()
+            .find(|r| r.record_type == ContributionType::Setup)
+            .cloned()
+            .expect("setup node");
+        assert_eq!(setup.parents, vec![parent_id]);
+    }
+
+    #[tokio::test]
+    async fn init_workflow_drops_unknown_parents() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        state
+            .init_workflow(InitWorkflowParams {
+                name: "graph-orphan",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: vec!["c-unknown00000000".to_string()],
+            })
+            .await
+            .unwrap();
+        let graph =
+            Graph::open(tmp.path().join(".zerochain").join("graph"))
+                .await
+                .unwrap();
+        let setup = graph.index().all()[0].clone();
+        assert!(
+            setup.parents.is_empty(),
+            "unknown parent filtered, init still succeeds"
+        );
     }
 }

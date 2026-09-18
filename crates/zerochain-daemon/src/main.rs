@@ -32,6 +32,7 @@ async fn main() -> Result<()> {
             path,
             template,
             force,
+            parents,
         } => {
             state
                 .init_workflow(zerochain_engine::InitWorkflowParams {
@@ -39,6 +40,7 @@ async fn main() -> Result<()> {
                     path: path.as_deref(),
                     template: template.as_deref(),
                     force,
+                    parents,
                 })
                 .await?;
             println!("initialized workflow: {name}");

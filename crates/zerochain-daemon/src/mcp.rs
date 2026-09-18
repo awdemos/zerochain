@@ -84,6 +84,7 @@ impl ZerochainMcpServer {
         rmcp::handler::server::wrapper::Parameters(zerochain_engine::InitWorkflowRequest {
             name,
             template,
+            parents,
             ..
         }): rmcp::handler::server::wrapper::Parameters<
             zerochain_engine::InitWorkflowRequest,
@@ -96,7 +97,7 @@ impl ZerochainMcpServer {
         }
         let name_for_msg = name.clone();
         let registry = self.state.write().await;
-        match registry.init_workflow(name, template).await {
+        match registry.init_workflow(name, template, parents).await {
             Ok(_) => tool_success(format!("initialized workflow: {name_for_msg}")),
             Err(e) => tool_error(format!("init failed: {e}")),
         }

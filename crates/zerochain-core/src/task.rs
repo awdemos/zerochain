@@ -26,6 +26,7 @@ pub struct Task {
     pub execution: Option<TaskExecution>,
     #[serde(default)]
     pub acceptance_criteria: Vec<String>,
+    /// Contribution record IDs (c-<hex>) this task builds on; not CAS Cids.
     #[serde(default)]
     pub parents: Vec<String>,
     #[serde(skip)]
@@ -322,5 +323,13 @@ login, token management, and session validation.
     fn task_parents_default_empty() {
         let task = Task::parse("---\nid: T2\ntitle: No parents\n---\nBody").unwrap();
         assert!(task.parents.is_empty());
+    }
+
+    #[test]
+    fn task_builder_parents() {
+        let task = Task::builder("T3", "Builder parents")
+            .parents(vec!["c-abc".to_string()])
+            .build();
+        assert_eq!(task.parents, vec!["c-abc".to_string()]);
     }
 }

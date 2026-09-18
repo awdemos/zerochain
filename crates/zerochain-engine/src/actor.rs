@@ -11,6 +11,7 @@ pub enum ActorMessage {
     InitWorkflow {
         name: String,
         template: Option<String>,
+        parents: Vec<String>,
         respond: oneshot::Sender<Result<Workflow, DaemonError>>,
     },
     RunStage {
@@ -86,6 +87,7 @@ impl WorkflowActor {
             ActorMessage::InitWorkflow {
                 name,
                 template,
+                parents,
                 respond,
             } => {
                 let params = InitWorkflowParams {
@@ -93,6 +95,7 @@ impl WorkflowActor {
                     path: None,
                     template: template.as_deref(),
                     force: false,
+                    parents,
                 };
                 let result = self.state.init_workflow(params).await;
                 let _ = respond.send(result);
@@ -216,10 +219,12 @@ impl WorkflowHandle {
         &self,
         name: String,
         template: Option<String>,
+        parents: Vec<String>,
     ) -> Result<Workflow, DaemonError> {
         self.call(|respond| ActorMessage::InitWorkflow {
             name,
             template,
+            parents,
             respond,
         })
         .await?

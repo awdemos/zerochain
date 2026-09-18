@@ -33,6 +33,8 @@ pub enum Commands {
         template: Option<String>,
         #[arg(short, long, help = "Overwrite an existing workflow")]
         force: bool,
+        #[arg(long = "parent", help = "Parent contribution ID to build on (repeatable)")]
+        parents: Vec<String>,
     },
     #[command(about = "Execute the next pending stage (or a specific stage)")]
     Run {

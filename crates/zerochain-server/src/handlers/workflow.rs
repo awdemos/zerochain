@@ -43,7 +43,7 @@ pub async fn init(
             .into_response();
     }
     let registry = state.registry.read().await;
-    match registry.init_workflow(body.name, body.template).await {
+    match registry.init_workflow(body.name, body.template, body.parents).await {
         Ok(wf) => {
             jj::init_repo(&state.workspace).await;
             let id = wf.id.clone();

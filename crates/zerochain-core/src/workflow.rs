@@ -327,7 +327,7 @@ impl Workflow {
         Ok(())
     }
 
-    async fn find_task(path: &Path) -> Result<Option<Task>> {
+    pub async fn find_task(path: &Path) -> Result<Option<Task>> {
         let candidates = ["task.md", "TASK.md", "Backlog.md", "backlog.md"];
         for candidate in candidates {
             let task_path = path.join(candidate);

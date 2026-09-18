@@ -94,7 +94,7 @@ impl ContextFrontmatter {
                 .tool_loop_max_iterations
                 .or(base.tool_loop_max_iterations),
             index_output: self.index_output || base.index_output,
-            metric: self.metric.clone().or(base.metric.clone()),
+            metric: self.metric.clone().or_else(|| base.metric.clone()),
             memory_sources: if self.memory_sources.is_empty() {
                 base.memory_sources.clone()
             } else {
@@ -159,6 +159,9 @@ mod tests {
         let override_yaml = "---\nmetric:\n  name: loss\n  value: 0.5\n  direction: higher\n";
         let child: ContextFrontmatter = serde_yml::from_str(override_yaml).unwrap();
         let merged = child.merge(&base);
-        assert_eq!(merged.metric.unwrap().name, "loss");
+        let metric = merged.metric.unwrap();
+        assert_eq!(metric.name, "loss");
+        assert_eq!(metric.value, 0.5);
+        assert_eq!(metric.direction, MetricDirection::Higher);
     }
 }

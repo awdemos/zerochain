@@ -105,7 +105,14 @@ pub fn table_to_frontmatter(table: &Table) -> Result<ContextFrontmatter> {
         tools: parse_strings(table, "tools")?,
         tool_loop_max_iterations: get_u32(table, "tool_loop_max_iterations")?,
         index_output: get_bool(table, "index_output")?,
-        metric: None,
+        metric: {
+            if table.contains_key("metric").unwrap_or(false) {
+                tracing::warn!(
+                    "CONTEXT.lua cannot declare a stage metric; use CONTEXT.md frontmatter"
+                );
+            }
+            None
+        },
         memory_sources: parse_strings(table, "memory_sources")?,
         memory_chunk_size: get_usize(table, "memory_chunk_size")?,
         memory_chunk_overlap: get_usize(table, "memory_chunk_overlap")?,
