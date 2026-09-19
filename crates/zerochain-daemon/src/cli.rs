@@ -17,7 +17,7 @@ pub struct Cli {
     pub command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(about = "Create a new workflow with numbered stages")]
     Init {
@@ -33,6 +33,11 @@ pub enum Commands {
         template: Option<String>,
         #[arg(short, long, help = "Overwrite an existing workflow")]
         force: bool,
+        #[arg(
+            long = "parent",
+            help = "Parent contribution ID to build on (repeatable)"
+        )]
+        parents: Vec<String>,
     },
     #[command(about = "Execute the next pending stage (or a specific stage)")]
     Run {
@@ -72,6 +77,45 @@ pub enum Commands {
         workflow_id: String,
         #[arg(short, long, help = "Output directory for the OKF bundle")]
         output: Option<PathBuf>,
+    },
+    #[command(about = "Publish a contribution to the workspace graph")]
+    Contribute {
+        #[arg(
+            long = "type",
+            help = "Contribution type: insight, hypothesis, or report"
+        )]
+        kind: String,
+        #[arg(short, long, help = "Markdown body of the contribution")]
+        body: String,
+        #[arg(long = "parent", help = "Parent contribution ID (repeatable)")]
+        parents: Vec<String>,
+        #[arg(long = "tag", help = "Tag (repeatable)")]
+        tags: Vec<String>,
+        #[arg(long, help = "Metric spec: name=bpb,value=1.9,direction=lower")]
+        metric: Option<String>,
+    },
+    #[command(about = "Publish a verification verdict for a contribution")]
+    Verify {
+        #[arg(help = "Target contribution ID")]
+        target: String,
+        #[arg(long, help = "Verdict: confirmed, partial, or failed")]
+        verdict: String,
+        #[arg(short, long, help = "Evidence body")]
+        body: String,
+    },
+    #[command(about = "Inspect the workspace contribution graph")]
+    Graph {
+        #[arg(
+            long,
+            help = "View: recent, leaves, open_hypotheses, unverified, negative, leaders"
+        )]
+        view: Option<String>,
+        #[arg(long = "type", help = "Filter by contribution type")]
+        record_type: Option<String>,
+        #[arg(long, help = "Filter by workflow")]
+        workflow: Option<String>,
+        #[arg(long, help = "Emit JSON")]
+        json: bool,
     },
     #[command(about = "Start MCP server over stdio for AI tool integration")]
     Mcp,

@@ -17,6 +17,7 @@ pub struct ZerochainMcpServer {
     #[allow(dead_code)] // read by #[tool_router] macro-generated code
     tool_router: ToolRouter<Self>,
     state: Arc<RwLock<WorkflowRegistry>>,
+    workspace: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -56,6 +57,7 @@ impl ZerochainMcpServer {
         Self {
             tool_router: Self::tool_router(),
             state: Arc::new(RwLock::new(registry)),
+            workspace: workspace.as_ref().to_path_buf(),
         }
     }
 
@@ -77,13 +79,14 @@ fn tool_error(msg: String) -> rmcp::model::CallToolResult {
 impl ZerochainMcpServer {
     #[tool(
         name = "zerochain_init",
-        description = "Create a new workflow with numbered stages. Optionally specify a template name (code-review, research, implement)."
+        description = "Create a new workflow with numbered stages. Optionally specify a template name (code-review, research, implement). Optionally pass parents (repeatable contribution IDs) to link the workflow to prior runs."
     )]
     async fn init_workflow(
         &self,
         rmcp::handler::server::wrapper::Parameters(zerochain_engine::InitWorkflowRequest {
             name,
             template,
+            parents,
             ..
         }): rmcp::handler::server::wrapper::Parameters<
             zerochain_engine::InitWorkflowRequest,
@@ -95,8 +98,10 @@ impl ZerochainMcpServer {
             );
         }
         let name_for_msg = name.clone();
+        // Ensure a jj repo exists so engine auto-commit finds one.
+        zerochain_core::jj::init_repo(&self.workspace).await;
         let registry = self.state.write().await;
-        match registry.init_workflow(name, template).await {
+        match registry.init_workflow(name, template, parents).await {
             Ok(_) => tool_success(format!("initialized workflow: {name_for_msg}")),
             Err(e) => tool_error(format!("init failed: {e}")),
         }

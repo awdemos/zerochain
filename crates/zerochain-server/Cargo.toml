@@ -28,6 +28,7 @@ zerochain-llm = { path = "../zerochain-llm" }
 zerochain-cas = { path = "../zerochain-cas" }
 zerochain-broker = { path = "../zerochain-broker" }
 zerochain-fs = { path = "../zerochain-fs" }
+zerochain-memory = { path = "../zerochain-memory" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

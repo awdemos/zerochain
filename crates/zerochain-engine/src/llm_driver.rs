@@ -15,7 +15,7 @@ use zerochain_llm::{
     resolve_profile, Content, ImageUrlContent, LLMConfig, Message, ProviderId, Role,
     StageContext as LlmStageContext, ThinkingMode, LLM,
 };
-use zerochain_memory::chunk_text;
+use zerochain_memory::{chunk_text, ContributionRecord, ContributionType};
 use zerochain_tools::ToolRegistry;
 
 use crate::error::DaemonError;
@@ -154,6 +154,13 @@ impl<'a> LLMStageDriver<'a> {
 
         let mut tool_round = 0;
 
+        let graph_ctx = Some(tool_driver::GraphInvokeContext {
+            workflow_id: self.workflow_id.to_string(),
+            stage_id: self.stage.id.raw.clone(),
+            actor: zerochain_core::okf::zerochain_actor(),
+            graph_dir: self.state.workspace_root.join(".zerochain").join("graph"),
+        });
+
         let (output, response) = loop {
             let response = self
                 .llm
@@ -178,6 +185,7 @@ impl<'a> LLMStageDriver<'a> {
                         call,
                         &workflow_root,
                         Some(&memory_dir),
+                        graph_ctx.as_ref(),
                     )
                     .await?;
                     results.push(format!("{}: {}", call.name, result));
@@ -214,6 +222,7 @@ impl<'a> LLMStageDriver<'a> {
                     call,
                     &workflow_root,
                     Some(&memory_dir),
+                    graph_ctx.as_ref(),
                 )
                 .await?;
                 let result_text = format!(
@@ -225,6 +234,8 @@ impl<'a> LLMStageDriver<'a> {
         };
 
         self.index_output(&ctx, &output).await?;
+
+        self.publish_result_contribution(&ctx, &output).await;
 
         if let Some(ref script) = lua_script {
             run_post_completion_hooks(
@@ -343,6 +354,75 @@ impl<'a> LLMStageDriver<'a> {
             .collect();
         locked.add(&**model, texts).await?;
         Ok(())
+    }
+
+    /// Publish a `result` contribution for this stage's output, parented on the
+    /// workflow's most recent contribution (spec §5). Best-effort: failures
+    /// are logged and swallowed, never propagated (spec §7). Infallible: all
+    /// fallible steps already handle their own errors. Result bodies are
+    /// stored in full intentionally (unlike truncated setup bodies); the
+    /// embedding index truncates at 4000 chars when embedding.
+    async fn publish_result_contribution(&self, ctx: &Option<StageContext>, output: &str) {
+        let Some(ctx) = ctx else {
+            return;
+        };
+        if !ctx.frontmatter.index_output || output.is_empty() {
+            return;
+        }
+
+        // Fresh read so chaining sees contributions published mid-run by tools.
+        let parents: Vec<String> = self
+            .state
+            .graph_latest_in_workflow(self.workflow_id)
+            .await
+            .into_iter()
+            .collect();
+        let metric = ctx
+            .frontmatter
+            .metric
+            .clone()
+            .map(|m| zerochain_memory::ContributionMetric {
+                name: m.name,
+                value: m.value,
+                direction: match m.direction {
+                    zerochain_core::context::MetricDirection::Lower => {
+                        zerochain_memory::MetricDirection::Lower
+                    }
+                    zerochain_core::context::MetricDirection::Higher => {
+                        zerochain_memory::MetricDirection::Higher
+                    }
+                },
+            });
+        let artifacts = match &self.cas {
+            Some(cas) => match cas.put(output.as_bytes()).await {
+                Ok(cid) => vec![format!("b3:{cid}")],
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to store output in CAS");
+                    Vec::new()
+                }
+            },
+            None => Vec::new(),
+        };
+
+        let mut record = ContributionRecord::new(
+            ContributionType::Result,
+            zerochain_core::okf::zerochain_actor(),
+            output,
+        );
+        record.parents = parents;
+        record.workflow = Some(self.workflow_id.to_string());
+        record.stage = Some(self.stage.id.raw.clone());
+        record.metric = metric;
+        record.artifacts = artifacts;
+
+        if let Some(id) = self.state.publish_contribution(record).await {
+            tracing::debug!(record_id = %id, workflow = %self.workflow_id, "published result contribution");
+            zerochain_core::jj::auto_commit(
+                &self.state.workspace_root,
+                &format!("graph: result {id}"),
+            )
+            .await;
+        }
     }
 }
 
@@ -755,6 +835,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -810,6 +891,7 @@ mod tests {
                 path: None,
                 template: Some("00_spec"),
                 force: false,
+                parents: Vec::new(),
             })
             .await
             .unwrap();
@@ -862,6 +944,205 @@ mod tests {
         assert!(
             !results.is_empty(),
             "expected memory source to be searchable"
+        );
+    }
+
+    #[tokio::test]
+    async fn publishes_result_contribution_chained_to_setup() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "graph-chain",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        let ctx_path = wf.root.join("00_spec").join("CONTEXT.md");
+        tokio::fs::write(
+            &ctx_path,
+            "---\nindex_output: true\nmetric:\n  name: bpb\n  value: 1.899\n  direction: lower\n---\nEvaluate.",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "bpb 1.899".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "graph-chain",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
+        let mut all = graph.index().all().into_iter();
+        let setup = all
+            .find(|r| r.record_type == zerochain_memory::ContributionType::Setup)
+            .cloned()
+            .expect("setup node");
+        let result = all
+            .find(|r| r.record_type == zerochain_memory::ContributionType::Result)
+            .cloned()
+            .expect("result node");
+        assert_eq!(result.parents, vec![setup.id]);
+        assert_eq!(result.workflow.as_deref(), Some("graph-chain"));
+        assert_eq!(result.stage.as_deref(), Some("00_spec"));
+        let metric = result.metric.expect("metric captured");
+        assert_eq!(metric.name, "bpb");
+        assert!((metric.value - 1.899).abs() < 1e-9);
+        assert_eq!(metric.direction, zerochain_memory::MetricDirection::Lower);
+    }
+
+    #[tokio::test]
+    async fn result_nodes_chain_across_stages() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "graph-chain-stages",
+                path: None,
+                template: Some("00_spec,01_eval"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.md"),
+            "---\nindex_output: true\n---\nSpecify.",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            wf.root.join("01_eval").join("CONTEXT.md"),
+            "---\nindex_output: true\n---\nEvaluate.",
+        )
+        .await
+        .unwrap();
+
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let wf_root = workflows.get("graph-chain-stages").unwrap().root.clone();
+
+        let spec_stage = Stage::from_dir(&wf_root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "spec output".into(),
+        };
+        let driver = LLMStageDriver {
+            workflow_id: "graph-chain-stages",
+            stage: &spec_stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let eval_stage = Stage::from_dir(&wf_root.join("01_eval")).await.unwrap();
+        let llm = FakeLlm {
+            response: "eval output".into(),
+        };
+        let driver = LLMStageDriver {
+            workflow_id: "graph-chain-stages",
+            stage: &eval_stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
+        let results: Vec<_> = graph
+            .index()
+            .all()
+            .into_iter()
+            .filter(|r| r.record_type == zerochain_memory::ContributionType::Result)
+            .cloned()
+            .collect();
+        assert_eq!(results.len(), 2, "one result node per stage run");
+        let first = results
+            .iter()
+            .find(|r| r.stage.as_deref() == Some("00_spec"))
+            .expect("00_spec result");
+        let second = results
+            .iter()
+            .find(|r| r.stage.as_deref() == Some("01_eval"))
+            .expect("01_eval result");
+        assert_eq!(
+            second.parents,
+            vec![first.id.clone()],
+            "second stage's result chains to the first stage's result"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_result_record_without_index_output() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "graph-no-index",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        let ctx_path = wf.root.join("00_spec").join("CONTEXT.md");
+        tokio::fs::write(&ctx_path, "---\nindex_output: false\n---\nEvaluate.")
+            .await
+            .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "plain output".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "graph-no-index",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let graph = zerochain_memory::Graph::open(tmp.path().join(".zerochain").join("graph"))
+            .await
+            .unwrap();
+        assert_eq!(
+            graph.index().all().len(),
+            1,
+            "only the setup node; index_output disabled"
         );
     }
 

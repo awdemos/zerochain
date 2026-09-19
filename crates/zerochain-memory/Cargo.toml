@@ -12,10 +12,14 @@ description = "Filesystem-native vector memory and semantic search for zerochain
 [dependencies]
 zerochain-error = { path = "../zerochain-error" }
 async-trait.workspace = true
+blake3.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yml.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 fastembed.workspace = true
 
 [dev-dependencies]

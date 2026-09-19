@@ -4,6 +4,47 @@ use zerochain_core::stage::StageId;
 use zerochain_core::template::TemplateRegistry;
 use zerochain_engine::AppState;
 
+fn human_actor() -> String {
+    let id = std::env::var("ZEROCHAIN_OKF_ACTOR")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    format!("human:{id}")
+}
+
+fn parse_metric_spec(spec: &str) -> anyhow::Result<zerochain_memory::ContributionMetric> {
+    let mut name = None;
+    let mut value = None;
+    let mut direction = None;
+    for part in spec.split(',') {
+        let (k, v) = part
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("metric spec must be key=value pairs: {spec}"))?;
+        match k.trim() {
+            "name" => name = Some(v.trim().to_string()),
+            "value" => {
+                let parsed: f64 = v
+                    .trim()
+                    .parse()
+                    .map_err(|e| anyhow::anyhow!("metric value: {e}"))?;
+                if !parsed.is_finite() {
+                    return Err(anyhow::anyhow!("metric value must be finite"));
+                }
+                value = Some(parsed);
+            }
+            "direction" => direction = Some(v.trim().to_string()),
+            other => return Err(anyhow::anyhow!("unknown metric key: {other}")),
+        }
+    }
+    Ok(zerochain_memory::ContributionMetric {
+        name: name.ok_or_else(|| anyhow::anyhow!("metric requires name"))?,
+        value: value.ok_or_else(|| anyhow::anyhow!("metric requires value"))?,
+        direction: zerochain_memory::MetricDirection::parse(
+            &direction.ok_or_else(|| anyhow::anyhow!("metric requires direction"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?,
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -32,13 +73,17 @@ async fn main() -> Result<()> {
             path,
             template,
             force,
+            parents,
         } => {
+            // Ensure a jj repo exists so engine auto-commit finds one.
+            zerochain_core::jj::init_repo(path.as_deref().unwrap_or(&cli.workspace)).await;
             state
                 .init_workflow(zerochain_engine::InitWorkflowParams {
                     name: &name,
                     path: path.as_deref(),
                     template: template.as_deref(),
                     force,
+                    parents,
                 })
                 .await?;
             println!("initialized workflow: {name}");
@@ -165,6 +210,125 @@ async fn main() -> Result<()> {
                 output.unwrap_or_else(|| std::path::PathBuf::from(format!("{}-okf", workflow_id)));
             state.export_okf(&workflow_id, &output_dir).await?;
             println!("exported OKF bundle: {}", output_dir.display());
+        }
+        zerochain_daemon::cli::Commands::Contribute {
+            kind,
+            body,
+            parents,
+            tags,
+            metric,
+        } => {
+            let record_type = zerochain_memory::ContributionType::parse(&kind)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            if !matches!(
+                record_type,
+                zerochain_memory::ContributionType::Insight
+                    | zerochain_memory::ContributionType::Hypothesis
+                    | zerochain_memory::ContributionType::Report
+            ) {
+                return Err(anyhow::anyhow!(
+                    "contribute type must be insight, hypothesis, or report (use the verify command for verdicts)"
+                ));
+            }
+            let graph_dir = cli.workspace.join(".zerochain").join("graph");
+            let mut graph = zerochain_memory::Graph::open(&graph_dir).await?;
+            let mut record =
+                zerochain_memory::ContributionRecord::new(record_type, human_actor(), body);
+            record.parents = parents;
+            record.metric = metric.as_deref().map(parse_metric_spec).transpose()?;
+            record.tags = tags;
+            let published = graph.publish(record).await?;
+            zerochain_core::jj::auto_commit(
+                &cli.workspace,
+                &format!("graph: {} {}", record_type.as_str(), published.id),
+            )
+            .await;
+            println!("published contribution: {}", published.id);
+        }
+        zerochain_daemon::cli::Commands::Verify {
+            target,
+            verdict,
+            body,
+        } => {
+            let verdict =
+                zerochain_memory::Verdict::parse(&verdict).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let graph_dir = cli.workspace.join(".zerochain").join("graph");
+            let mut graph = zerochain_memory::Graph::open(&graph_dir).await?;
+            let mut record = zerochain_memory::ContributionRecord::new(
+                zerochain_memory::ContributionType::Verification,
+                human_actor(),
+                body,
+            );
+            record.target = Some(target.clone());
+            record.verdict = Some(verdict);
+            record.parents = vec![target];
+            let published = graph.publish(record).await?;
+            zerochain_core::jj::auto_commit(
+                &cli.workspace,
+                &format!("graph: verification {}", published.id),
+            )
+            .await;
+            println!("published verification: {}", published.id);
+        }
+        zerochain_daemon::cli::Commands::Graph {
+            view,
+            record_type,
+            workflow,
+            json,
+        } => {
+            let graph_dir = cli.workspace.join(".zerochain").join("graph");
+            let graph = zerochain_memory::Graph::open(&graph_dir).await?;
+            let view = view
+                .as_deref()
+                .map(|s| {
+                    zerochain_memory::GraphView::parse(s)
+                        .ok_or_else(|| anyhow::anyhow!("unknown view: {s}"))
+                })
+                .transpose()?;
+            let record_type = record_type
+                .as_deref()
+                .map(|s| {
+                    zerochain_memory::ContributionType::parse(s).map_err(|e| anyhow::anyhow!("{e}"))
+                })
+                .transpose()?;
+            let mut records: Vec<zerochain_memory::ContributionRecord> = match view {
+                Some(v) => graph.index().view(v).into_iter().cloned().collect(),
+                None => graph
+                    .index()
+                    .view(zerochain_memory::GraphView::Recent)
+                    .into_iter()
+                    .cloned()
+                    .collect(),
+            };
+            if let Some(t) = record_type {
+                records.retain(|r| r.record_type == t);
+            }
+            if let Some(wf) = &workflow {
+                records.retain(|r| r.workflow.as_deref() == Some(wf.as_str()));
+            }
+            if json {
+                let out: Vec<serde_json::Value> = records
+                    .iter()
+                    .map(zerochain_memory::record_to_json)
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                for r in &records {
+                    let first_line = r
+                        .body
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty())
+                        .unwrap_or("");
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        r.id,
+                        r.record_type.as_str(),
+                        r.actor,
+                        first_line
+                    );
+                }
+            }
         }
         zerochain_daemon::cli::Commands::Mcp => {
             zerochain_daemon::mcp::run_stdio_server(cli.workspace).await?;

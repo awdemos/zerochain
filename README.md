@@ -150,6 +150,24 @@ export ZEROCHAIN_OKF_ACTOR="my-org/1.0"
 
 ---
 
+## 🕸️ Collective Contribution Graph
+
+zerochain keeps a workspace-level, append-only graph of typed contributions so workflows build on past runs instead of starting from scratch. Every workflow init publishes a `setup` node; stages with `index_output: true` publish `result` nodes chained to their lineage; agents publish `insight`/`hypothesis`/`verification` records via the `contribute`, `verify`, and `graph_query` tools (list them in a stage's `tools:` frontmatter). Records live as content-addressed markdown under `.zerochain/graph/` and are auditable through the same jj trail as everything else.
+
+```bash
+# Link a new workflow to prior contributions
+zerochain init --name run-2 --parent c-9f3a21c7d4e8b601
+
+# Human surfaces
+zerochain contribute --type insight --body "donor ensembling helps" --parent c-9f3a21c7d4e8b601
+zerochain verify c-9f3a21c7d4e8b601 --verdict confirmed --body "reproduced on H100"
+zerochain graph --view leaders        # recent | leaves | open_hypotheses | unverified | negative | leaders
+```
+
+Stage outputs can carry a metric via CONTEXT.md frontmatter: `metric: {name: bpb, value: 1.899, direction: lower}`.
+
+---
+
 ## 🧊 Btrfs Stage Isolation
 
 On Btrfs filesystems, zerochain can create each workflow and stage as an isolated subvolume. This enables true zero-copy snapshots and per-stage rollback.

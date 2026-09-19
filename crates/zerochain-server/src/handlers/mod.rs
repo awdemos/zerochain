@@ -7,6 +7,7 @@ use crate::auth;
 use crate::state::ServerState;
 
 pub mod artifact;
+pub mod graph;
 pub mod health;
 pub mod prompt;
 pub mod stage;
@@ -81,6 +82,9 @@ pub fn routes(state: ServerState) -> Router {
             post(prompt::send),
         )
         .route("/v1/workflows/{id}/stages/{stage}/poll", get(prompt::poll))
+        .route("/v1/graph", get(graph::query))
+        .route("/v1/graph/contributions", post(graph::contribute))
+        .route("/v1/graph/verifications", post(graph::verify))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_api_key,

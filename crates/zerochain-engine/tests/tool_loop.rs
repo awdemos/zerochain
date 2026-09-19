@@ -74,6 +74,7 @@ async fn tool_loop_feeds_result_back_to_llm() {
             path: None,
             template: Some("00_loop"),
             force: false,
+            parents: Vec::new(),
         })
         .await
         .unwrap();

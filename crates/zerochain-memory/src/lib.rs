@@ -1,14 +1,29 @@
-//! Filesystem-native vector memory and semantic search for zerochain.
+//! Filesystem-native collective memory for zerochain: a typed, append-only
+//! contribution graph with derived semantic search, plus the legacy
+//! per-workflow vector store.
 
 pub mod chunk;
 pub mod error;
+pub mod graph;
+pub mod graph_embed;
+pub mod graph_index;
+pub mod graph_store;
 pub mod model;
+pub mod record;
 pub mod similarity;
 pub mod store;
 
 pub use chunk::chunk_text;
 pub use error::MemoryError;
+pub use graph::Graph;
+pub use graph_embed::GraphEmbedIndex;
+pub use graph_index::{GraphIndex, GraphView};
+pub use graph_store::ContributionStore;
 pub use model::{EmbeddingModel, FastEmbedModel, MemoryChunk};
+pub use record::{
+    excerpt, record_to_json, ContributionMetric, ContributionRecord, ContributionType,
+    MetricDirection, Verdict,
+};
 pub use similarity::cosine_similarity;
 pub use store::MemoryStore;
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::fs_tool::{ReadFileTool, WriteFileTool};
+use crate::graph_tool::{ContributeTool, GraphQueryTool, VerifyTool};
 use crate::http_tool::HttpTool;
 use crate::memory_tool::{MemoryQueryTool, MemoryStoreTool};
 use crate::shell_tool::ShellTool;
@@ -41,6 +42,9 @@ impl Default for ToolRegistry {
         registry.register(Arc::new(ShellTool));
         registry.register(Arc::new(MemoryStoreTool));
         registry.register(Arc::new(MemoryQueryTool));
+        registry.register(Arc::new(ContributeTool));
+        registry.register(Arc::new(VerifyTool));
+        registry.register(Arc::new(GraphQueryTool));
         registry
     }
 }

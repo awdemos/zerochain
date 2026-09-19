@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use crate::error::{io_err, Error, Result};
 
 // Re-export for backward compatibility with consumers that import via context.
-pub use crate::frontmatter::{ContextFrontmatter, MultimodalInput};
+pub use crate::frontmatter::{ContextFrontmatter, MetricDirection, MultimodalInput, StageMetric};
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]

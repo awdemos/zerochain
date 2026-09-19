@@ -14,6 +14,7 @@ async fn init_research_v2_creates_four_stage_workflow() {
             path: None,
             template: Some("research-v2"),
             force: false,
+            parents: Vec::new(),
         })
         .await
         .expect("init workflow with research-v2 template");
@@ -59,6 +60,7 @@ async fn research_v2_contexts_reference_previous_stage() {
             path: None,
             template: Some("research-v2"),
             force: false,
+            parents: Vec::new(),
         })
         .await
         .expect("init workflow with research-v2 template");

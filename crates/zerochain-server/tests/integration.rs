@@ -612,7 +612,9 @@ mod e2e {
         let req = make_request("GET", "/v1/workflows/e2e-run/output/00_spec", None);
         let resp = send!(app_from_state(&state), req);
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_string(resp.into_body()).await, "The answer is 42.");
+        let content = body_string(resp.into_body()).await;
+        let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+        assert_eq!(body, "The answer is 42.");
 
         // Verify stage marked complete
         let req = make_request("GET", "/v1/workflows/e2e-run", None);
@@ -632,7 +634,9 @@ mod e2e {
         let req = make_request("GET", "/v1/workflows/e2e-run/output/01_build", None);
         let resp = send!(app_from_state(&state), req);
         assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(body_string(resp.into_body()).await, "The answer is 42.");
+        let content = body_string(resp.into_body()).await;
+        let (_, body) = zerochain_core::okf::split_frontmatter(&content).expect("OKF frontmatter");
+        assert_eq!(body, "The answer is 42.");
 
         // Test 3: no pending stages after all complete
         let req = make_request("GET", "/v1/workflows/e2e-run", None);
@@ -779,4 +783,82 @@ mod subvolume {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn graph_contribute_and_query_round_trip() {
+    let tmp = TempDir::new().unwrap();
+    let app = make_app(tmp.path()).await;
+
+    let req = make_request(
+        "POST",
+        "/v1/graph/contributions",
+        Some(r#"{"type":"insight","body":"cross-run insight","actor":"human:tester"}"#),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req = make_request("GET", "/v1/graph?view=recent", None);
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("cross-run insight"),
+        "view should include the contribution; got: {body}"
+    );
+}
+
+#[tokio::test]
+async fn graph_verification_updates_unverified_view() {
+    let tmp = TempDir::new().unwrap();
+    let app = make_app(tmp.path()).await;
+
+    // Setup/result records are engine-captured (the HTTP contribute endpoint
+    // only accepts insight/hypothesis/report), so seed them directly.
+    let graph_dir = tmp.path().join(".zerochain").join("graph");
+    let result_id = {
+        let mut graph = zerochain_memory::Graph::open(&graph_dir).await.unwrap();
+        let setup = graph
+            .publish(zerochain_memory::ContributionRecord::new(
+                zerochain_memory::ContributionType::Setup,
+                "human:tester",
+                "project brief",
+            ))
+            .await
+            .unwrap();
+        let mut result = zerochain_memory::ContributionRecord::new(
+            zerochain_memory::ContributionType::Result,
+            "zerochain/test",
+            "measured",
+        );
+        result.workflow = Some("w1".to_string());
+        result.parents = vec![setup.id.clone()];
+        graph.publish(result).await.unwrap().id
+    };
+
+    let req = make_request("GET", "/v1/graph?view=unverified", None);
+    let resp = send!(app.clone(), req);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains(&result_id),
+        "result is unverified; got: {body}"
+    );
+
+    let req = make_request(
+        "POST",
+        "/v1/graph/verifications",
+        Some(&format!(
+            r#"{{"target":"{result_id}","verdict":"confirmed","body":"reproduced"}}"#
+        )),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let req = make_request("GET", "/v1/graph?view=unverified", None);
+    let resp = send!(app, req);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        !body.contains(&result_id),
+        "verified result leaves the unverified view; got: {body}"
+    );
 }

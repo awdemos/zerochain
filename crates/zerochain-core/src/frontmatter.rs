@@ -1,5 +1,19 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MetricDirection {
+    Lower,
+    Higher,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StageMetric {
+    pub name: String,
+    pub value: f64,
+    pub direction: MetricDirection,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[non_exhaustive]
 #[derive(Default)]
@@ -32,6 +46,8 @@ pub struct ContextFrontmatter {
     pub tool_loop_max_iterations: Option<u32>,
     #[serde(default)]
     pub index_output: bool,
+    #[serde(default)]
+    pub metric: Option<StageMetric>,
     #[serde(default)]
     pub memory_sources: Vec<String>,
     #[serde(default)]
@@ -78,6 +94,7 @@ impl ContextFrontmatter {
                 .tool_loop_max_iterations
                 .or(base.tool_loop_max_iterations),
             index_output: self.index_output || base.index_output,
+            metric: self.metric.clone().or_else(|| base.metric.clone()),
             memory_sources: if self.memory_sources.is_empty() {
                 base.memory_sources.clone()
             } else {
@@ -102,7 +119,7 @@ pub struct MultimodalInput {
 #[cfg(test)]
 mod tests {
     use crate::context::Context;
-    use crate::frontmatter::ContextFrontmatter;
+    use crate::frontmatter::{ContextFrontmatter, MetricDirection};
 
     #[test]
     fn parse_tool_loop_max_iterations() {
@@ -119,5 +136,32 @@ mod tests {
         assert_eq!(frontmatter.memory_sources, vec!["docs/readme.md"]);
         assert_eq!(frontmatter.memory_chunk_size, Some(500));
         assert_eq!(frontmatter.memory_chunk_overlap, Some(100));
+    }
+
+    #[test]
+    fn parse_metric_frontmatter() {
+        let input = "---\nmetric:\n  name: bpb\n  value: 1.899\n  direction: lower\n";
+        let frontmatter: ContextFrontmatter = serde_yml::from_str(input).unwrap();
+        let metric = frontmatter.metric.expect("metric parsed");
+        assert_eq!(metric.name, "bpb");
+        assert_eq!(metric.value, 1.899);
+        assert_eq!(metric.direction, MetricDirection::Lower);
+    }
+
+    #[test]
+    fn metric_merges_like_other_optional_fields() {
+        let base_yaml = "---\nmetric:\n  name: bpb\n  value: 2.0\n  direction: lower\n";
+        let base: ContextFrontmatter = serde_yml::from_str(base_yaml).unwrap();
+        let child = ContextFrontmatter::default();
+        let merged = child.merge(&base);
+        assert_eq!(merged.metric.unwrap().name, "bpb");
+
+        let override_yaml = "---\nmetric:\n  name: loss\n  value: 0.5\n  direction: higher\n";
+        let child: ContextFrontmatter = serde_yml::from_str(override_yaml).unwrap();
+        let merged = child.merge(&base);
+        let metric = merged.metric.unwrap();
+        assert_eq!(metric.name, "loss");
+        assert_eq!(metric.value, 0.5);
+        assert_eq!(metric.direction, MetricDirection::Higher);
     }
 }

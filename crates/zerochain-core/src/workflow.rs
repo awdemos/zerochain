@@ -327,7 +327,7 @@ impl Workflow {
         Ok(())
     }
 
-    async fn find_task(path: &Path) -> Result<Option<Task>> {
+    pub async fn find_task(path: &Path) -> Result<Option<Task>> {
         let candidates = ["task.md", "TASK.md", "Backlog.md", "backlog.md"];
         for candidate in candidates {
             let task_path = path.join(candidate);
@@ -559,6 +559,7 @@ mod tests {
                 strategy: Some("sequential".to_string()),
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Init test".to_string(),
             source_path: None,
         };
@@ -595,6 +596,7 @@ mod tests {
                 strategy: None,
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Link test".to_string(),
             source_path: None,
         };
@@ -639,6 +641,7 @@ mod tests {
                 strategy: None,
             }),
             acceptance_criteria: vec![],
+            parents: vec![],
             description: "Factory test".to_string(),
             source_path: None,
         };
