@@ -1,12 +1,15 @@
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use mlua::{HookTriggers, Lua, LuaOptions, StdLib, VmState};
+use mlua::{HookTriggers, Lua, LuaOptions, StdLib, Value, VmState};
 
 use crate::error::Result;
 
 const MEMORY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
-const INSTRUCTION_LIMIT: i32 = 1_000_000;
+const INSTRUCTION_LIMIT: i64 = 1_000_000;
+const INSTRUCTION_HOOK_EVERY: i64 = 100_000;
 const VM_POOL_MAX_SIZE: usize = 16;
+const GLOBAL_SNAPSHOT_REGISTRY_KEY: &str = "__zc_global_snapshot";
 
 static VM_POOL: OnceLock<Mutex<Vec<Lua>>> = OnceLock::new();
 
@@ -43,6 +46,62 @@ impl Drop for PooledLua {
     }
 }
 
+/// Install (or reinstall) the instruction-budget hook with a fresh counter.
+///
+/// The counter lives in Rust state captured by the hook closure — sandboxed
+/// scripts can read and write a `__zc_hook_count` global all they want, but it
+/// no longer has any effect on the budget. The counter is an `i64` advanced
+/// with a saturating compare-and-swap, so scripts cannot provoke an overflow.
+fn install_instruction_hook(lua: &Lua) -> Result<()> {
+    let count = AtomicI64::new(0);
+    let triggers = HookTriggers::new().every_nth_instruction(INSTRUCTION_HOOK_EVERY as u32);
+    lua.set_hook(triggers, move |_lua, _debug| {
+        let mut current = count.load(Ordering::Relaxed);
+        loop {
+            let new_count = current.saturating_add(INSTRUCTION_HOOK_EVERY);
+            if new_count > INSTRUCTION_LIMIT {
+                return Err(mlua::Error::runtime(format!(
+                    "Lua script exceeded instruction limit ({INSTRUCTION_LIMIT})"
+                )));
+            }
+            match count.compare_exchange_weak(
+                current,
+                new_count,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Ok(VmState::Continue),
+                Err(actual) => current = actual,
+            }
+        }
+    })
+    .map_err(|e| crate::error::Error::Lua {
+        message: format!("failed to set hook: {e}"),
+    })
+}
+
+/// Record the set of global keys present at VM creation so `reset_vm_state`
+/// can later delete anything a stage script added. Stored in the Lua registry,
+/// which sandboxed scripts cannot reach.
+fn snapshot_globals(lua: &Lua) -> Result<()> {
+    let snapshot = lua.create_table().map_err(|e| crate::error::Error::Lua {
+        message: format!("failed to create global snapshot: {e}"),
+    })?;
+    for pair in lua.globals().pairs::<Value, Value>() {
+        let Ok((key, _)) = pair else { continue };
+        let key_str = match key {
+            Value::String(s) => s.to_str().map(|k| k.to_string()).unwrap_or_default(),
+            Value::Integer(i) => i.to_string(),
+            _ => continue,
+        };
+        let _ = snapshot.set(key_str, true);
+    }
+    lua.set_named_registry_value(GLOBAL_SNAPSHOT_REGISTRY_KEY, snapshot)
+        .map_err(|e| crate::error::Error::Lua {
+            message: format!("failed to store global snapshot: {e}"),
+        })
+}
+
 pub fn create_sandboxed_vm() -> Result<Lua> {
     let lua = Lua::new_with(
         StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
@@ -57,41 +116,50 @@ pub fn create_sandboxed_vm() -> Result<Lua> {
             message: format!("failed to set memory limit: {e}"),
         })?;
 
-    let hook_limit = INSTRUCTION_LIMIT;
-    let triggers = HookTriggers::new().every_nth_instruction(100_000);
-    lua.set_hook(triggers, move |lua, _debug| {
-        let count: i32 = lua
-            .globals()
-            .get::<Option<i32>>("__zc_hook_count")
-            .unwrap_or(None)
-            .unwrap_or(0);
-        let new_count = count + 100_000;
-        if new_count > hook_limit {
-            return Err(mlua::Error::runtime(format!(
-                "Lua script exceeded instruction limit ({hook_limit})"
-            )));
-        }
-        lua.globals().set("__zc_hook_count", new_count)?;
-        Ok(VmState::Continue)
-    })
-    .map_err(|e| crate::error::Error::Lua {
-        message: format!("failed to set hook: {e}"),
-    })?;
+    install_instruction_hook(&lua)?;
+    snapshot_globals(&lua)?;
 
     Ok(lua)
 }
 
 pub fn reset_instruction_counter(lua: &Lua) -> Result<()> {
-    lua.globals()
-        .set("__zc_hook_count", 0i32)
-        .map_err(|e| crate::error::Error::Lua {
-            message: format!("failed to reset instruction counter: {e}"),
-        })
+    // Reinstalling the hook replaces the closure (and its counter) with a
+    // fresh one starting at zero.
+    install_instruction_hook(lua)
 }
 
 fn reset_vm_state(lua: &Lua) -> Result<()> {
     reset_instruction_counter(lua)?;
-    let _ = lua.globals().set("ctx", mlua::Value::Nil);
+
+    // Delete every global a stage script may have defined (hook functions,
+    // markers, tampered state) so nothing leaks into later stages that reuse
+    // this pooled VM. Globals present at creation are left untouched; `ctx`
+    // is not in the snapshot, so it is cleared here as well.
+    let snapshot: Option<mlua::Table> = lua.named_registry_value(GLOBAL_SNAPSHOT_REGISTRY_KEY).ok();
+    let Some(snapshot) = snapshot else {
+        let _ = lua.globals().set("ctx", Value::Nil);
+        return Ok(());
+    };
+
+    let globals = lua.globals();
+    let mut to_remove: Vec<Value> = Vec::new();
+    for pair in globals.pairs::<Value, Value>() {
+        let Ok((key, _)) = pair else { continue };
+        let in_snapshot = match &key {
+            Value::String(s) => s
+                .to_str()
+                .map(|k| snapshot.get::<bool>(k).unwrap_or(false))
+                .unwrap_or(false),
+            Value::Integer(i) => snapshot.get::<bool>(i.to_string()).unwrap_or(false),
+            _ => false,
+        };
+        if !in_snapshot {
+            to_remove.push(key);
+        }
+    }
+    for key in to_remove {
+        let _ = globals.set(key, Value::Nil);
+    }
     Ok(())
 }
 
@@ -389,5 +457,84 @@ mod tests {
         )
         .exec()
         .unwrap();
+    }
+
+    #[test]
+    fn tampering_with_hook_count_global_cannot_multiply_budget() {
+        let lua = sandbox();
+        // The budget counter lives in Rust state now; presetting the legacy
+        // Lua global must have no effect and the loop must still hit the limit.
+        let result = lua
+            .load("__zc_hook_count = -3000000\nwhile true do end")
+            .exec();
+        assert!(
+            result.is_err(),
+            "infinite loop should hit instruction limit despite global tampering"
+        );
+        let msg = format!("{result:?}");
+        assert!(
+            msg.contains("instruction limit"),
+            "error should mention instruction limit, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn huge_hook_count_global_does_not_overflow_or_panic() {
+        let lua = sandbox();
+        // i32::MAX + 100_000 would overflow the old i32 counter (debug panic /
+        // release wrap). The Rust-side i64 counter is unaffected.
+        let result = lua
+            .load("__zc_hook_count = 2147483647\nlocal x = 0\nfor i = 1, 100000 do x = x + 1 end")
+            .exec();
+        assert!(
+            result.is_ok(),
+            "small loop after tampering must run without panic, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn reset_vm_state_removes_script_defined_globals() {
+        let lua = sandbox();
+        lua.load("on_validate = function(ctx) return true end\nmarker = 'x'")
+            .exec()
+            .unwrap();
+        assert!(lua
+            .globals()
+            .get::<Option<mlua::Function>>("on_validate")
+            .unwrap()
+            .is_some());
+        assert!(lua
+            .globals()
+            .get::<Option<mlua::String>>("marker")
+            .unwrap()
+            .is_some());
+
+        reset_vm_state(&lua).unwrap();
+
+        assert!(
+            lua.globals()
+                .get::<Option<mlua::Function>>("on_validate")
+                .unwrap()
+                .is_none(),
+            "hook functions must not survive a reset"
+        );
+        assert!(
+            lua.globals()
+                .get::<Option<mlua::String>>("marker")
+                .unwrap()
+                .is_none(),
+            "script globals must not survive a reset"
+        );
+        // Globals present at VM creation are untouched.
+        assert!(lua
+            .globals()
+            .get::<Option<mlua::Table>>("string")
+            .unwrap()
+            .is_some());
+        assert!(lua
+            .globals()
+            .get::<Option<mlua::Table>>("_G")
+            .unwrap()
+            .is_some());
     }
 }

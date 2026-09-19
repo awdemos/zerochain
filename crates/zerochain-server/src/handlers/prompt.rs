@@ -4,6 +4,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use zerochain_broker::BrokerMessage;
 use zerochain_core::stage::StageId;
+use zerochain_core::workflow::is_valid_workflow_name;
 
 use crate::handlers::{PromptRequest, SimpleMessage};
 use crate::state::ServerState;
@@ -18,6 +19,34 @@ pub async fn send(
             StatusCode::BAD_REQUEST,
             Json(SimpleMessage {
                 message: format!("invalid stage id: {e}"),
+            }),
+        )
+            .into_response();
+    }
+    // `to_stage` flows into the broker message and is joined into a filesystem
+    // path by the subscriber, so it must be a bare stage id: StageId::parse
+    // plus an explicit ban on separators and parent references (defense in
+    // depth — parse alone does not reject every traversal shape).
+    if StageId::parse(&body.to_stage).is_err()
+        || body.to_stage.contains('/')
+        || body.to_stage.contains('\\')
+        || body.to_stage.contains("..")
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid to_stage: {}", body.to_stage),
+            }),
+        )
+            .into_response();
+    }
+    // The workflow id is embedded in the same target path; it must match the
+    // validator used at workflow creation.
+    if !is_valid_workflow_name(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SimpleMessage {
+                message: format!("invalid workflow id: {id}"),
             }),
         )
             .into_response();

@@ -12,6 +12,16 @@ fn lua_err(e: &mlua::Error) -> Error {
     }
 }
 
+/// Validates a stage name passed from a sandboxed script before it is joined
+/// into filesystem paths. `StageId::parse` alone accepts suffixes containing
+/// separators (e.g. `01_../../x`), so those are rejected explicitly.
+fn validate_stage_arg(stage: &str) -> mlua::Result<()> {
+    if stage.contains('/') || stage.contains('\\') || crate::stage::StageId::parse(stage).is_err() {
+        return Err(mlua::Error::runtime(format!("invalid stage name: {stage}")));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct HookResults {
@@ -32,6 +42,19 @@ pub struct LuaContext {
     pub skip: bool,
     pub hooks: HookResults,
     pub shared_store: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+}
+
+impl mlua::FromLua for LuaContext {
+    fn from_lua(value: mlua::Value, _lua: &mlua::Lua) -> mlua::Result<Self> {
+        match value {
+            mlua::Value::UserData(ud) => ud.borrow::<LuaContext>().map(|ctx| ctx.clone()),
+            other => Err(mlua::Error::FromLuaConversionError {
+                from: other.type_name(),
+                to: "LuaContext".to_string(),
+                message: Some("expected LuaContext userdata".to_string()),
+            }),
+        }
+    }
 }
 
 impl UserData for LuaContext {
@@ -68,6 +91,8 @@ impl UserData for LuaContext {
         });
 
         methods.add_method("stage_complete", |_, ctx, stage: String| {
+            // Validate like list_stages before joining into a filesystem path.
+            validate_stage_arg(&stage)?;
             let marker = ctx.workflow_root.join(&stage).join(".complete");
             Ok(marker.exists())
         });
@@ -75,6 +100,7 @@ impl UserData for LuaContext {
         methods.add_method(
             "stage_output",
             |_, ctx, stage: String| -> mlua::Result<Option<String>> {
+                validate_stage_arg(&stage)?;
                 let result_path = ctx
                     .workflow_root
                     .join(&stage)
@@ -238,6 +264,13 @@ pub fn run_hook(lua: &Lua, hook_name: &str, ctx: &mut LuaContext, script: &str) 
     let chunk = lua.load(&hook_call).set_name("CONTEXT.lua");
     chunk.exec().map_err(|e| lua_err(&e))?;
 
+    // The script mutates a Lua-side clone of the context; copy the effects
+    // (set_skip, insert_stage_after, remove_stage, shared store) back so the
+    // caller actually sees them.
+    if let Ok(updated) = lua.globals().get::<LuaContext>("ctx") {
+        *ctx = updated;
+    }
+
     Ok(())
 }
 
@@ -325,5 +358,91 @@ mod tests {
         let store2 = load_shared_store(tmp.path()).unwrap();
         let s2 = store2.lock().unwrap();
         assert_eq!(s2.get("key").unwrap().as_str(), Some("value"));
+    }
+
+    #[test]
+    fn run_hook_copies_effects_back_to_caller_context() {
+        let lua = crate::lua_engine::vm::create_sandboxed_vm().unwrap();
+        let mut ctx = LuaContext::new("01_a", Path::new("/tmp/01_a"), Path::new("/tmp/wf"));
+        run_hook(
+            &lua,
+            "on_validate",
+            &mut ctx,
+            "function on_validate(ctx)\n\
+                ctx:set_skip(true)\n\
+                ctx:insert_stage_after('02_new')\n\
+                ctx:remove_stage('03_old')\n\
+            end",
+        )
+        .unwrap();
+        assert!(ctx.skip, "set_skip effect must be visible to the caller");
+        assert_eq!(ctx.hooks.insert_after, vec!["02_new".to_string()]);
+        assert_eq!(ctx.hooks.remove_stages, vec!["03_old".to_string()]);
+    }
+
+    #[test]
+    fn stage_defined_hooks_do_not_leak_into_later_stages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wf = tmp.path().join("wf");
+        std::fs::create_dir_all(&wf).unwrap();
+
+        {
+            let pooled = crate::lua_engine::vm::acquire_sandboxed_vm().unwrap();
+            let mut ctx = LuaContext::new("01_a", &wf.join("01_a"), &wf);
+            run_hook(
+                pooled.get(),
+                "on_validate",
+                &mut ctx,
+                "marker = 'from_a'\nfunction on_validate(ctx) ctx:set_skip(true) end",
+            )
+            .unwrap();
+            assert!(ctx.skip, "stage A's own hook must run");
+        } // pooled VM is reset on drop
+
+        let pooled = crate::lua_engine::vm::acquire_sandboxed_vm().unwrap();
+        let mut ctx_b = LuaContext::new("02_b", &wf.join("02_b"), &wf);
+        run_hook(
+            pooled.get(),
+            "on_validate",
+            &mut ctx_b,
+            "if marker == 'from_a' then ctx:set_skip(true) end",
+        )
+        .unwrap();
+        assert!(
+            !ctx_b.skip,
+            "stage B must not observe stage A's globals or leftover on_validate hook"
+        );
+    }
+
+    #[test]
+    fn stage_output_and_stage_complete_reject_invalid_names() {
+        let lua = crate::lua_engine::vm::create_sandboxed_vm().unwrap();
+        let ctx = LuaContext::new("01_a", Path::new("/tmp/wf/01_a"), Path::new("/tmp/wf"));
+        lua.globals().set("ctx", ctx).unwrap();
+
+        for bad in [
+            "../escape",
+            "/etc/passwd_x",
+            "no_underscore_needed/..",
+            "..",
+            "01_../../escape",
+            "01_a\\b",
+        ] {
+            // Long-bracket Lua strings pass the name through verbatim.
+            let result = lua
+                .load(format!("return ctx:stage_complete([[{bad}]])"))
+                .eval::<bool>();
+            assert!(
+                result.is_err(),
+                "stage_complete({bad:?}) must be rejected, got {result:?}"
+            );
+            let result = lua
+                .load(format!("return ctx:stage_output([[{bad}]])"))
+                .eval::<Option<String>>();
+            assert!(
+                result.is_err(),
+                "stage_output({bad:?}) must be rejected, got {result:?}"
+            );
+        }
     }
 }

@@ -53,7 +53,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for HashingReader<R> {
         }
 
         if let Poll::Ready(Ok(())) = &result {
-            if filled_after == filled_before && buf.capacity() > 0 {
+            // Per the AsyncRead contract, `Ready(Ok(()))` with no new bytes is
+            // only EOF when the read buffer still had room. A full ReadBuf
+            // (remaining == 0) returning Ok(0) just means "try again with an
+            // empty buffer" and must not finalize the hash.
+            if filled_after == filled_before && buf.remaining() > 0 {
                 this.saw_eof = true;
                 let hash = this.hasher.finalize();
                 if hash.as_bytes() != &this.expected {
@@ -385,5 +389,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(read_data, content);
+    }
+
+    #[tokio::test]
+    async fn get_reader_full_readbuf_poll_is_not_premature_eof() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = LocalBackend::new(tmp.path().to_path_buf()).await.unwrap();
+
+        // 23 bytes: read 8, then poll once more with a completely full
+        // ReadBuf while 15 bytes remain. A full buffer returning Ok(0) is
+        // not EOF; treating it as EOF would finalize a partial hash and
+        // spuriously fail with "content hash mismatch".
+        let content: Vec<u8> = (0..23u8).map(|i| b'a' + i).collect();
+        let cid = backend.put(&content).await.unwrap();
+
+        let mut reader = backend.get_reader(&cid).await.unwrap();
+        let mut storage = [0u8; 8];
+        let mut buf = tokio::io::ReadBuf::new(&mut storage);
+
+        let n = tokio::io::AsyncReadExt::read_buf(&mut reader, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(n, 8);
+        assert_eq!(buf.remaining(), 0);
+
+        // Poll again with the full buffer: no room, so nothing is read, and
+        // crucially no error is raised.
+        let n = tokio::io::AsyncReadExt::read_buf(&mut reader, &mut buf)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+
+        // Draining the rest now completes the stream and verifies the hash.
+        let mut rest = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut rest)
+            .await
+            .unwrap();
+        assert_eq!(rest, content[8..]);
     }
 }

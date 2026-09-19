@@ -188,7 +188,7 @@ impl WorkflowActor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WorkflowHandle {
     tx: mpsc::Sender<ActorMessage>,
 }

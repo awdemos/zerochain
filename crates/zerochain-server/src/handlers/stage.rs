@@ -17,6 +17,15 @@ pub async fn run_next(
         let registry = state.registry.read().await;
         match registry.get_or_create(&id).await {
             Ok(h) => h,
+            Err(DaemonError::WorkflowNotFound(_)) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(SimpleMessage {
+                        message: format!("workflow not found: {id}"),
+                    }),
+                )
+                    .into_response();
+            }
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -92,6 +101,15 @@ async fn run_stage_by_id(
         let registry = state.registry.read().await;
         match registry.get_or_create(id).await {
             Ok(h) => h,
+            Err(DaemonError::WorkflowNotFound(_)) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(SimpleMessage {
+                        message: format!("workflow not found: {id}"),
+                    }),
+                )
+                    .into_response();
+            }
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -287,6 +305,15 @@ async fn read_stage_file(
         let registry = state.registry.read().await;
         match registry.get_or_create(id).await {
             Ok(h) => h,
+            Err(DaemonError::WorkflowNotFound(_)) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(SimpleMessage {
+                        message: format!("workflow not found: {id}"),
+                    }),
+                )
+                    .into_response();
+            }
             Err(e) => {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,

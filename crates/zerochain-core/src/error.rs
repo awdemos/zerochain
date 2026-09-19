@@ -24,6 +24,9 @@ pub enum Error {
         source: serde_yml::Error,
     },
 
+    #[error("unterminated frontmatter in {path}: missing closing --- delimiter")]
+    UnterminatedFrontmatter { path: PathBuf },
+
     #[error("missing CONTEXT.md in stage {stage}")]
     MissingContext { stage: String },
 
@@ -76,6 +79,9 @@ impl From<Error> for ZerochainError {
             },
             Error::YamlParse { path, source } => ZerochainError::YamlParse {
                 message: format!("{path:?}: {source}"),
+            },
+            Error::UnterminatedFrontmatter { path } => ZerochainError::YamlParse {
+                message: format!("{path:?}: unterminated frontmatter"),
             },
             Error::MissingContext { stage } => ZerochainError::Stage {
                 message: format!("missing CONTEXT.md in stage {stage}"),

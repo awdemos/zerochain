@@ -20,25 +20,33 @@ fn parse_tokens(cmd: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
+    // Tracks whether the current token has begun, so that empty quoted
+    // arguments (`''` or `""`) are preserved instead of dropped.
+    let mut token_started = false;
 
     for c in cmd.chars() {
         match c {
             '\'' if !in_double => {
                 in_single = !in_single;
+                token_started = true;
             }
             '"' if !in_single => {
                 in_double = !in_double;
+                token_started = true;
             }
             c if c.is_whitespace() && !in_single && !in_double => {
-                if !current.is_empty() {
-                    tokens.push(current.clone());
-                    current.clear();
+                if token_started {
+                    tokens.push(std::mem::take(&mut current));
+                    token_started = false;
                 }
             }
-            c => current.push(c),
+            c => {
+                current.push(c);
+                token_started = true;
+            }
         }
     }
-    if !current.is_empty() {
+    if token_started {
         tokens.push(current);
     }
     tokens
@@ -116,10 +124,17 @@ impl Tool for ShellTool {
                 message: "missing 'command' field".to_string(),
             })?;
 
+        // A timeout of 0 would fire immediately; treat it as "use the default".
         let timeout_ms = input
             .get("timeout_ms")
             .and_then(Value::as_u64)
-            .map(|t| t.min(MAX_TIMEOUT_MS))
+            .map(|t| {
+                if t == 0 {
+                    DEFAULT_TIMEOUT_MS
+                } else {
+                    t.min(MAX_TIMEOUT_MS)
+                }
+            })
             .unwrap_or(DEFAULT_TIMEOUT_MS);
 
         let workspace_root = input
@@ -157,11 +172,13 @@ impl Tool for ShellTool {
         let mut stdout = child.stdout.take().expect("stdout was piped");
         let mut stderr = child.stderr.take().expect("stderr was piped");
 
-        let mut stdout_buf = String::new();
-        let mut stderr_buf = String::new();
+        // Read raw bytes: command output may not be valid UTF-8 (binary
+        // artifacts, locale noise) and must not fail the whole call.
+        let mut stdout_buf: Vec<u8> = Vec::new();
+        let mut stderr_buf: Vec<u8> = Vec::new();
 
-        let stdout_fut = stdout.read_to_string(&mut stdout_buf);
-        let stderr_fut = stderr.read_to_string(&mut stderr_buf);
+        let stdout_fut = stdout.read_to_end(&mut stdout_buf);
+        let stderr_fut = stderr.read_to_end(&mut stderr_buf);
 
         let result = tokio::time::timeout(timeout, async {
             let (_, _, status) = tokio::try_join!(stdout_fut, stderr_fut, child.wait())?;
@@ -171,8 +188,8 @@ impl Tool for ShellTool {
 
         match result {
             Ok(Ok(status)) => Ok(json!({
-                "stdout": stdout_buf,
-                "stderr": stderr_buf,
+                "stdout": String::from_utf8_lossy(&stdout_buf),
+                "stderr": String::from_utf8_lossy(&stderr_buf),
                 "exit_code": status.code().unwrap_or(-1)
             })),
             Ok(Err(e)) => Err(ZerochainError::Io {
@@ -186,5 +203,83 @@ impl Tool for ShellTool {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_tokens_preserves_empty_quoted_arguments() {
+        assert_eq!(
+            parse_tokens("python3 -c ''"),
+            vec!["python3".to_string(), "-c".to_string(), String::new()]
+        );
+        assert_eq!(
+            parse_tokens("echo '' \"\""),
+            vec!["echo".to_string(), String::new(), String::new()]
+        );
+        // A bare quoted empty string is a single (empty) argument.
+        assert_eq!(parse_tokens("''"), vec![String::new()]);
+    }
+
+    #[test]
+    fn parse_tokens_unquoted_behaviour_unchanged() {
+        assert_eq!(
+            parse_tokens("echo hello world"),
+            vec!["echo".to_string(), "hello".to_string(), "world".to_string()]
+        );
+        assert!(parse_tokens("").is_empty());
+        assert!(parse_tokens("   ").is_empty());
+        assert_eq!(
+            parse_tokens("echo 'a b' c"),
+            vec!["echo".to_string(), "a b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn non_utf8_output_is_lossy_not_an_error() {
+        let workspace = tempfile::tempdir().unwrap();
+        std::fs::write(
+            workspace.path().join("blob.bin"),
+            [0xffu8, 0xfe, b'a', 0x80],
+        )
+        .unwrap();
+
+        let tool = ShellTool;
+        let result = tool
+            .run(json!({
+                "command": "cat blob.bin",
+                "workspace_root": workspace.path().to_str().unwrap(),
+            }))
+            .await
+            .expect("non-UTF-8 output must not fail the call");
+
+        assert_eq!(result.get("exit_code").unwrap().as_i64().unwrap(), 0);
+        let stdout = result.get("stdout").unwrap().as_str().unwrap();
+        assert!(
+            stdout.contains('\u{FFFD}'),
+            "expected lossy replacement: {stdout:?}"
+        );
+        assert!(stdout.contains('a'));
+    }
+
+    #[tokio::test]
+    async fn zero_timeout_uses_default() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        let tool = ShellTool;
+        let result = tool
+            .run(json!({
+                "command": "echo hi",
+                "timeout_ms": 0,
+                "workspace_root": workspace.path().to_str().unwrap(),
+            }))
+            .await
+            .expect("timeout_ms of 0 must fall back to the default");
+        assert_eq!(result.get("exit_code").unwrap().as_i64().unwrap(), 0);
+        assert_eq!(result.get("stdout").unwrap().as_str().unwrap().trim(), "hi");
     }
 }

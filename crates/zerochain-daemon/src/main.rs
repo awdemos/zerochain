@@ -146,15 +146,13 @@ async fn main() -> Result<()> {
             println!("complete: {complete}");
             println!("next:     {next}");
             for stage in &workflow.stages {
-                let marker = if stage.is_complete {
-                    "done"
-                } else if stage.is_error {
-                    "error"
-                } else if stage.human_gate {
-                    "gate"
-                } else {
-                    "pending"
-                };
+                // Match the execution plan's precedence: a stage with both
+                // markers is errored, not done.
+                let marker = zerochain_daemon::stage_marker(
+                    stage.is_error,
+                    stage.is_complete,
+                    stage.human_gate,
+                );
                 println!("  {} [{}]", stage.id.raw, marker);
             }
         }

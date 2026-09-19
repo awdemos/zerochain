@@ -88,8 +88,8 @@ impl Context {
     }
 
     pub fn parse(content: &str) -> Result<Self> {
-        let trimmed = content.trim_start();
-        if !trimmed.starts_with("---") {
+        let trimmed = crate::okf::strip_bom(content).trim_start();
+        if !crate::okf::starts_frontmatter(trimmed) {
             return Ok(Context {
                 frontmatter: ContextFrontmatter::default(),
                 body: content.to_string(),
@@ -99,14 +99,15 @@ impl Context {
 
         let after_first = &trimmed[3..];
 
-        let end_marker = after_first.find("\n---").ok_or_else(|| Error::YamlParse {
-            path: std::path::PathBuf::from("<inline>"),
-            #[allow(clippy::unwrap_used)]
-            source: serde_yml::from_str::<serde_yml::Value>("---").unwrap_err(),
-        })?;
+        let (yaml_end, body_start) =
+            crate::okf::find_closing_delimiter(after_first).ok_or_else(|| {
+                Error::UnterminatedFrontmatter {
+                    path: std::path::PathBuf::from("<inline>"),
+                }
+            })?;
 
-        let yaml_str = &after_first[..end_marker];
-        let body = after_first[end_marker + 4..].trim_start().to_string();
+        let yaml_str = &after_first[..yaml_end];
+        let body = after_first[body_start..].trim_start().to_string();
 
         let frontmatter: ContextFrontmatter =
             serde_yml::from_str(yaml_str).map_err(|e| Error::YamlParse {
@@ -360,6 +361,61 @@ multimodal_input:
         let input = "---\ntools:\n  - http\n  - search\n---\nBody";
         let ctx = Context::parse(input).unwrap();
         assert_eq!(ctx.frontmatter.tools, vec!["http", "search"]);
+    }
+
+    #[test]
+    fn unclosed_frontmatter_errors_instead_of_panicking() {
+        let err = Context::parse("---\nrole: analyst\n").unwrap_err();
+        assert!(
+            matches!(err, Error::UnterminatedFrontmatter { .. }),
+            "expected UnterminatedFrontmatter, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn dashed_junk_line_is_not_a_closing_delimiter() {
+        let input = "---\nrole: analyst\n---junk\nbody";
+        assert!(Context::parse(input).is_err());
+    }
+
+    #[test]
+    fn four_dash_thematic_break_is_not_frontmatter() {
+        let input = "----\nSome body\n";
+        let ctx = Context::parse(input).unwrap();
+        assert!(ctx.frontmatter.role.is_none());
+        assert_eq!(ctx.body, input);
+    }
+
+    #[test]
+    fn dash_line_inside_multiline_scalar_does_not_close_frontmatter() {
+        let input = "---\nrole: analyst\nnotes: |\n  line one\n  ---\n  line three\n---\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.role.as_deref(), Some("analyst"));
+        assert_eq!(ctx.body, "Body");
+    }
+
+    #[test]
+    fn crlf_closing_delimiter_is_accepted() {
+        let input = "---\r\nrole: analyst\r\n---\r\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.role.as_deref(), Some("analyst"));
+        assert_eq!(ctx.body, "Body");
+    }
+
+    #[test]
+    fn trailing_closing_delimiter_at_eof_has_empty_body() {
+        let input = "---\nrole: analyst\n---";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.role.as_deref(), Some("analyst"));
+        assert_eq!(ctx.body, "");
+    }
+
+    #[test]
+    fn bom_prefixed_frontmatter_is_detected() {
+        let input = "\u{FEFF}---\nrole: analyst\n---\nBody";
+        let ctx = Context::parse(input).unwrap();
+        assert_eq!(ctx.frontmatter.role.as_deref(), Some("analyst"));
+        assert_eq!(ctx.body, "Body");
     }
 
     #[test]

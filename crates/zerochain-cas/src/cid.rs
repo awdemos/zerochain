@@ -73,13 +73,32 @@ fn hex_decode(hex: &str) -> std::result::Result<[u8; 32], CasError> {
             hex.len()
         )));
     }
+    if !hex.is_ascii() {
+        return Err(CasError::InvalidCid(
+            "CID hex must contain only ASCII characters".into(),
+        ));
+    }
     let mut out = [0u8; 32];
+    let bytes = hex.as_bytes();
     for i in 0..32 {
-        let byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
-            .map_err(|e| CasError::InvalidCid(format!("hex decode at position {i}: {e}")))?;
-        out[i] = byte;
+        let hi = hex_nibble(bytes[i * 2]).ok_or_else(|| {
+            CasError::InvalidCid(format!("invalid hex digit at position {}", i * 2))
+        })?;
+        let lo = hex_nibble(bytes[i * 2 + 1]).ok_or_else(|| {
+            CasError::InvalidCid(format!("invalid hex digit at position {}", i * 2 + 1))
+        })?;
+        out[i] = (hi << 4) | lo;
     }
     Ok(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 impl fmt::Display for Cid {
@@ -149,6 +168,44 @@ mod tests {
     #[test]
     fn from_hex_invalid_chars() {
         assert!(Cid::from_hex(&"g".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn from_hex_multibyte_returns_err() {
+        // 21 * 3 bytes + 1 byte = 64 bytes: passes the length check, but the
+        // multi-byte chars must not trigger a char-boundary slice panic.
+        let s = format!("{}a", "€".repeat(21));
+        assert_eq!(s.len(), 64);
+        assert!(Cid::from_hex(&s).is_err());
+    }
+
+    #[test]
+    fn from_hex_mixed_width_multibyte_returns_err() {
+        let s = "€".repeat(64 / 3);
+        let mut s = s;
+        // Pad to exactly 64 bytes with ASCII.
+        while s.len() < 64 {
+            s.push('a');
+        }
+        assert_eq!(s.len(), 64);
+        assert!(Cid::from_hex(&s).is_err());
+    }
+
+    #[test]
+    fn from_hex_uppercase_accepted() {
+        let cid = Cid::from_bytes(b"uppercase hex");
+        let upper = cid.as_hex().to_uppercase();
+        assert_eq!(Cid::from_hex(&upper).unwrap(), cid);
+        let parsed: Cid = upper.parse().unwrap();
+        assert_eq!(parsed, cid);
+    }
+
+    #[test]
+    fn from_hex_nul_byte_returns_err() {
+        let mut s = "a".repeat(63);
+        s.push('\0');
+        assert_eq!(s.len(), 64);
+        assert!(Cid::from_hex(&s).is_err());
     }
 
     #[test]
