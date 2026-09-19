@@ -1,0 +1,3 @@
+# managed-by: awdemos-cargo-target-provision
+[build]
+target-dir = "/.cargo-targets/targets/zerochain/main/target"
