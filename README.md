@@ -11,9 +11,17 @@
 **Multi-agent orchestration using the filesystem.**  
 Directories are stages. Files are state. Symlinks are data flow.
 
-[🧠 Why](#-why-agents-forget) · [⚡ Quick Start](#-quick-start) · [✨ Highlights](#-highlights) · [🕸️ Contribution Graph](#️-collective-contribution-graph) · [🖥️ CLI](#-cli) · [🏗️ Architecture](#️-architecture)
+[❓ The Problem](#-what-problem-does-zerochain-solve) · [🧠 Why](#-why-agents-forget) · [⚡ Quick Start](#-quick-start) · [✨ Highlights](#-highlights) · [🕸️ Contribution Graph](#️-collective-contribution-graph) · [🖥️ CLI](#-cli) · [🏗️ Architecture](#️-architecture)
 
 </div>
+
+---
+
+## ❓ What problem does zerochain solve?
+
+AI agent runs don't remember each other. Every session re-learns which configs diverge, re-walks dead-end branches, and re-derives results a previous run already proved — and the usual fix, bolting a database and message broker onto the pipeline, replaces one kind of infrastructure with two more.
+
+Zerochain solves this by making the **filesystem** the shared memory. Workflow state is plain directories and files, so agents hand off work with nothing more exotic than a write. On top of that, every run is recorded in an append-only, content-addressed **contribution graph** — what was tried, what worked, what failed, and who reproduced what — with each record committed automatically into jujutsu (jj) version control. Agents and humans then build on prior runs instead of rediscovering them, every claimed result traces back to the exact artifacts and lineage that produced it, and the full history can be audited, replayed, or rolled back like any repository: `zerochain graph` for the research view, `jj log` for the audit view.
 
 ---
 
