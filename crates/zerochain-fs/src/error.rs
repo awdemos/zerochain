@@ -11,6 +11,9 @@ pub enum FsError {
         source: std::io::Error,
     },
 
+    #[error("invalid input: {message}")]
+    InvalidInput { message: String },
+
     #[error("snapshot failed: source {src_path} -> target {target}: {reason}")]
     SnapshotFailed {
         src_path: PathBuf,
@@ -48,6 +51,7 @@ impl From<FsError> for ZerochainError {
     fn from(err: FsError) -> Self {
         match err {
             FsError::Io { path, source } => ZerochainError::Io { path, source },
+            FsError::InvalidInput { message } => ZerochainError::InvalidInput { message },
             FsError::SnapshotFailed {
                 src_path,
                 target,
@@ -78,6 +82,7 @@ impl From<ZerochainError> for FsError {
     fn from(err: ZerochainError) -> Self {
         match err {
             ZerochainError::Io { path, source } => FsError::Io { path, source },
+            ZerochainError::InvalidInput { message } => FsError::InvalidInput { message },
             ZerochainError::Fs { message } => FsError::SubvolumeError {
                 path: PathBuf::new(),
                 reason: message,

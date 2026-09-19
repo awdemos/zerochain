@@ -101,9 +101,9 @@ async fn ensure_parent_in_workspace(workspace: &Path, target: &Path) -> Result<P
 /// filesystem, so reading through it exfiltrates outside data and writing
 /// through it truncates an outside file while every path check passes.
 ///
-/// Residual risk: there is a TOCTOU window between this check and the actual
-/// read/write during which the path can be swapped; closing that requires
-/// openat2(RESOLVE_BENEATH)-style resolution, which std/tokio do not expose.
+/// A hard link legitimately resolves beneath the workspace root, so the
+/// dir-fd-anchored reads/writes below (which close the symlink-swap TOCTOU
+/// window) cannot detect this aliasing; this check remains the defense.
 fn ensure_not_hardlinked(path: &Path) -> Result<()> {
     let metadata = std::fs::metadata(path).map_err(|e| ZerochainError::Io {
         path: path.to_path_buf(),
@@ -168,11 +168,24 @@ impl Tool for ReadFileTool {
                     });
                 }
                 ensure_not_hardlinked(&canonical)?;
-                let content = tokio::fs::read_to_string(&canonical).await.map_err(|e| {
-                    ZerochainError::Io {
-                        path: canonical,
-                        source: e,
+                let rel = canonical
+                    .strip_prefix(&workspace)
+                    .expect("containment checked above");
+                let bytes = match zerochain_fs::read_anchored(&workspace, rel).await {
+                    Ok(bytes) => bytes,
+                    Err(zerochain_fs::FsError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        // Vanished between the canonicalize check and the
+                        // anchored open; report the same "missing" shape as
+                        // a file that never existed.
+                        return Ok(json!({ "content": "", "exists": false }));
                     }
+                    Err(err) => return Err(err.into()),
+                };
+                let content = String::from_utf8(bytes).map_err(|err| ZerochainError::Io {
+                    path: canonical.clone(),
+                    source: std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error()),
                 })?;
                 Ok(json!({ "content": content, "exists": true }))
             }
@@ -233,10 +246,11 @@ impl Tool for WriteFileTool {
 
         // Verify (and create) the parent directory inside the workspace before any
         // filesystem mutation that could follow an escaping symlink.
-        ensure_parent_in_workspace(&workspace, &target).await?;
+        let parent = ensure_parent_in_workspace(&workspace, &target).await?;
 
         // If the target already exists, canonicalize it to catch a symlink that
         // points outside the workspace.
+        let mut canonical_target = None;
         if let Ok(canonical) = target.canonicalize() {
             if !canonical.starts_with(&workspace) {
                 return Err(ZerochainError::InvalidInput {
@@ -244,14 +258,23 @@ impl Tool for WriteFileTool {
                 });
             }
             ensure_not_hardlinked(&canonical)?;
+            canonical_target = Some(canonical);
         }
 
-        tokio::fs::write(&target, content)
-            .await
-            .map_err(|e| ZerochainError::Io {
-                path: target.clone(),
-                source: e,
-            })?;
+        // Anchor the final open to the workspace root dir fd, resolving the
+        // file relative to the canonicalized parent (or canonicalized target)
+        // so a concurrent symlink swap cannot redirect the write.
+        let rel = match &canonical_target {
+            Some(canonical) => canonical
+                .strip_prefix(&workspace)
+                .expect("containment checked above")
+                .to_path_buf(),
+            None => parent
+                .strip_prefix(&workspace)
+                .expect("parent verified inside workspace above")
+                .join(target.file_name().unwrap_or(target.as_os_str())),
+        };
+        zerochain_fs::write_anchored(&workspace, &rel, content.as_bytes()).await?;
 
         // Final verification: the written file must resolve inside the workspace.
         let canonical = target.canonicalize().map_err(|e| ZerochainError::Io {

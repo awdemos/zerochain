@@ -669,6 +669,12 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Serializes tests that mutate or assert on `ZEROCHAIN_BTRFS_SUBVOLUME_MODE`
+    /// (global process state) so parallel test threads cannot race on it.
+    /// Async-aware so the guard can be held across awaits without blocking
+    /// the executor.
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn directory_cow_name() {
         let cow = DirectoryCow;
@@ -821,6 +827,7 @@ mod tests {
 
     #[test]
     fn subvolume_mode_from_env_defaults_to_off() {
+        let _guard = ENV_LOCK.blocking_lock();
         // Ensure the variable is not set from a previous test.
         std::env::remove_var("ZEROCHAIN_BTRFS_SUBVOLUME_MODE");
         assert_eq!(SubvolumeMode::from_env(), SubvolumeMode::Off);
@@ -828,6 +835,7 @@ mod tests {
 
     #[test]
     fn subvolume_mode_from_env_parses_variants() {
+        let _guard = ENV_LOCK.blocking_lock();
         for (value, expected) in [
             ("off", SubvolumeMode::Off),
             ("OFF", SubvolumeMode::Off),
@@ -895,6 +903,7 @@ mod tests {
 
     #[tokio::test]
     async fn effective_mode_falls_back_to_env_mode_when_no_marker() {
+        let _guard = ENV_LOCK.lock().await;
         let tmp = TempDir::new().unwrap();
         let workflow_root = tmp.path().join("wf");
         tokio::fs::create_dir_all(&workflow_root).await.unwrap();
