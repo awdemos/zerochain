@@ -447,20 +447,28 @@ pub async fn init_repo(workspace: &Path) -> bool {
             return false;
         }
 
-        if let Err(e) = Command::new("jj")
-            .args(["config", "set", "user.name", "zerochain"])
+        // Modern jj requires an explicit config scope; `--repo` pins the
+        // identity to this repository. A non-zero exit must not fail init,
+        // but it is logged so misattributed auto-commits are diagnosable.
+        let set_config = |args: &[&str]| match Command::new("jj")
+            .args(args)
             .current_dir(&workspace)
             .output()
         {
-            tracing::warn!(error = %e, "failed to set jj user.name");
-        }
-        if let Err(e) = Command::new("jj")
-            .args(["config", "set", "user.email", "zerochain@daemon"])
-            .current_dir(&workspace)
-            .output()
-        {
-            tracing::warn!(error = %e, "failed to set jj user.email");
-        }
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                tracing::warn!(
+                    args = ?args,
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "jj config set failed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(args = ?args, error = %e, "failed to run jj config set");
+            }
+        };
+        set_config(&["config", "set", "--repo", "user.name", "zerochain"]);
+        set_config(&["config", "set", "--repo", "user.email", "zerochain@daemon"]);
         tracing::debug!("jj repo initialized");
         true
     })

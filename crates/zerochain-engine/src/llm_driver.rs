@@ -125,7 +125,8 @@ impl<'a> LLMStageDriver<'a> {
 
         self.load_memory_sources(&ctx).await?;
 
-        let mut messages = assemble_messages(&ctx, &input_content, self.stage).await;
+        let mut messages =
+            assemble_messages(&ctx, &input_content, self.stage, &workflow_root).await;
 
         let tool_names = ctx
             .as_ref()
@@ -169,7 +170,14 @@ impl<'a> LLMStageDriver<'a> {
                 .map_err(DaemonError::Llm)?;
 
             if response.tool_calls.is_empty() {
-                write_stage_output(self.stage, &response, &stage_ctx).await?;
+                write_stage_output(
+                    self.stage,
+                    &response,
+                    &stage_ctx,
+                    ctx.as_ref()
+                        .and_then(|c| c.frontmatter.definition_of_done.clone()),
+                )
+                .await?;
                 let output = response.content.clone().unwrap_or_default();
                 break (output, response);
             }
@@ -198,7 +206,8 @@ impl<'a> LLMStageDriver<'a> {
 
                 let fm = okf_frontmatter_for_stage(
                     &self.stage.id.raw,
-                    self.stage.context_path.to_str().map(|s| s.to_string()),
+                    ctx.as_ref()
+                        .and_then(|c| c.frontmatter.definition_of_done.clone()),
                 );
                 let result_path = self.stage.output_path.join("result.md");
                 let okf_output =
@@ -216,6 +225,16 @@ impl<'a> LLMStageDriver<'a> {
                 break (tool_output, response);
             }
 
+            // Echo the assistant message that carried the tool calls before
+            // the tool results; OpenAI-compatible providers return HTTP 400
+            // for a `tool` message with no preceding assistant `tool_calls`.
+            let assistant_msg = Message::new(
+                Role::Assistant,
+                response.content.clone().unwrap_or_default(),
+            )
+            .with_tool_calls(response.tool_calls.clone());
+            messages.push(assistant_msg);
+
             for call in &response.tool_calls {
                 let result = tool_driver::execute_tool_call(
                     &self.tool_registry,
@@ -229,7 +248,8 @@ impl<'a> LLMStageDriver<'a> {
                     "Tool result for call {} ({}): {}",
                     call.id, call.name, result
                 );
-                messages.push(Message::new(Role::Tool, result_text));
+                messages
+                    .push(Message::new(Role::Tool, result_text).with_tool_call_id(call.id.clone()));
             }
         };
 
@@ -282,41 +302,46 @@ impl<'a> LLMStageDriver<'a> {
         }
 
         let workflow_root = self.state.workflow_root(self.workflow_id).await?;
-        let mut parts = Vec::new();
-        let mut source_paths = Vec::new();
-        for src in &ctx.frontmatter.memory_sources {
-            let path = workflow_root.join(src);
-            match tokio::fs::metadata(&path).await {
-                Ok(_) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(DaemonError::io(&path, e)),
-            }
-            let content = tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|e| DaemonError::io(&path, e))?;
-            parts.push(content);
-            source_paths.push(path);
-        }
-        if parts.is_empty() {
-            return Ok(());
-        }
-
-        let combined = parts.join("\n\n");
+        let canonical_root = workflow_root
+            .canonicalize()
+            .map_err(|e| DaemonError::io(&workflow_root, e))?;
         let chunk_size = ctx.frontmatter.memory_chunk_size.unwrap_or(1000);
         let overlap = ctx.frontmatter.memory_chunk_overlap.unwrap_or(200);
-        let chunks = chunk_text(&combined, chunk_size, overlap);
-        if chunks.is_empty() {
-            return Ok(());
-        }
 
         let store = self.state.workflow_memory_store(self.workflow_id).await?;
         let mut locked = store.lock().await;
-        let texts: Vec<(String, serde_json::Value)> = chunks
-            .into_iter()
-            .zip(source_paths.iter().cycle())
-            .map(|(chunk, path)| (chunk, json!({ "source": path.display().to_string() })))
-            .collect();
-        locked.add(&**model, texts).await?;
+
+        for src in &ctx.frontmatter.memory_sources {
+            let joined = workflow_root.join(src);
+            let canonical = match tokio::fs::canonicalize(&joined).await {
+                Ok(c) => c,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(DaemonError::io(&joined, e)),
+            };
+            // Refuse sources that escape the workflow (absolute paths or
+            // `..` chains in frontmatter must not read arbitrary host files).
+            if !canonical.starts_with(&canonical_root) {
+                return Err(DaemonError::Workflow(
+                    zerochain_core::error::Error::PlanError {
+                        reason: format!("memory source {} resolves outside workflow root", src),
+                    },
+                ));
+            }
+            let content = tokio::fs::read_to_string(&canonical)
+                .await
+                .map_err(|e| DaemonError::io(&canonical, e))?;
+            // Chunk each file separately so every chunk is tagged with the
+            // path of the file it actually came from.
+            let chunks = chunk_text(&content, chunk_size, overlap);
+            if chunks.is_empty() {
+                continue;
+            }
+            let texts: Vec<(String, serde_json::Value)> = chunks
+                .into_iter()
+                .map(|chunk| (chunk, json!({ "source": src.as_str() })))
+                .collect();
+            locked.add(&**model, texts).await?;
+        }
         Ok(())
     }
 
@@ -535,6 +560,7 @@ async fn assemble_messages(
     ctx: &Option<StageContext>,
     input_content: &str,
     stage: &Stage,
+    workflow_root: &Path,
 ) -> Vec<Message> {
     let start = std::time::Instant::now();
     let mut messages = Vec::new();
@@ -555,21 +581,62 @@ async fn assemble_messages(
 
     if let Some(ref ctx) = ctx {
         if !ctx.frontmatter.multimodal_input.is_empty() {
+            let canonical_root = tokio::fs::canonicalize(workflow_root)
+                .await
+                .unwrap_or_else(|_| workflow_root.to_path_buf());
             for mm in &ctx.frontmatter.multimodal_input {
-                let path = if mm.path.starts_with('.') {
-                    stage.path.join(&mm.path)
-                } else {
-                    PathBuf::from(&mm.path)
+                // URL-form inputs carry no local path; pass them through.
+                if mm.path.starts_with("https://")
+                    || mm.path.starts_with("http://")
+                    || mm.path.starts_with("data:")
+                {
+                    messages.push(Message::with_content(
+                        Role::User,
+                        Content::ImageUrl {
+                            image_url: ImageUrlContent {
+                                url: mm.path.clone(),
+                                detail: mm.detail.clone(),
+                            },
+                        },
+                    ));
+                    continue;
+                }
+
+                // Resolve relative paths against the stage directory, then
+                // require the resolved file to stay inside the workflow root
+                // (rejects absolute paths and `..` escapes pointing at
+                // arbitrary host files).
+                let joined = stage.path.join(&mm.path);
+                let resolved = match tokio::fs::canonicalize(&joined).await {
+                    Ok(c) if c.starts_with(&canonical_root) => c,
+                    Ok(c) => {
+                        tracing::warn!(
+                            path = %mm.path,
+                            resolved = %c.display(),
+                            "skipping multimodal input outside workflow root"
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %mm.path,
+                            error = %e,
+                            "skipping unreadable multimodal input file"
+                        );
+                        continue;
+                    }
                 };
 
-                match tokio::fs::read_to_string(&path).await {
+                match tokio::fs::read(&resolved).await {
                     Ok(data) => {
                         use base64::Engine;
                         let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
                         let media_type = match mm.input_type.as_str() {
                             "image" => {
-                                let ext =
-                                    path.extension().and_then(|e| e.to_str()).unwrap_or("png");
+                                let ext = resolved
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("png");
                                 format!("image/{ext}")
                             }
                             _ => "application/octet-stream".to_string(),
@@ -587,7 +654,7 @@ async fn assemble_messages(
                     }
                     Err(e) => {
                         tracing::warn!(
-                            path = %path.display(),
+                            path = %resolved.display(),
                             error = %e,
                             "skipping multimodal input file"
                         );
@@ -620,6 +687,7 @@ async fn write_stage_output(
     stage: &Stage,
     response: &zerochain_llm::CompleteResponse,
     stage_ctx: &LlmStageContext,
+    definition_of_done: Option<String>,
 ) -> Result<PathBuf, DaemonError> {
     let start = std::time::Instant::now();
     let content = response.content.clone().unwrap_or_default();
@@ -628,10 +696,7 @@ async fn write_stage_output(
         .await
         .map_err(|e| DaemonError::io(&stage.output_path, e))?;
 
-    let fm = okf_frontmatter_for_stage(
-        &stage.id.raw,
-        stage.context_path.to_str().map(|s| s.to_string()),
-    );
+    let fm = okf_frontmatter_for_stage(&stage.id.raw, definition_of_done);
     let okf_content = to_md_with_frontmatter(&fm, &content).map_err(DaemonError::Workflow)?;
     let result_path = stage.output_path.join("result.md");
     tokio::fs::write(&result_path, &okf_content)
@@ -672,6 +737,14 @@ async fn run_hook_async(
 ) -> Result<LuaContext, DaemonError> {
     tokio::task::spawn_blocking(move || {
         run_hook(lua.get(), hook_name, &mut ctx, &script).map_err(DaemonError::Workflow)?;
+        // `run_hook` exposes the context to the sandboxed script as the `ctx`
+        // global, which is a clone of our `ctx`; copy any effects the script
+        // made (set_skip, insert_stage_after, remove_stage) back so callers
+        // can observe them. Tolerate a missing/overwritten global.
+        if let Ok(Some(mut script_ctx)) = lua.get().globals().get::<Option<LuaContext>>("ctx") {
+            ctx.skip = script_ctx.skip;
+            ctx.hooks = std::mem::take(&mut script_ctx.hooks);
+        }
         Ok(ctx)
     })
     .await
@@ -769,7 +842,9 @@ mod tests {
     use tempfile::TempDir;
     use zerochain_core::stage::Stage;
     use zerochain_llm::error::LLMError;
-    use zerochain_llm::types::{CompleteResponse, LLMConfig, Message, ProviderId, Tool};
+    use zerochain_llm::types::{
+        CompleteResponse, FinishReason, LLMConfig, Message, ProviderId, Tool, ToolCall,
+    };
     use zerochain_memory::{EmbeddingModel, MemoryError};
 
     struct FakeLlm {
@@ -815,6 +890,53 @@ mod tests {
     impl EmbeddingModel for FakeEmbed {
         async fn embed(&self, _texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, MemoryError> {
             Ok(_texts.iter().map(|_| vec![1.0f32, 0.0, 0.0]).collect())
+        }
+    }
+
+    /// LLM that replays a scripted sequence of responses and records every
+    /// request's messages for assertions.
+    struct FakeToolLoopLlm {
+        responses: Vec<CompleteResponse>,
+        calls: std::sync::Mutex<Vec<Vec<Message>>>,
+    }
+
+    #[async_trait]
+    impl LLM for FakeToolLoopLlm {
+        fn provider_id(&self) -> &ProviderId {
+            static PROVIDER: ProviderId = ProviderId::OpenAI;
+            &PROVIDER
+        }
+
+        async fn complete(
+            &self,
+            _config: &LLMConfig,
+            messages: &[Message],
+            _tools: Option<&[Tool]>,
+        ) -> std::result::Result<CompleteResponse, LLMError> {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(messages.to_vec());
+            let idx = calls.len() - 1;
+            Ok(self
+                .responses
+                .get(idx)
+                .expect("test script provided enough responses")
+                .clone())
+        }
+
+        fn supports_multimodal(&self) -> bool {
+            false
+        }
+
+        fn context_window(&self) -> usize {
+            128_000
+        }
+
+        async fn health_check(&self) -> std::result::Result<(), LLMError> {
+            Ok(())
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
     }
 
@@ -1144,6 +1266,389 @@ mod tests {
             1,
             "only the setup node; index_output disabled"
         );
+    }
+
+    #[tokio::test]
+    async fn tool_loop_echoes_assistant_tool_calls_and_tool_call_ids() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "tool-loop",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+
+        tokio::fs::write(wf.root.join("note.txt"), "hello tool")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.md"),
+            "---\ntools:\n  - read_file\n---\nRead the note.",
+        )
+        .await
+        .unwrap();
+
+        let mut first = CompleteResponse::new(None);
+        first.tool_calls = vec![ToolCall::new(
+            "call_1",
+            "read_file",
+            serde_json::json!({ "path": "note.txt" }),
+        )];
+        first.finish_reason = FinishReason::ToolCalls;
+        let llm = FakeToolLoopLlm {
+            responses: vec![
+                first,
+                CompleteResponse::new(Some("final answer".to_string())),
+            ],
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "tool-loop",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+
+        let output = driver.execute(&mut workflows).await.unwrap();
+        assert_eq!(output, "final answer");
+
+        let calls = llm.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "tool loop must make a second LLM request");
+        let second = &calls[1];
+        let assistant = second
+            .iter()
+            .find(|m| m.role == Role::Assistant)
+            .expect("second request carries the assistant message");
+        let tool_calls = assistant
+            .tool_calls
+            .as_ref()
+            .expect("assistant message echoes tool_calls");
+        assert_eq!(tool_calls[0].id, "call_1");
+        assert_eq!(tool_calls[0].name, "read_file");
+        let tool_msg = second
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("second request carries the tool result");
+        assert_eq!(
+            tool_msg.tool_call_id.as_deref(),
+            Some("call_1"),
+            "tool result correlated to the assistant tool call"
+        );
+        assert!(
+            tool_msg.content.text().unwrap().contains("hello tool"),
+            "tool result carries the file contents"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_validate_skip_hook_skips_stage() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "lua-skip",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.lua"),
+            "function on_validate(ctx)\n  ctx:set_skip(true)\nend\n",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "should never be produced".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "lua-skip",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+
+        let output = driver.execute(&mut workflows).await.unwrap();
+        assert_eq!(output, "", "skipped stage produces no output");
+        assert!(
+            !stage.output_path.join("result.md").exists(),
+            "skipped stage must not write result.md"
+        );
+    }
+
+    #[tokio::test]
+    async fn multimodal_loads_binary_image_within_workflow() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mm-ok",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        // Bytes that are not valid UTF-8; the old read_to_string path dropped these.
+        let png_bytes = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF, 0xFE,
+        ];
+        tokio::fs::write(wf.root.join("00_spec").join("pixel.png"), &png_bytes)
+            .await
+            .unwrap();
+
+        let ctx = StageContext::parse(
+            "---\nmultimodal_input:\n  - type: image\n    path: pixel.png\n---\nDescribe it.",
+        )
+        .unwrap();
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+
+        let messages = assemble_messages(&Some(ctx), "", &stage, &wf.root).await;
+        let image = messages
+            .iter()
+            .find_map(|m| match &m.content {
+                Content::ImageUrl { image_url } => Some(image_url),
+                _ => None,
+            })
+            .expect("binary image assembled into a message");
+        let encoded = image
+            .url
+            .strip_prefix("data:image/png;base64,")
+            .expect("data URL with png media type");
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .unwrap();
+        assert_eq!(decoded, png_bytes, "image bytes survive the round trip");
+    }
+
+    #[tokio::test]
+    async fn multimodal_rejects_paths_escaping_workflow() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mm-escape",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        // File inside the workspace but OUTSIDE the workflow root; the stage
+        // dir is <ws>/.zerochain/workflows/mm-escape/00_spec, so ../../ reaches it.
+        let outside = tmp
+            .path()
+            .join(".zerochain")
+            .join("workflows")
+            .join("outside.png");
+        tokio::fs::write(&outside, [0x89u8, 0x50, 0x4E, 0x47])
+            .await
+            .unwrap();
+
+        let ctx = StageContext::parse(
+            "---\nmultimodal_input:\n  - type: image\n    path: ../../outside.png\n---\nX.",
+        )
+        .unwrap();
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+
+        let messages = assemble_messages(&Some(ctx), "", &stage, &wf.root).await;
+        assert!(
+            messages
+                .iter()
+                .all(|m| !matches!(m.content, Content::ImageUrl { .. })),
+            "multimodal path escaping the workflow root must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn multimodal_passes_through_remote_urls() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mm-url",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let ctx = StageContext::parse(
+            "---\nmultimodal_input:\n  - type: image\n    path: https://example.com/pic.png\n---\nX.",
+        )
+        .unwrap();
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+
+        let messages = assemble_messages(&Some(ctx), "", &stage, &wf.root).await;
+        let url = messages
+            .iter()
+            .find_map(|m| match &m.content {
+                Content::ImageUrl { image_url } => Some(image_url.url.as_str()),
+                _ => None,
+            })
+            .expect("remote URL assembled into a message");
+        assert_eq!(url, "https://example.com/pic.png");
+    }
+
+    #[tokio::test]
+    async fn memory_source_escaping_workflow_fails_stage() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mem-escape",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+        let outside = tmp
+            .path()
+            .join(".zerochain")
+            .join("workflows")
+            .join("secret.txt");
+        tokio::fs::write(&outside, "top secret").await.unwrap();
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.md"),
+            "---\nmemory_sources:\n  - ../secret.txt\n---\nGo.",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "unused".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "mem-escape",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+
+        let err = driver.execute(&mut workflows).await.unwrap_err();
+        assert!(
+            format!("{err}").contains("outside workflow root"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn memory_chunks_are_tagged_with_their_own_source_file() {
+        let tmp = TempDir::new().unwrap();
+        let state = test_state_with_embedding(&tmp).await;
+        let mut state_mut = state.clone_state();
+        let wf = state_mut
+            .init_workflow(crate::state::InitWorkflowParams {
+                name: "mem-labels",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state_mut);
+
+        let docs = wf.root.join("docs");
+        tokio::fs::create_dir_all(&docs).await.unwrap();
+        // First file is large enough to produce two chunks (size 1000,
+        // overlap 200); second produces one.
+        tokio::fs::write(docs.join("a.md"), "alpha ".repeat(300))
+            .await
+            .unwrap();
+        tokio::fs::write(docs.join("b.md"), "beta note")
+            .await
+            .unwrap();
+
+        tokio::fs::write(
+            wf.root.join("00_spec").join("CONTEXT.md"),
+            "---\nmemory_sources:\n  - docs/a.md\n  - docs/b.md\n---\nGo.",
+        )
+        .await
+        .unwrap();
+
+        let stage = Stage::from_dir(&wf.root.join("00_spec")).await.unwrap();
+        let llm = FakeLlm {
+            response: "unused".into(),
+        };
+        let mut workflows = HashMap::new();
+        workflows.insert(wf.id.clone(), wf);
+        let driver = LLMStageDriver {
+            workflow_id: "mem-labels",
+            stage: &stage,
+            llm: &llm,
+            cas: None,
+            context_cache: None,
+            tool_registry: Arc::new(ToolRegistry::default()),
+            state: state.clone(),
+        };
+        driver.execute(&mut workflows).await.unwrap();
+
+        let store = state.workflow_memory_store("mem-labels").await.unwrap();
+        let locked = store.lock().await;
+        let model = state.embedding_model.as_ref().unwrap();
+        let results = locked.query(model.as_ref(), "anything", 10).await.unwrap();
+        assert_eq!(results.len(), 3, "two chunks from a.md, one from b.md");
+        for (_score, chunk) in &results {
+            let text = chunk.text.clone();
+            let source = chunk
+                .metadata
+                .get("source")
+                .and_then(|s| s.as_str())
+                .expect("chunk tagged with a source");
+            if text.contains("beta") {
+                assert_eq!(source, "docs/b.md", "b.md chunk mislabeled as {source}");
+            } else {
+                assert!(
+                    text.contains("alpha"),
+                    "unexpected chunk text: {}",
+                    &text[..text.len().min(40)]
+                );
+                assert_eq!(source, "docs/a.md", "a.md chunk mislabeled as {source}");
+            }
+        }
     }
 
     #[test]

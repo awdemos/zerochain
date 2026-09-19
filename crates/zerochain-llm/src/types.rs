@@ -29,6 +29,14 @@ pub enum ThinkingMode {
 pub struct Message {
     pub role: Role,
     pub content: Content,
+    /// Correlates a `Role::Tool` message with the assistant tool call that
+    /// requested it. Providers reject tool messages without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool calls requested by the assistant. Must be echoed back (before the
+    /// tool results) for the next request to be accepted by providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 impl Message {
@@ -36,16 +44,37 @@ impl Message {
         Self {
             role,
             content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 
     #[must_use]
     pub fn with_content(role: Role, content: Content) -> Self {
-        Self { role, content }
+        Self {
+            role,
+            content,
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    /// Attach the tool calls this assistant message is fulfilling.
+    #[must_use]
+    pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
+        self.tool_calls = Some(tool_calls);
+        self
+    }
+
+    /// Attach the id of the assistant tool call this tool result answers.
+    #[must_use]
+    pub fn with_tool_call_id(mut self, tool_call_id: impl Into<String>) -> Self {
+        self.tool_call_id = Some(tool_call_id.into());
+        self
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
@@ -154,6 +183,60 @@ impl ToolCall {
     }
 }
 
+impl Serialize for ToolCall {
+    /// Serialize in the OpenAI wire shape: `arguments` is a JSON *string* and
+    /// the call is tagged with `type: "function"`.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+
+        let arguments = serde_json::to_string(&self.arguments).map_err(S::Error::custom)?;
+        let mut state = serializer.serialize_struct("ToolCall", 3)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("type", "function")?;
+        state.serialize_field(
+            "function",
+            &serde_json::json!({
+                "name": self.name,
+                "arguments": arguments,
+            }),
+        )?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolCall {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct ToolCallWire {
+            #[serde(default)]
+            id: Option<String>,
+            function: ToolCallFunctionWire,
+        }
+
+        #[derive(Deserialize)]
+        struct ToolCallFunctionWire {
+            name: String,
+            #[serde(default)]
+            arguments: serde_json::Value,
+        }
+
+        let wire = ToolCallWire::deserialize(deserializer)?;
+        // Tolerate providers that return `arguments` as a raw JSON value
+        // instead of an encoded JSON string.
+        let arguments = match wire.function.arguments {
+            serde_json::Value::String(s) => {
+                serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+            }
+            other => other,
+        };
+        Ok(ToolCall {
+            id: wire.id.unwrap_or_default(),
+            name: wire.function.name,
+            arguments,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct CompleteResponse {
@@ -220,7 +303,9 @@ impl LLMConfig {
     #[must_use]
     pub fn deterministic(mut self, content_cid: &str) -> Self {
         let hash = blake3::hash(content_cid.as_bytes());
-        self.seed = Some(u64::from_le_bytes(hash.as_bytes()[0..8].try_into().expect(
+        // Network byte order so the "deterministic" seed is identical on
+        // big- and little-endian hosts.
+        self.seed = Some(u64::from_be_bytes(hash.as_bytes()[0..8].try_into().expect(
             "blake3 hash is 32 bytes, so slicing the first 8 bytes always yields a valid u64 array",
         )));
         self.temperature = 0.0;
@@ -278,6 +363,55 @@ mod tests {
         let c1 = LLMConfig::new(ProviderId::OpenAI, "gpt-4o").deterministic(cid);
         let c2 = LLMConfig::new(ProviderId::OpenAI, "gpt-4o").deterministic(cid);
         assert_eq!(c1.seed, c2.seed);
+    }
+
+    #[test]
+    fn deterministic_seed_uses_network_byte_order() {
+        let cid = "bafybeigxyz123";
+        let config = LLMConfig::new(ProviderId::OpenAI, "gpt-4o").deterministic(cid);
+        let hash = blake3::hash(cid.as_bytes());
+        let expected = u64::from_be_bytes(hash.as_bytes()[0..8].try_into().unwrap());
+        assert_eq!(config.seed, Some(expected));
+    }
+
+    #[test]
+    fn message_tool_fields_round_trip_openai_shape() {
+        let call = ToolCall::new(
+            "call_1",
+            "read_file",
+            serde_json::json!({ "path": "a.txt" }),
+        );
+        let assistant = Message::new(Role::Assistant, "working on it").with_tool_calls(vec![call]);
+        let j = serde_json::to_value(&assistant).unwrap();
+        assert_eq!(j["role"], "assistant");
+        assert_eq!(j["content"], "working on it");
+        assert!(j.get("tool_call_id").is_none());
+        let tc = &j["tool_calls"][0];
+        assert_eq!(tc["id"], "call_1");
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "read_file");
+        assert_eq!(tc["function"]["arguments"], r#"{"path":"a.txt"}"#);
+
+        let tool_msg = Message::new(Role::Tool, "file contents").with_tool_call_id("call_1");
+        let j = serde_json::to_value(&tool_msg).unwrap();
+        assert_eq!(j["role"], "tool");
+        assert_eq!(j["tool_call_id"], "call_1");
+        assert_eq!(j["content"], "file contents");
+        assert!(j.get("tool_calls").is_none());
+
+        // The tool call itself round-trips through its wire shape.
+        let back: ToolCall = serde_json::from_value(tc.clone()).unwrap();
+        assert_eq!(back.id, "call_1");
+        assert_eq!(back.name, "read_file");
+        assert_eq!(back.arguments, serde_json::json!({ "path": "a.txt" }));
+    }
+
+    #[test]
+    fn message_without_tool_fields_omits_them_in_json() {
+        let msg = Message::new(Role::User, "hello");
+        let j = serde_json::to_value(&msg).unwrap();
+        assert!(j.get("tool_call_id").is_none());
+        assert!(j.get("tool_calls").is_none());
     }
 
     #[test]

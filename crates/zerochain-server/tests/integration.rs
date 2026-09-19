@@ -862,3 +862,175 @@ async fn graph_verification_updates_unverified_view() {
         "verified result leaves the unverified view; got: {body}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// export_okf output-path containment (S1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn export_okf_rejects_output_outside_workspace() {
+    let tmp = TempDir::new().expect("tempdir");
+    let outside = TempDir::new().expect("outside tempdir");
+    let app = make_app(tmp.path()).await;
+
+    // Otherwise well-formed request: the workflow exists.
+    let req = make_request(
+        "POST",
+        "/v1/workflows",
+        Some(r#"{"name": "okf-sec-out", "template": "00_spec"}"#),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    let target = outside.path().join("evil-bundle");
+    let req = make_request(
+        "GET",
+        &format!(
+            "/v1/workflows/okf-sec-out/export-okf?output={}",
+            target.display()
+        ),
+        None,
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        !target.exists(),
+        "nothing may be written outside the workspace"
+    );
+}
+
+#[tokio::test]
+async fn export_okf_rejects_parent_escape_output() {
+    let tmp = TempDir::new().expect("tempdir");
+    let app = make_app(tmp.path()).await;
+
+    let req = make_request(
+        "POST",
+        "/v1/workflows",
+        Some(r#"{"name": "okf-sec-escape", "template": "00_spec"}"#),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Unique marker so the "not created" assertion cannot collide with
+    // unrelated files in the shared parent (system temp) directory.
+    let marker = format!(
+        "{}-escape-check",
+        tmp.path().file_name().expect("name").to_string_lossy()
+    );
+    let req = make_request(
+        "GET",
+        &format!("/v1/workflows/okf-sec-escape/export-okf?output=../{marker}"),
+        None,
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        !tmp.path().parent().expect("parent").join(&marker).exists(),
+        "parent-escape output must not be created"
+    );
+}
+
+#[tokio::test]
+async fn export_okf_writes_bundle_for_output_inside_workspace() {
+    let tmp = TempDir::new().expect("tempdir");
+    let app = make_app(tmp.path()).await;
+
+    let req = make_request(
+        "POST",
+        "/v1/workflows",
+        Some(r#"{"name": "okf-sec-in", "template": "00_spec"}"#),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // A relative output path is anchored at the workspace.
+    let req = make_request(
+        "GET",
+        "/v1/workflows/okf-sec-in/export-okf?output=bundle",
+        None,
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bundle = tmp.path().join("bundle");
+    assert!(bundle.join("index.md").is_file());
+    assert!(bundle.join("log.md").is_file());
+    assert!(bundle.join("concepts").is_dir());
+}
+
+// ---------------------------------------------------------------------------
+// prompt send path validation (S2)
+// ---------------------------------------------------------------------------
+
+async fn app_with_cas_and_broker(workspace: &Path) -> axum::Router {
+    let cas = zerochain_cas::CasStore::new(workspace.join("cas"))
+        .await
+        .expect("cas store");
+    let state = ServerState::new(workspace)
+        .await
+        .with_auth_disabled()
+        .with_cas(cas)
+        .with_broker(std::sync::Arc::new(
+            zerochain_broker::memory::MemoryBroker::new(),
+        ));
+    app_from_state(&state)
+}
+
+#[tokio::test]
+async fn prompt_send_accepts_valid_stage_and_workflow() {
+    let tmp = TempDir::new().expect("tempdir");
+    let app = app_with_cas_and_broker(tmp.path()).await;
+
+    let req = make_request(
+        "POST",
+        "/v1/workflows/wf1/stages/00_spec/prompt",
+        Some(r#"{"to_stage": "01_next", "content": "hello"}"#),
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn prompt_send_rejects_traversing_to_stage() {
+    let tmp = TempDir::new().expect("tempdir");
+    let app = app_with_cas_and_broker(tmp.path()).await;
+
+    // Pre-fix, `../../evil` sailed through into the subscriber's
+    // create_dir_all + write under {workspace}/.zerochain/evil/input/.
+    let req = make_request(
+        "POST",
+        "/v1/workflows/wf1/stages/00_spec/prompt",
+        Some(r#"{"to_stage": "../../evil", "content": "hello"}"#),
+    );
+    let resp = send!(app.clone(), req);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let req = make_request(
+        "POST",
+        "/v1/workflows/wf1/stages/00_spec/prompt",
+        Some(r#"{"to_stage": "/tmp/evil", "content": "hello"}"#),
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    assert!(
+        !tmp.path().join(".zerochain").join("evil").exists(),
+        "no directory may be created outside the workflow tree"
+    );
+}
+
+#[tokio::test]
+async fn prompt_send_rejects_invalid_workflow_id() {
+    let tmp = TempDir::new().expect("tempdir");
+    let app = app_with_cas_and_broker(tmp.path()).await;
+
+    // %20 decodes to a space, which is not a valid workflow id character.
+    let req = make_request(
+        "POST",
+        "/v1/workflows/bad%20id/stages/00_spec/prompt",
+        Some(r#"{"to_stage": "01_next", "content": "hello"}"#),
+    );
+    let resp = send!(app, req);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

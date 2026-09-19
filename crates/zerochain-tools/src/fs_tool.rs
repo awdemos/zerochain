@@ -94,6 +94,38 @@ async fn ensure_parent_in_workspace(workspace: &Path, target: &Path) -> Result<P
     Ok(current)
 }
 
+/// Refuses to operate on a pre-existing file that has more than one hard link.
+///
+/// The containment checks in this module are canonicalize-based: a hard link
+/// created inside the workspace shares an inode with a file anywhere on the
+/// filesystem, so reading through it exfiltrates outside data and writing
+/// through it truncates an outside file while every path check passes.
+///
+/// Residual risk: there is a TOCTOU window between this check and the actual
+/// read/write during which the path can be swapped; closing that requires
+/// openat2(RESOLVE_BENEATH)-style resolution, which std/tokio do not expose.
+fn ensure_not_hardlinked(path: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(path).map_err(|e| ZerochainError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() > 1 {
+            return Err(ZerochainError::InvalidInput {
+                message: format!(
+                    "refusing to access file with multiple hard links: {}",
+                    path.display()
+                ),
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+    Ok(())
+}
+
 /// Read a file relative to the workspace root.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ReadFileTool;
@@ -135,6 +167,7 @@ impl Tool for ReadFileTool {
                         message: "path escapes workspace root".to_string(),
                     });
                 }
+                ensure_not_hardlinked(&canonical)?;
                 let content = tokio::fs::read_to_string(&canonical).await.map_err(|e| {
                     ZerochainError::Io {
                         path: canonical,
@@ -210,6 +243,7 @@ impl Tool for WriteFileTool {
                     message: "path escapes workspace root".to_string(),
                 });
             }
+            ensure_not_hardlinked(&canonical)?;
         }
 
         tokio::fs::write(&target, content)
@@ -231,5 +265,96 @@ impl Tool for WriteFileTool {
         }
 
         Ok(json!({ "written": true, "bytes": content.len() }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Hard links are not supported on every filesystem; callers skip the
+    /// assertion when the link cannot be created.
+    fn try_hard_link(link: &Path, original: &Path) -> bool {
+        std::fs::hard_link(original, link).is_ok()
+    }
+
+    #[tokio::test]
+    async fn write_file_refuses_hard_linked_target() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let inside = workspace.path().join("linked.txt");
+        let outside_file = outside.path().join("secret.txt");
+        std::fs::write(&outside_file, "original secret").unwrap();
+        if !try_hard_link(&inside, &outside_file) {
+            return;
+        }
+
+        let tool = WriteFileTool;
+        let err = tool
+            .run(json!({
+                "path": "linked.txt",
+                "content": "clobbered",
+                "workspace_root": workspace.path().to_str().unwrap(),
+            }))
+            .await
+            .expect_err("write through a hard link must be refused");
+        assert!(
+            matches!(err, ZerochainError::InvalidInput { .. }),
+            "unexpected error: {err}"
+        );
+
+        // The outside file must not have been truncated.
+        assert_eq!(
+            std::fs::read_to_string(&outside_file).unwrap(),
+            "original secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_refuses_hard_linked_target() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let inside = workspace.path().join("linked.txt");
+        let outside_file = outside.path().join("secret.txt");
+        std::fs::write(&outside_file, "outside secret").unwrap();
+        if !try_hard_link(&inside, &outside_file) {
+            return;
+        }
+
+        let tool = ReadFileTool;
+        let err = tool
+            .run(json!({
+                "path": "linked.txt",
+                "workspace_root": workspace.path().to_str().unwrap(),
+            }))
+            .await
+            .expect_err("read through a hard link must be refused");
+        assert!(
+            matches!(err, ZerochainError::InvalidInput { .. }),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_file_allows_regular_files() {
+        let workspace = tempfile::tempdir().unwrap();
+
+        let tool = WriteFileTool;
+        let result = tool
+            .run(json!({
+                "path": "sub/dir/file.txt",
+                "content": "hello",
+                "workspace_root": workspace.path().to_str().unwrap(),
+            }))
+            .await
+            .unwrap();
+        assert!(result.get("written").unwrap().as_bool().unwrap());
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("sub/dir/file.txt")).unwrap(),
+            "hello"
+        );
     }
 }

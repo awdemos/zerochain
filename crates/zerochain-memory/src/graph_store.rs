@@ -4,6 +4,17 @@ use crate::error::{io_err, MemoryError};
 use crate::record::{ContributionRecord, ContributionType};
 use crate::Result;
 
+/// Record ids are `c-` followed by 16 lowercase hex chars. Parent/target
+/// ids arrive from tool/HTTP/CLI input, so they are validated against this
+/// shape before they can reach the filesystem.
+fn is_valid_record_id(id: &str) -> bool {
+    id.len() == 18
+        && id.starts_with("c-")
+        && id[2..]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Canonical append-only store of contribution records, one markdown file per
 /// record under `contributions/`. Files are never mutated after publish
 /// (spec §4.2).
@@ -39,6 +50,11 @@ impl ContributionStore {
             )));
         }
         for parent in &record.parents {
+            if !is_valid_record_id(parent) {
+                return Err(MemoryError::InvalidInput(format!(
+                    "invalid parent id: {parent}"
+                )));
+            }
             if self.get(parent).await?.is_none() {
                 return Err(MemoryError::InvalidInput(format!(
                     "parent not found: {parent}"
@@ -46,6 +62,11 @@ impl ContributionStore {
             }
         }
         if let Some(target) = &record.target {
+            if !is_valid_record_id(target) {
+                return Err(MemoryError::InvalidInput(format!(
+                    "invalid verification target id: {target}"
+                )));
+            }
             match self.get(target).await? {
                 None => {
                     return Err(MemoryError::InvalidInput(format!(
@@ -85,6 +106,11 @@ impl ContributionStore {
     }
 
     pub async fn get(&self, id: &str) -> Result<Option<ContributionRecord>> {
+        // Reject path-shaped ids outright: they would escape `self.dir` via
+        // `join`, turning reads into an existence oracle outside the store.
+        if id.contains('/') || id.contains('\\') || id.contains("..") {
+            return Ok(None);
+        }
         let path = self.dir.join(format!("{id}.md"));
         let content = match tokio::fs::read_to_string(&path).await {
             Ok(c) => c,
@@ -279,7 +305,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let store = ContributionStore::open(tmp.path()).await.unwrap();
         let mut rec = ContributionRecord::new(ContributionType::Verification, "a", "verdict");
-        rec.target = Some("c-missingtarget00".to_string());
+        rec.target = Some("c-0000ffff0000ffff".to_string());
         rec.verdict = Some(Verdict::Confirmed);
         rec.parents = vec![];
         let err = store.publish(rec).await.unwrap_err();
@@ -287,5 +313,70 @@ mod tests {
             err.to_string().contains("not found"),
             "expected target-not-found error, got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn publish_then_read_back_preserves_leading_whitespace_bodies() {
+        // Regression: the parser used to trim the body itself, so these
+        // records published fine then failed the content-hash check on read,
+        // becoming ghosts (invisible in list(), unusable as parents).
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path()).await.unwrap();
+        for body in [" ", "\n\n", "\t", "\n indented"] {
+            let rec = ContributionRecord::new(ContributionType::Insight, "a", body);
+            let published = store.publish(rec).await.unwrap();
+            let loaded = store
+                .get(&published.id)
+                .await
+                .unwrap_or_else(|e| panic!("record {} must be readable: {e}", published.id))
+                .unwrap_or_else(|| panic!("record {} must exist", published.id));
+            assert_eq!(loaded.id, published.id, "body {body:?} must keep its id");
+            assert_eq!(loaded.body, body, "body {body:?} must read back verbatim");
+        }
+        assert_eq!(store.list().await.unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn publish_rejects_path_shaped_parent_and_target_ids() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path()).await.unwrap();
+        let mut bad_parent = ContributionRecord::new(ContributionType::Result, "a", "x");
+        bad_parent.parents = vec!["../escape".to_string()];
+        let err = store.publish(bad_parent).await.unwrap_err();
+        assert!(
+            err.to_string().contains("invalid parent id"),
+            "expected invalid-parent error, got: {err}"
+        );
+
+        let mut bad_target = ContributionRecord::new(ContributionType::Verification, "a", "x");
+        bad_target.target = Some("/etc/passwd".to_string());
+        bad_target.verdict = Some(Verdict::Confirmed);
+        let err = store.publish(bad_target).await.unwrap_err();
+        assert!(
+            err.to_string().contains("invalid verification target id"),
+            "expected invalid-target error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_returns_none_for_path_shaped_ids() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path().join("store"))
+            .await
+            .unwrap();
+
+        // A real record sitting OUTSIDE the store: without the shape check,
+        // `../escape` would resolve to this file and return a
+        // distinguishable parse error (an existence oracle), not Ok(None).
+        let outside = ContributionRecord::new(ContributionType::Insight, "a", "outside");
+        let outside_md = outside.to_markdown().unwrap();
+        tokio::fs::write(tmp.path().join("escape.md"), outside_md)
+            .await
+            .unwrap();
+
+        assert!(store.get("../escape").await.unwrap().is_none());
+        assert!(store.get("a/b").await.unwrap().is_none());
+        assert!(store.get("a\\b").await.unwrap().is_none());
+        assert!(store.get("..\\..\\win").await.unwrap().is_none());
     }
 }

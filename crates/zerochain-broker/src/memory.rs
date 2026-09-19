@@ -30,13 +30,33 @@ impl Default for MemoryBroker {
     }
 }
 
+/// Returns true if `pattern` matches `subject` under NATS-style wildcard rules.
+///
+/// A `*` token in the pattern matches exactly one subject token (any string
+/// without dots, including non-empty matches only). All other tokens must
+/// match literally, and both subjects must have the same token count.
+fn subject_matches(pattern: &str, subject: &str) -> bool {
+    let mut pattern_tokens = pattern.split('.');
+    let mut subject_tokens = subject.split('.');
+    loop {
+        match (pattern_tokens.next(), subject_tokens.next()) {
+            (None, None) => return true,
+            (Some("*"), Some(token)) if !token.is_empty() => continue,
+            (Some(p), Some(s)) if p == s => continue,
+            _ => return false,
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Broker for MemoryBroker {
     async fn publish(&self, subject: &str, msg: BrokerMessage) -> Result<()> {
         let channels = self.channels.lock().await;
-        if let Some(tx) = channels.get(subject) {
-            // Ignore send errors — just means no subscribers
-            let _ = tx.send(msg);
+        for (subscribed, tx) in channels.iter() {
+            if subject_matches(subscribed, subject) {
+                // Ignore send errors — just means no subscribers
+                let _ = tx.send(msg.clone());
+            }
         }
         Ok(())
     }
@@ -144,5 +164,56 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn wildcard_subscriber_receives_matching_publish() {
+        let broker = MemoryBroker::new();
+        let mut rx = broker.subscribe("zerochain.*.*").await.unwrap();
+
+        let msg = dummy_msg();
+        broker
+            .publish("zerochain.wf1.02_next", msg.clone())
+            .await
+            .unwrap();
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.workflow_id, msg.workflow_id);
+        assert_eq!(received.to_stage, msg.to_stage);
+    }
+
+    #[tokio::test]
+    async fn wildcard_matches_exactly_one_token_per_star() {
+        let broker = MemoryBroker::new();
+        let mut rx = broker.subscribe("zerochain.*.*").await.unwrap();
+
+        // Too few tokens: `*` must match exactly one token.
+        broker.publish("zerochain.wf1", dummy_msg()).await.unwrap();
+        // Too many tokens.
+        broker
+            .publish("zerochain.wf1.02_next.extra", dummy_msg())
+            .await
+            .unwrap();
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn wildcard_and_exact_subscribers_both_receive() {
+        let broker = MemoryBroker::new();
+        let mut wildcard_rx = broker.subscribe("zerochain.*.*").await.unwrap();
+        let mut exact_rx = broker.subscribe("zerochain.wf1.02_next").await.unwrap();
+
+        broker
+            .publish("zerochain.wf1.02_next", dummy_msg())
+            .await
+            .unwrap();
+
+        assert_eq!(wildcard_rx.recv().await.unwrap().workflow_id, "wf-1");
+        assert_eq!(exact_rx.recv().await.unwrap().workflow_id, "wf-1");
     }
 }

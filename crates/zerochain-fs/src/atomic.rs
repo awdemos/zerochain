@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::{io_err, FsError, Result};
 
@@ -6,6 +9,11 @@ const COMPLETE_MARKER: &str = ".complete";
 const ERROR_MARKER: &str = ".error";
 const EXECUTING_MARKER: &str = ".executing";
 const LOCK_FILE: &str = ".lock";
+
+/// Process-global counter making temporary file names unique across tasks.
+/// Without it, concurrent `write_atomic` calls for the same path in one
+/// process share a tmp name and clobber each other.
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 async fn remove_marker(path: &Path) -> Result<()> {
     match tokio::fs::remove_file(path).await {
@@ -31,9 +39,10 @@ pub async fn write_atomic(path: &Path, content: &[u8]) -> Result<()> {
     })?;
 
     let tmp_name = format!(
-        ".tmp.{}.{}",
+        ".tmp.{}.{}.{}",
         file_name.to_string_lossy(),
-        std::process::id()
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
     );
     let tmp_path = parent.join(&tmp_name);
 
@@ -167,6 +176,42 @@ fn parse_lock_content(content: &str) -> Option<(u32, u64)> {
     Some((pid?, timestamp?))
 }
 
+/// In-process registry of lock files owned by live `LockGuard`s, keyed by
+/// lock path with a count of outstanding guards. A lock file whose PID is
+/// ours but whose path is absent here is a stale leftover (e.g. from a task
+/// that leaked its guard) and may be stolen.
+fn held_locks() -> &'static Mutex<HashMap<PathBuf, usize>> {
+    static HELD: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
+    HELD.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn held_locks_lock() -> std::sync::MutexGuard<'static, HashMap<PathBuf, usize>> {
+    held_locks().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn register_lock(lock_path: &Path) {
+    *held_locks_lock()
+        .entry(lock_path.to_path_buf())
+        .or_insert(0) += 1;
+}
+
+/// Drop one ownership claim; remove the lock file only when the last guard
+/// for the path is gone.
+fn unregister_lock(lock_path: &Path) {
+    let mut held = held_locks_lock();
+    let remove_file = match held.get_mut(lock_path) {
+        Some(count) => {
+            *count = count.saturating_sub(1);
+            *count == 0
+        }
+        None => true,
+    };
+    if remove_file {
+        held.remove(lock_path);
+        std::fs::remove_file(lock_path).ok();
+    }
+}
+
 pub struct LockGuard {
     lock_path: PathBuf,
     released: bool,
@@ -176,7 +221,7 @@ impl LockGuard {
     /// Release the lock and remove the lock file synchronously.
     pub fn release(mut self) {
         self.released = true;
-        std::fs::remove_file(&self.lock_path).ok();
+        unregister_lock(&self.lock_path);
     }
 }
 
@@ -185,7 +230,7 @@ impl Drop for LockGuard {
         if self.released {
             return;
         }
-        std::fs::remove_file(&self.lock_path).ok();
+        unregister_lock(&self.lock_path);
     }
 }
 
@@ -249,16 +294,31 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
     let content = format!("PID:{}\nTIMESTAMP:{}\n", std::process::id(), epoch_secs());
 
     match create_lock_file(&lock_path, &content).await {
-        Ok(()) => Ok(LockGuard {
-            lock_path,
-            released: false,
-        }),
+        Ok(()) => {
+            register_lock(&lock_path);
+            Ok(LockGuard {
+                lock_path,
+                released: false,
+            })
+        }
         Err(FsError::Io { source: e, path: _ })
             if e.kind() == std::io::ErrorKind::AlreadyExists =>
         {
             // Lock file exists; check whether it is stale.
             if let Some((pid, _ts)) = read_lock_pid(&lock_path).await {
-                if pid != std::process::id() && is_pid_alive(pid).await {
+                if pid == std::process::id() {
+                    // Owned by this process. If a live guard holds it, a
+                    // second acquire must NOT steal (that would silently
+                    // break mutual exclusion between tasks of this process).
+                    if held_locks_lock().contains_key(&lock_path) {
+                        return Err(FsError::LockHeld {
+                            path: lock_path,
+                            pid,
+                        });
+                    }
+                    // Same PID but untracked: stale leftover from a leaked
+                    // guard in this process; safe to steal below.
+                } else if is_pid_alive(pid).await {
                     return Err(FsError::LockHeld {
                         path: lock_path,
                         pid,
@@ -276,10 +336,13 @@ pub async fn acquire_lock(dir: &Path) -> Result<LockGuard> {
             })?;
 
             match create_lock_file(&lock_path, &content).await {
-                Ok(()) => Ok(LockGuard {
-                    lock_path,
-                    released: false,
-                }),
+                Ok(()) => {
+                    register_lock(&lock_path);
+                    Ok(LockGuard {
+                        lock_path,
+                        released: false,
+                    })
+                }
                 Err(FsError::Io { source: e, path: _ })
                     if e.kind() == std::io::ErrorKind::AlreadyExists =>
                 {
@@ -375,6 +438,36 @@ mod tests {
         while let Some(entry) = entries.next_entry().await.unwrap() {
             let name = entry.file_name().to_string_lossy().to_string();
             assert!(!name.starts_with(".tmp."), "leftover temp file: {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn write_atomic_concurrent_same_path_never_torn() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("contended.txt");
+
+        let content_a = vec![b'a'; 1000];
+        let content_b = vec![b'b'; 1000];
+
+        for _ in 0..500 {
+            let path_a = file_path.clone();
+            let path_b = file_path.clone();
+            let a = content_a.clone();
+            let b = content_b.clone();
+            let (ra, rb) = tokio::join!(
+                tokio::spawn(async move { write_atomic(&path_a, &a).await }),
+                tokio::spawn(async move { write_atomic(&path_b, &b).await }),
+            );
+            // Both writers must succeed: with a shared tmp name one rename
+            // fails ENOENT after the other renames the file away.
+            ra.unwrap().unwrap();
+            rb.unwrap().unwrap();
+
+            let final_content = tokio::fs::read(&file_path).await.unwrap();
+            assert!(
+                final_content == content_a || final_content == content_b,
+                "torn write: final content matches neither writer's full bytes"
+            );
         }
     }
 
@@ -547,6 +640,56 @@ mod tests {
         // Current process holds the lock, so is_locked returns false
         // (is_locked checks if a DIFFERENT live process holds it)
         assert!(!is_locked(tmp.path()).await);
+    }
+
+    #[tokio::test]
+    async fn acquire_lock_second_acquire_while_held_fails() {
+        let tmp = TempDir::new().unwrap();
+        let guard = acquire_lock(tmp.path()).await.unwrap();
+
+        // A second acquire from the SAME process must not steal the lock
+        // from the live guard (mutual exclusion between tasks of one
+        // process); it must fail instead.
+        let result = acquire_lock(tmp.path()).await;
+        assert!(
+            matches!(result, Err(FsError::LockHeld { .. })),
+            "second same-process acquire must fail while a guard is alive"
+        );
+        assert!(tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap());
+
+        drop(guard);
+
+        let mut attempts = 0;
+        while tokio::fs::try_exists(tmp.path().join(".lock"))
+            .await
+            .unwrap()
+            && attempts < 50
+        {
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            attempts += 1;
+        }
+
+        // After the guard is dropped the lock is fully released.
+        let guard2 = acquire_lock(tmp.path()).await.unwrap();
+        drop(guard2);
+    }
+
+    #[tokio::test]
+    async fn acquire_lock_steals_stale_same_pid_untracked() {
+        let tmp = TempDir::new().unwrap();
+        let lock_path = tmp.path().join(".lock");
+
+        // A lock file bearing our own PID but with no live guard in the
+        // held-lock registry is a stale leftover and must be stealable;
+        // otherwise the directory would stay wedged for the whole process.
+        let stale_content = format!("PID:{}\nTIMESTAMP:0\n", std::process::id());
+        tokio::fs::write(&lock_path, stale_content).await.unwrap();
+
+        let guard = acquire_lock(tmp.path()).await.unwrap();
+        assert!(tokio::fs::try_exists(&lock_path).await.unwrap());
+        drop(guard);
     }
 
     #[tokio::test]

@@ -268,6 +268,10 @@ impl ContributionRecord {
     /// Structural parse only: no `validate()` and no content-hash check —
     /// use `from_markdown_with_id` for untrusted files.
     pub fn from_markdown(content: &str) -> Result<Self> {
+        // Normalize CRLF line endings before delimiter scanning so a
+        // Windows-written record parses identically to an LF one. Ids are
+        // computed over the parsed record, so LF-only content is unaffected.
+        let content = content.replace("\r\n", "\n");
         let trimmed = content.trim_start();
         if !trimmed.starts_with("---") {
             return Err(MemoryError::InvalidInput(
@@ -278,10 +282,13 @@ impl ContributionRecord {
         // The closing delimiter must be a line that is exactly `---`; a line
         // like `---junk` must not terminate the frontmatter.
         let (yaml_str, body) = if let Some(i) = after_first.find("\n---\n") {
-            (
-                &after_first[..i],
-                after_first[i + 5..].trim_start().to_string(),
-            )
+            // Strip exactly the one separator newline the writer emits after
+            // the closing fence (`---\n` + blank line); trimming any further
+            // would alter the body and break the content-hash check for
+            // bodies with leading whitespace.
+            let raw = &after_first[i + 5..];
+            let body = raw.strip_prefix('\n').unwrap_or(raw).to_string();
+            (&after_first[..i], body)
         } else if let Some(yaml) = after_first.strip_suffix("\n---") {
             // Frontmatter closed by a trailing `---` at end of input.
             (yaml, String::new())
@@ -485,6 +492,38 @@ mod tests {
             md.starts_with(&format!("---\nid: {}\n", rec.compute_id())),
             "markdown must embed the computed id"
         );
+    }
+
+    #[test]
+    fn body_with_leading_whitespace_round_trips_with_same_id() {
+        // Bodies whose first character is whitespace must survive the
+        // markdown round trip byte-for-byte; the parser may only strip the
+        // single separator newline the writer emits, never the body itself.
+        for body in [" ", "\n\n", "\t", "\n indented"] {
+            let mut rec = sample_record();
+            rec.body = body.to_string();
+            rec.id = rec.compute_id();
+            let md = rec.to_markdown().unwrap();
+            let parsed = ContributionRecord::from_markdown_with_id(&md, &rec.id)
+                .unwrap_or_else(|e| panic!("body {body:?} must parse: {e}"));
+            assert_eq!(parsed.body, body, "body {body:?} must round-trip verbatim");
+            assert_eq!(parsed.compute_id(), rec.id);
+        }
+    }
+
+    #[test]
+    fn crlf_line_endings_parse_like_lf() {
+        // A CRLF-written record must scan the closing delimiter and hash
+        // identically to its LF form.
+        let mut rec = sample_record();
+        rec.id = rec.compute_id();
+        let md = rec.to_markdown().unwrap();
+        let crlf = md.replace('\n', "\r\n");
+        assert!(crlf.contains("\r\n---\r\n"));
+        let parsed = ContributionRecord::from_markdown_with_id(&crlf, &rec.id)
+            .unwrap_or_else(|e| panic!("CRLF record must parse: {e}"));
+        assert_eq!(parsed.body, rec.body);
+        assert_eq!(parsed.id, rec.id);
     }
 
     #[test]

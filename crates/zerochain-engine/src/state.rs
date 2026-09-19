@@ -7,7 +7,7 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::error::DaemonError;
 use crate::llm_driver::LLMStageDriver;
 use zerochain_cas::CasStore;
-use zerochain_core::context::ContextCache;
+use zerochain_core::context::{Context as StageContext, ContextCache};
 use zerochain_core::graph::ControlOutcome;
 use zerochain_core::jj;
 use zerochain_core::okf::{
@@ -195,12 +195,10 @@ impl AppState {
 
     /// Load all workflows from the workspace workflows directory.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if the workflow directory cannot be read or if any
-    /// workflow definition fails to parse. Partial failures are reported via
-    /// [`DaemonError::WorkflowLoadPartial`].
-    #[tracing::instrument(skip(self), err, fields(dir = %self.workspace_root.display()))]
+    /// A workflow directory that fails to load (e.g. a partially-created
+    /// init) is skipped with a warning so one bad directory cannot brick
+    /// startup for every caller; the remaining workflows still load.
+    #[tracing::instrument(skip(self), fields(dir = %self.workspace_root.display()))]
     pub async fn load_workflows(&mut self) -> Result<(), DaemonError> {
         let dir = workflow_dir(&self.workspace_root);
         match tokio::fs::metadata(&dir).await {
@@ -212,7 +210,6 @@ impl AppState {
         let mut entries = tokio::fs::read_dir(&dir)
             .await
             .map_err(|e| DaemonError::io(&dir, e))?;
-        let mut failures = Vec::new();
         while let Some(entry) = entries
             .next_entry()
             .await
@@ -227,17 +224,11 @@ impl AppState {
                     self.workflows.insert(wf.id.clone(), wf);
                 }
                 Err(e) => {
-                    let msg = format!("{}: {}", path.display(), e);
-                    tracing::warn!(path = %path.display(), error = %e, "failed to load workflow");
-                    failures.push(msg);
+                    tracing::warn!(path = %path.display(), error = %e, "skipping unloadable workflow directory");
                 }
             }
         }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(DaemonError::WorkflowLoadPartial(failures.join("; ")))
-        }
+        Ok(())
     }
 
     #[must_use]
@@ -460,7 +451,14 @@ impl AppState {
             .replace(['/', '\\'], "-")
             .replace("..", "-")
             .replace('\0', "");
-        if sanitized_id.is_empty() || sanitized_id.len() > 128 {
+        // A name with no alphanumeric character cannot identify a workflow
+        // ("." and "-" both sanitize to themselves-ish junk), and a root that
+        // canonicalizes back to the workflows base itself would make
+        // `--force` wipe EVERY workflow.
+        if sanitized_id.is_empty()
+            || sanitized_id.len() > 128
+            || !sanitized_id.chars().any(|c| c.is_alphanumeric())
+        {
             return Err(DaemonError::Workflow(
                 zerochain_core::error::Error::InvalidWorkflowName {
                     name: name.to_string(),
@@ -468,6 +466,24 @@ impl AppState {
             ));
         }
         let workflow_root = wf_base.join(&sanitized_id);
+        // Only ever touch a directory strictly INSIDE the workflows base.
+        let canonical_base = tokio::fs::canonicalize(&wf_base)
+            .await
+            .map_err(|e| DaemonError::io(&wf_base, e))?;
+        match tokio::fs::canonicalize(&workflow_root).await {
+            Ok(canonical_root) => {
+                if canonical_root == canonical_base || !canonical_root.starts_with(&canonical_base)
+                {
+                    return Err(DaemonError::Workflow(
+                        zerochain_core::error::Error::InvalidWorkflowName {
+                            name: name.to_string(),
+                        },
+                    ));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DaemonError::io(&workflow_root, e)),
+        }
         match tokio::fs::metadata(&workflow_root).await {
             Ok(_) => {
                 if force {
@@ -513,7 +529,7 @@ impl AppState {
             .build();
 
         let cow_backend = self.cow_backend.clone();
-        let workflow = Workflow::init_with_factories(
+        let workflow = match Workflow::init_with_factories(
             &task,
             &wf_base,
             move |path| {
@@ -540,7 +556,22 @@ impl AppState {
                 }
             },
         )
-        .await?;
+        .await
+        {
+            Ok(workflow) => workflow,
+            Err(e) => {
+                // A partial workflow directory would fail every future
+                // load_workflows scan for this workspace; remove it.
+                if let Err(cleanup) = tokio::fs::remove_dir_all(&workflow_root).await {
+                    tracing::warn!(
+                        path = %workflow_root.display(),
+                        error = %cleanup,
+                        "failed to clean up partially-created workflow directory"
+                    );
+                }
+                return Err(DaemonError::from(e));
+            }
+        };
 
         if let Some(defs) = stage_defs {
             for def in defs {
@@ -721,6 +752,19 @@ impl AppState {
         tokio::fs::write(&marker, feedback.unwrap_or(""))
             .await
             .map_err(|e| DaemonError::io(&marker, e))?;
+        // A stage with both markers is a wedge: the plan treats it as Error
+        // while status shows [done]. Mirror mark_stage_complete and remove the
+        // stale completion marker.
+        let complete_marker = stage.path.join(".complete");
+        match tokio::fs::metadata(&complete_marker).await {
+            Ok(_) => {
+                tokio::fs::remove_file(&complete_marker)
+                    .await
+                    .map_err(|e| DaemonError::io(&complete_marker, e))?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(DaemonError::io(&complete_marker, e)),
+        }
         tracing::info!(
             workflow_id,
             stage_id,
@@ -758,6 +802,7 @@ impl AppState {
             &wf.root,
             self.cow_backend.clone(),
             self.cas.as_ref(),
+            false,
         )
         .await
     }
@@ -769,6 +814,7 @@ impl AppState {
         workflow_root: &Path,
         cow_backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync>,
         cas: Option<&CasStore>,
+        omit_output: bool,
     ) -> Result<PathBuf, DaemonError> {
         let start = std::time::Instant::now();
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -795,6 +841,26 @@ impl AppState {
                 stage: stage_dir_name.clone(),
                 source: e,
             })?;
+
+        if omit_output {
+            // Pre-execution snapshots run concurrently with the stage's LLM
+            // call, which writes stage/output/result.md while the copy is in
+            // flight; copying output/ here could capture a torn result.md.
+            let output_dir = snap_dir.join("output");
+            match tokio::fs::remove_dir_all(&output_dir).await {
+                Ok(()) => {
+                    tracing::debug!(snapshot = %snap_dir.display(), "excluded output/ from snapshot");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        path = %output_dir.display(),
+                        error = %e,
+                        "failed to exclude output/ from snapshot"
+                    );
+                }
+            }
+        }
 
         if let Some(c) = cas {
             tracing::debug!(workflow_id, stage_id, cas_metrics = ?c.metrics(), "snapshot metrics");
@@ -922,10 +988,11 @@ impl AppState {
             return Ok(());
         }
 
-        // Snapshot names embed a UTC timestamp + nanosecond nonce, so
-        // lexicographic order is chronological order within a stage. This
-        // avoids unreliable filesystem mtimes that copy utilities may preserve.
-        names.sort();
+        // Sort by the embedded `<timestamp>.<nonce>` suffix rather than the
+        // full name: lexicographic order interleaves stages alphabetically
+        // and could evict the NEWEST snapshot of an early-named stage while
+        // keeping older snapshots of a later-named one.
+        names.sort_by_key(|n| snapshot_chrono_key(n));
         let to_remove = names.len() - MAX_SNAPSHOTS_PER_WORKFLOW;
 
         for name in names.iter().take(to_remove) {
@@ -1098,9 +1165,10 @@ impl AppState {
             state: Arc::new(self.clone_state()),
         };
 
-        // Snapshot the stage in the background while the LLM request is in flight.
-        // The stage directory is not mutated by the LLM path (writes go to
-        // stage.output_path), so the copy and the network call can safely overlap.
+        // Snapshot the stage in the background while the LLM request is in
+        // flight. The copy and the network call overlap safely because the
+        // pre-execution snapshot excludes stage/output/ (the LLM path writes
+        // result.md there mid-copy, which could capture a torn file).
         let workflow_root = self
             .workflows
             .get(workflow_id)
@@ -1121,6 +1189,7 @@ impl AppState {
                     &workflow_root,
                     cow_backend,
                     cas.as_ref(),
+                    true,
                 )
                 .await
             })
@@ -1197,10 +1266,16 @@ impl AppState {
 
         let result = executor.run_stage(&config).await?;
 
+        let definition_of_done =
+            StageContext::from_md_file_cached(&stage.context_path, Some(&self.context_cache))
+                .await
+                .ok()
+                .and_then(|ctx| ctx.frontmatter.definition_of_done);
+
         let fm = OkfFrontmatter {
             okf_type: "Stage Output".into(),
             title: Some(stage.id.raw.clone()),
-            description: stage.context_path.to_str().map(|s| s.to_string()),
+            description: definition_of_done,
             generated: Some(OkfActor::new(zerochain_actor())),
             status: Some("stable".into()),
             ..Default::default()
@@ -1287,6 +1362,21 @@ impl AppState {
     }
 }
 
+/// Extract the chronologically-sortable `<timestamp>.<nonce>` suffix from a
+/// snapshot name (`<stage>.<timestamp>.<nonce>`) without assuming the stage
+/// prefix contains no dots. The nonce is parsed numerically: nanosecond
+/// values vary in digit count, so lexicographic nonce comparison can pick
+/// the wrong "latest" snapshot when two snapshots share a timestamp.
+fn snapshot_chrono_key(name: &str) -> (String, u32) {
+    let mut parts = name.rsplitn(3, '.');
+    let nonce = parts
+        .next()
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(0);
+    let timestamp = parts.next().unwrap_or_default().to_string();
+    (timestamp, nonce)
+}
+
 async fn find_latest_snapshot(
     snapshots_dir: &Path,
     stage_id: &str,
@@ -1307,10 +1397,12 @@ async fn find_latest_snapshot(
         }
         candidates.push(name.to_string());
     }
-    // Snapshot names embed a UTC timestamp + nanosecond nonce, so lexicographic
-    // order is chronological order. Filesystem mtime is unreliable because copy
-    // utilities preserve the source directory's modification time.
-    candidates.sort();
+    // Snapshot names embed a UTC timestamp + nanosecond nonce; order by that
+    // suffix (numerically on the nonce) rather than lexicographically, which
+    // mis-orders same-second snapshots whose nanosecond values have different
+    // digit counts. Filesystem mtime is unreliable because copy utilities
+    // preserve the source directory's modification time.
+    candidates.sort_by_key(|n| snapshot_chrono_key(n));
     Ok(candidates.into_iter().last())
 }
 
@@ -1753,6 +1845,244 @@ mod tests {
 
         let latest = find_latest_snapshot(dir, "00_spec").await.unwrap().unwrap();
         assert_eq!(latest, "00_spec.20250101T000000Z");
+    }
+
+    #[tokio::test]
+    async fn load_workflows_skips_unloadable_directories() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        state
+            .init_workflow(InitWorkflowParams {
+                name: "good-one",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        // A partially-created or corrupt workflow directory must not brick
+        // loading of the healthy workflows.
+        let garbage = tmp
+            .path()
+            .join(".zerochain")
+            .join("workflows")
+            .join("garbage");
+        tokio::fs::create_dir_all(&garbage).await.unwrap();
+        tokio::fs::write(garbage.join("junk.txt"), "not a workflow")
+            .await
+            .unwrap();
+
+        let mut fresh = AppState::new(tmp.path(), None).await;
+        fresh
+            .load_workflows()
+            .await
+            .expect("one unloadable directory must not fail the whole load");
+        assert!(fresh.get_workflow("good-one").is_some());
+        assert!(!fresh.workflows.contains_key("garbage"));
+    }
+
+    #[tokio::test]
+    async fn failed_init_leaves_no_workflow_directory() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        // Duplicate stage names make the second stage's input symlink fail
+        // partway through Workflow::init_with_factories.
+        let result = state
+            .init_workflow(InitWorkflowParams {
+                name: "dup-init",
+                path: None,
+                template: Some("00_a,00_a"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await;
+        assert!(result.is_err(), "duplicate stage names must fail init");
+
+        let wf_base = tmp.path().join(".zerochain").join("workflows");
+        assert!(
+            !wf_base.join("dup-init").exists(),
+            "partially-created workflow directory must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_workflow_rejects_dot_name_and_preserves_existing() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        state
+            .init_workflow(InitWorkflowParams {
+                name: "keep-me",
+                path: None,
+                template: Some("00_spec,01_impl"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+
+        // Even with --force, a name that sanitizes to the workflows base
+        // itself ("." -> wf_base/"." == wf_base) must be rejected, or the
+        // force-removal would wipe EVERY workflow.
+        for bad in [".", "..", "-", " "] {
+            let result = state
+                .init_workflow(InitWorkflowParams {
+                    name: bad,
+                    path: None,
+                    template: None,
+                    force: true,
+                    parents: Vec::new(),
+                })
+                .await;
+            assert!(result.is_err(), "name {bad:?} must be rejected");
+        }
+
+        let wf_base = tmp.path().join(".zerochain").join("workflows");
+        assert!(
+            wf_base
+                .join("keep-me")
+                .join("00_spec")
+                .join("CONTEXT.md")
+                .exists(),
+            "existing workflow untouched"
+        );
+        assert!(
+            wf_base
+                .join("keep-me")
+                .join("01_impl")
+                .join("CONTEXT.md")
+                .exists(),
+            "existing workflow untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_stage_error_removes_complete_marker() {
+        let tmp = TempDir::new().unwrap();
+        let mut state = AppState::new(tmp.path(), None).await;
+        let wf = state
+            .init_workflow(InitWorkflowParams {
+                name: "err-clobbers",
+                path: None,
+                template: Some("00_spec"),
+                force: false,
+                parents: Vec::new(),
+            })
+            .await
+            .unwrap();
+        let stage = &wf.stages[0];
+
+        state
+            .mark_stage_complete("err-clobbers", &stage.id.raw, None)
+            .await
+            .unwrap();
+        assert!(stage.path.join(".complete").exists());
+
+        // Reject-after-approve: exactly one marker may remain, or the plan
+        // sees Error while status shows [done].
+        state
+            .mark_stage_error("err-clobbers", &stage.id.raw, Some("rejected"))
+            .await
+            .unwrap();
+        assert!(
+            !stage.path.join(".complete").exists(),
+            "stale .complete marker must be removed when the stage errors"
+        );
+        let content = tokio::fs::read_to_string(stage.path.join(".error"))
+            .await
+            .unwrap();
+        assert_eq!(content, "rejected");
+    }
+
+    #[tokio::test]
+    async fn pre_execution_snapshot_omits_output_directory() {
+        let tmp = TempDir::new().unwrap();
+        let wf_root = tmp.path().join("wf");
+        let stage_path = wf_root.join("00_spec");
+        tokio::fs::create_dir_all(stage_path.join("output"))
+            .await
+            .unwrap();
+        tokio::fs::write(stage_path.join("data.txt"), b"state")
+            .await
+            .unwrap();
+        tokio::fs::write(stage_path.join("output").join("result.md"), b"torn?")
+            .await
+            .unwrap();
+
+        let backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync> =
+            Arc::new(zerochain_fs::DirectoryCow);
+        let snap = AppState::snapshot_stage_at_path(
+            "wf",
+            "00_spec",
+            &stage_path,
+            &wf_root,
+            backend,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+
+        assert!(snap.join("data.txt").exists());
+        assert!(
+            !snap.join("output").exists(),
+            "pre-execution snapshot must exclude output/"
+        );
+
+        // On-demand snapshots keep output/ for full-fidelity restore.
+        let backend: Arc<dyn zerochain_fs::CowPlatform + Send + Sync> =
+            Arc::new(zerochain_fs::DirectoryCow);
+        let full = AppState::snapshot_stage_at_path(
+            "wf",
+            "00_spec",
+            &stage_path,
+            &wf_root,
+            backend,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(full.join("output").join("result.md").exists());
+    }
+
+    #[tokio::test]
+    async fn snapshot_cleanup_keeps_newest_across_stages() {
+        let tmp = TempDir::new().unwrap();
+        let snapshots_dir = tmp.path().join(".snapshots");
+        tokio::fs::create_dir_all(&snapshots_dir).await.unwrap();
+        for i in 0..MAX_SNAPSHOTS_PER_WORKFLOW {
+            let name = format!("01_impl.20250101T0000{i:02}Z.1");
+            tokio::fs::create_dir_all(snapshots_dir.join(&name))
+                .await
+                .unwrap();
+        }
+        // Newest snapshot overall, but of the alphabetically EARLY stage:
+        // lexicographic pruning would evict it first.
+        tokio::fs::create_dir_all(snapshots_dir.join("00_spec.20250601T000000Z.1"))
+            .await
+            .unwrap();
+
+        let backend = zerochain_fs::DirectoryCow;
+        AppState::cleanup_old_snapshots_static(&snapshots_dir, &backend)
+            .await
+            .unwrap();
+
+        assert!(
+            snapshots_dir.join("00_spec.20250601T000000Z.1").exists(),
+            "newest snapshot must survive pruning"
+        );
+        assert!(
+            !snapshots_dir.join("01_impl.20250101T000000Z.1").exists(),
+            "oldest snapshot should be pruned"
+        );
+        let mut rd = tokio::fs::read_dir(&snapshots_dir).await.unwrap();
+        let mut count = 0;
+        while rd.next_entry().await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, MAX_SNAPSHOTS_PER_WORKFLOW);
     }
 
     #[tokio::test]

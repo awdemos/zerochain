@@ -1,9 +1,15 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{io_err, MemoryError};
 use crate::model::{EmbeddingModel, MemoryChunk};
 use crate::similarity::cosine_similarity;
 use crate::Result;
+
+/// Process-global counter disambiguating concurrent tmp files: two writers
+/// in this process must never share one tmp name (a fixed name lets
+/// concurrent persists interleave bytes or fail each other's rename).
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// On-disk vector memory store for a single workflow.
 #[derive(Debug, Clone)]
@@ -34,8 +40,15 @@ impl MemoryStore {
             if line.trim().is_empty() {
                 continue;
             }
-            let chunk: MemoryChunk = serde_json::from_str(line)?;
-            chunks.push(chunk);
+            // Self-healing: a corrupt line is skipped with a warning (and
+            // its content re-added on the next stage run), never fatal —
+            // mirroring ContributionStore::list and the embedding cache.
+            match serde_json::from_str::<MemoryChunk>(line) {
+                Ok(chunk) => chunks.push(chunk),
+                Err(e) => {
+                    tracing::warn!(error = %e, "skipping corrupt memory chunk line")
+                }
+            }
         }
         Ok(MemoryStore { chunks, path })
     }
@@ -106,7 +119,10 @@ impl MemoryStore {
             lines.push(line);
         }
         let content = lines.join("\n");
-        let tmp_path = self.path.with_extension("jsonl.tmp");
+        let unique = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let tmp_path =
+            self.path
+                .with_extension(format!("jsonl.tmp.{}.{}", std::process::id(), unique));
         tokio::fs::write(&tmp_path, content)
             .await
             .map_err(|e| io_err(&tmp_path, e))?;
@@ -192,5 +208,48 @@ mod tests {
         assert!(results
             .iter()
             .any(|r| r.1.text.contains("zerochain semantic search")));
+    }
+
+    #[tokio::test]
+    async fn open_skips_corrupt_lines_and_keeps_good_chunks() {
+        let dir = TempDir::new().unwrap();
+        let good = MemoryChunk::new("chunk-0", "good chunk", json!({"src": "a.md"}));
+        let mut content = serde_json::to_string(&good).unwrap();
+        content.push('\n');
+        content.push_str("{ this is not json }\n");
+        tokio::fs::write(dir.path().join("memory.jsonl"), content)
+            .await
+            .unwrap();
+
+        let store = MemoryStore::open(dir.path()).await.unwrap();
+        assert_eq!(store.chunks.len(), 1, "good chunk survives the bad line");
+        assert_eq!(store.chunks[0].text, "good chunk");
+    }
+
+    #[tokio::test]
+    async fn concurrent_persist_uses_unique_tmp_files() {
+        let dir = TempDir::new().unwrap();
+        let mut store = MemoryStore::open(dir.path()).await.unwrap();
+        store
+            .add(&FakeEmbeddingModel, vec![("text".into(), json!({}))])
+            .await
+            .unwrap();
+
+        // Two writers in this process must not share one tmp name: a fixed
+        // name lets one rename remove the other's tmp file (ENOENT) or
+        // interleave bytes into it.
+        let (r1, r2) = tokio::join!(store.persist(), store.persist());
+        r1.unwrap();
+        r2.unwrap();
+
+        let reopened = MemoryStore::open(dir.path()).await.unwrap();
+        assert_eq!(reopened.chunks.len(), 1);
+        assert_eq!(reopened.chunks[0].text, "text");
+        let leftover_tmps: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftover_tmps.is_empty(), "tmp files are renamed away");
     }
 }

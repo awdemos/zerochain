@@ -14,6 +14,22 @@ pub fn is_valid_workflow_name(name: &str) -> bool {
             .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
 }
 
+/// Validates a single path component used as a stage directory name.
+///
+/// Stage names come from task files, templates, and HTTP/MCP/CLI input, and
+/// are joined directly into workflow paths — anything that could escape the
+/// workflow root (separators, `..`) or produce an unusable directory must be
+/// rejected. This is deliberately looser than [`StageId::parse`] so that
+/// documented bare names like `research` are still accepted.
+fn validate_stage_component(name: &str) -> Result<()> {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(Error::InvalidStageName {
+            name: name.to_string(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Workflow {
@@ -146,15 +162,21 @@ impl Workflow {
                 name: task.id.clone(),
             });
         }
-        let workflow_dir = base_path.join(&sanitized_id);
-        create_workflow_root(workflow_dir.clone()).await?;
-
         let stage_names = task.stage_names();
         let stage_defs: Vec<String> = if stage_names.is_empty() {
             (0..3).map(|i| format!("{i:02}_stage_{i}")).collect()
         } else {
             stage_names
         };
+
+        // Validate every stage name before creating anything on disk so a
+        // malicious or malformed name cannot escape the workflow root.
+        for stage_name in &stage_defs {
+            validate_stage_component(stage_name)?;
+        }
+
+        let workflow_dir = base_path.join(&sanitized_id);
+        create_workflow_root(workflow_dir.clone()).await?;
 
         let mut prev_output: Option<PathBuf> = None;
 
@@ -208,6 +230,11 @@ impl Workflow {
         after_raw: &str,
         new_stage_name: &str,
     ) -> Result<()> {
+        // The name flows from Lua hooks / HTTP / CLI input and is joined into
+        // filesystem paths below — reject anything that could escape the
+        // workflow root or produce an unusable directory.
+        validate_stage_component(new_stage_name)?;
+
         let idx = self
             .stage_index(after_raw)
             .ok_or_else(|| Error::InvalidStageName {
@@ -217,8 +244,24 @@ impl Workflow {
         let after_stage = &self.stages[idx];
         let next_seq = after_stage.id.sequence;
 
-        let new_seq = next_seq + 1;
+        let new_seq = next_seq.checked_add(1).ok_or_else(|| Error::PlanError {
+            reason: format!("stage sequence overflow inserting after {after_raw}"),
+        })?;
         let new_raw = format!("{new_seq:02}_{new_stage_name}");
+
+        // Refuse to clobber an existing stage: the computed directory name or
+        // sequence number may already be taken (e.g. inserting after `01_x`
+        // when `02_y` exists).
+        if self.stages.iter().any(|s| s.id.raw == new_raw) {
+            return Err(Error::PlanError {
+                reason: format!("stage {new_raw} already exists"),
+            });
+        }
+        if self.stages.iter().any(|s| s.id.sequence == new_seq) {
+            return Err(Error::PlanError {
+                reason: format!("stage sequence {new_seq} is already taken"),
+            });
+        }
 
         let new_dir = self.root.join(&new_raw);
         tokio::fs::create_dir_all(new_dir.join("input"))
@@ -684,5 +727,124 @@ mod tests {
         assert!(paths[0].ends_with("FACTORY-100"));
         assert!(paths[1].ends_with("00_a"));
         assert!(paths[2].ends_with("01_b"));
+    }
+
+    fn task_with_stages(id: &str, stages: Vec<String>) -> Task {
+        Task {
+            id: id.to_string(),
+            title: "Stage validation test".to_string(),
+            status: "todo".to_string(),
+            priority: None,
+            execution: Some(crate::task::TaskExecution {
+                stages,
+                strategy: None,
+            }),
+            acceptance_criteria: vec![],
+            parents: vec![],
+            description: "Stage validation test".to_string(),
+            source_path: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn init_rejects_escaping_stage_names_before_creating_anything() {
+        for bad in ["../escape", "a/b", "a\\b", "", "..", "00_.._x"] {
+            let tmp = tempfile::tempdir().unwrap();
+            let task = task_with_stages("ESCAPE-100", vec!["00_spec".to_string(), bad.to_string()]);
+            let result = Workflow::init(&task, tmp.path()).await;
+            assert!(
+                result.is_err(),
+                "stage name {bad:?} must be rejected, got {:?}",
+                result.map(|w| w.id)
+            );
+            // Nothing may be created — not even the workflow root.
+            let mut entries = tokio::fs::read_dir(tmp.path()).await.unwrap();
+            assert!(
+                entries.next_entry().await.unwrap().is_none(),
+                "init with stage name {bad:?} must not create anything"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_stage_after_refuses_to_clobber_existing_stage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workflow_dir = create_test_workflow(tmp.path()).await;
+        let original_ctx =
+            tokio::fs::read_to_string(workflow_dir.join("02_implement").join("CONTEXT.md"))
+                .await
+                .unwrap();
+
+        let mut wf = Workflow::from_dir(&workflow_dir).await.unwrap();
+        // Inserting after 01_analyze computes sequence 2, but 02_implement
+        // already occupies it — this must error instead of overwriting.
+        let result = wf.insert_stage_after("01_analyze", "review").await;
+        assert!(result.is_err(), "collision must be rejected");
+
+        let ctx_after =
+            tokio::fs::read_to_string(workflow_dir.join("02_implement").join("CONTEXT.md"))
+                .await
+                .unwrap();
+        assert_eq!(ctx_after, original_ctx, "existing stage must be untouched");
+        assert_eq!(wf.stages.len(), 3, "no stage may be added on collision");
+    }
+
+    #[tokio::test]
+    async fn insert_stage_after_rejects_path_escaping_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workflow_dir = create_test_workflow(tmp.path()).await;
+        let mut wf = Workflow::from_dir(&workflow_dir).await.unwrap();
+
+        for bad in ["../evil", "a/b", "a\\b", "", ".."] {
+            let result = wf.insert_stage_after("02_implement", bad).await;
+            assert!(
+                matches!(result, Err(Error::InvalidStageName { .. })),
+                "stage name {bad:?} must be rejected, got {result:?}"
+            );
+        }
+        // Nothing outside the workflow tree may appear.
+        assert!(!tmp.path().join("evil").exists());
+        assert!(!workflow_dir.join("evil").exists());
+        assert_eq!(wf.stages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn insert_stage_after_rejects_sequence_overflow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workflow_dir = tmp.path().join("overflow-wf");
+        let stage_dir = workflow_dir.join("4294967295_last");
+        tokio::fs::create_dir_all(stage_dir.join("input"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(stage_dir.join("output"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            stage_dir.join("CONTEXT.md"),
+            "---\nrole: last\n---\n# last\n",
+        )
+        .await
+        .unwrap();
+
+        let mut wf = Workflow::from_dir(&workflow_dir).await.unwrap();
+        let result = wf.insert_stage_after("4294967295_last", "one_more").await;
+        assert!(
+            matches!(result, Err(Error::PlanError { .. })),
+            "sequence overflow must be rejected, got {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_stage_after_creates_stage_when_no_collision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workflow_dir = create_test_workflow(tmp.path()).await;
+        let mut wf = Workflow::from_dir(&workflow_dir).await.unwrap();
+
+        wf.insert_stage_after("02_implement", "review")
+            .await
+            .unwrap();
+        assert_eq!(wf.stages.len(), 4);
+        assert_eq!(wf.stages[3].id.raw, "03_review");
+        assert!(workflow_dir.join("03_review").join("CONTEXT.md").is_file());
     }
 }

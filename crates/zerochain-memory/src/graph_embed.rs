@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,11 @@ use crate::graph_store::ContributionStore;
 use crate::model::EmbeddingModel;
 use crate::similarity::cosine_similarity;
 use crate::Result;
+
+/// Process-global counter disambiguating concurrent tmp files: two writers
+/// in this process must never share one tmp name (a fixed name lets
+/// concurrent cache writes interleave bytes or fail each other's rename).
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Maximum characters of a record body fed to the embedding model.
 const EMBED_BODY_LIMIT: usize = 4000;
@@ -135,7 +141,11 @@ impl GraphEmbedIndex {
                 embedding: embedding.clone(),
             })?);
         }
-        let tmp = path.with_extension("jsonl.tmp");
+        let tmp = path.with_extension(format!(
+            "jsonl.tmp.{}.{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
         tokio::fs::write(&tmp, lines.join("\n"))
             .await
             .map_err(|e| io_err(&tmp, e))?;
@@ -271,6 +281,37 @@ mod tests {
             .unwrap();
         // Second build: cache is complete, the model must not be invoked.
         let index = GraphEmbedIndex::build(&store, &PanicModel, &cache)
+            .await
+            .unwrap();
+        let ranked = index.search(&KeywordModel, "alpha", None, 1).await.unwrap();
+        assert_eq!(ranked.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_cache_builds_do_not_clobber_each_other() {
+        let tmp = TempDir::new().unwrap();
+        let store = ContributionStore::open(tmp.path().join("contributions"))
+            .await
+            .unwrap();
+        store
+            .publish(ContributionRecord::new(
+                ContributionType::Insight,
+                "a",
+                "alpha",
+            ))
+            .await
+            .unwrap();
+        let cache = tmp.path().join("index").join("embeddings.jsonl");
+
+        // Both builds write the cache concurrently; with a fixed tmp name
+        // one rename removes the other's tmp file and the build fails.
+        let (r1, r2) = tokio::join!(
+            GraphEmbedIndex::build(&store, &KeywordModel, &cache),
+            GraphEmbedIndex::build(&store, &KeywordModel, &cache)
+        );
+        r1.unwrap();
+        r2.unwrap();
+        let index = GraphEmbedIndex::build(&store, &KeywordModel, &cache)
             .await
             .unwrap();
         let ranked = index.search(&KeywordModel, "alpha", None, 1).await.unwrap();

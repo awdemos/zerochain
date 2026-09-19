@@ -182,15 +182,10 @@ impl ZerochainMcpServer {
                 ),
             ];
             for stage in &workflow.stages {
-                let marker = if stage.is_complete {
-                    "done"
-                } else if stage.is_error {
-                    "error"
-                } else if stage.human_gate {
-                    "gate"
-                } else {
-                    "pending"
-                };
+                // Match the execution plan's precedence: a stage with both
+                // markers is errored, not done.
+                let marker =
+                    crate::stage_marker(stage.is_error, stage.is_complete, stage.human_gate);
                 lines.push(format!("  {} [{}]", stage.id.raw, marker));
             }
             tool_success(lines.join("\n"))
