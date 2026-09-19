@@ -64,7 +64,7 @@ make docker    # produce zerochaind-image.tar
 - Content addressing uses `blake3` hashes.
 - Async runtime is `tokio`; HTTP server uses `axum`.
 - Logging uses `tracing` with `tracing-subscriber` (env-filter + JSON support).
-- Lua config engine is optional; stages can modify the workflow graph at runtime.
+- Lua config is optional: a stage's `CONTEXT.lua` script generates its context config (instead of YAML frontmatter), and sandboxed `on_validate`/`on_complete` hooks can skip stages or react to output. Lua cannot modify the workflow graph at runtime.
 
 ## Gotchas
 

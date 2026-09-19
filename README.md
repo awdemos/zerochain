@@ -35,7 +35,7 @@ Directories are stages. Files are state. Symlinks are data flow.
 | **🦀 Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
 | **🏛️ Auditable** | Because state is files, every mutation is a file operation. Layer jj underneath and you get an immutable, queryable audit trail for free — with `jj op log`, `jj undo`, and zero extra infrastructure. |
 | **🕸️ Collective memory** | Workspace-level, append-only contribution graph. Every run chains to prior runs, verifications supersede, and everything is content-addressed and auditable through the same jj trail. |
-| **🧬 Self-modifying workflows** | Optional Lua config engine. Stages can insert/remove subsequent stages at runtime. |
+| **🧬 Lua stage scripts** | Optional: configure a stage with `CONTEXT.lua` instead of YAML frontmatter, and run sandboxed `on_validate`/`on_complete` hooks — e.g. skip a stage dynamically based on upstream output. |
 
 ---
 
