@@ -1,7 +1,84 @@
-use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::error::{Error, Result};
+
+/// OKF §5: every timestamp-valued key is an ISO 8601 datetime with an explicit
+/// UTC offset (RFC 3339), for example `2026-06-30T14:00:00Z`. Legacy zerochain
+/// files wrote integer epoch seconds for `at` and a bare `YYYY-MM-DD` date for
+/// `stale_after`; both are still accepted on read.
+fn serialize_rfc3339_opt<S>(
+    dt: &Option<DateTime<Utc>>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match dt {
+        Some(dt) => serializer.serialize_some(&dt.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn epoch_to_datetime(epoch: u64) -> Option<DateTime<Utc>> {
+    let secs = i64::try_from(epoch).ok()?;
+    DateTime::from_timestamp(secs, 0)
+}
+
+/// `at` accepts an RFC 3339 datetime or a legacy integer epoch-seconds value.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Rfc3339OrEpoch {
+    Rfc3339(DateTime<Utc>),
+    Epoch(u64),
+}
+
+fn deserialize_rfc3339_or_epoch_opt<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<Rfc3339OrEpoch>::deserialize(deserializer)? {
+        Some(Rfc3339OrEpoch::Rfc3339(dt)) => Ok(Some(dt)),
+        Some(Rfc3339OrEpoch::Epoch(epoch)) => epoch_to_datetime(epoch)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom(format!("epoch {epoch} out of range"))),
+        None => Ok(None),
+    }
+}
+
+/// `stale_after` accepts an RFC 3339 instant (spec), a legacy bare
+/// `YYYY-MM-DD` date (interpreted as midnight UTC), or a legacy integer
+/// epoch-seconds value.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StaleAfter {
+    Instant(DateTime<Utc>),
+    BareDate(NaiveDate),
+    Epoch(u64),
+}
+
+fn deserialize_stale_after<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Option::<StaleAfter>::deserialize(deserializer)? {
+        Some(StaleAfter::Instant(dt)) => Ok(Some(dt)),
+        Some(StaleAfter::BareDate(date)) => {
+            let midnight = date
+                .and_hms_opt(0, 0, 0)
+                .ok_or_else(|| serde::de::Error::custom(format!("invalid legacy date {date}")))?;
+            Ok(Some(midnight.and_utc()))
+        }
+        Some(StaleAfter::Epoch(epoch)) => epoch_to_datetime(epoch)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom(format!("epoch {epoch} out of range"))),
+        None => Ok(None),
+    }
+}
 
 /// Actor string identifying who or what performed an action.
 ///
@@ -11,7 +88,11 @@ use crate::error::{Error, Result};
 #[non_exhaustive]
 pub struct OkfActor {
     pub by: String,
-    #[serde(with = "chrono::serde::ts_seconds_option", default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_rfc3339_or_epoch_opt",
+        serialize_with = "serialize_rfc3339_opt"
+    )]
     pub at: Option<DateTime<Utc>>,
 }
 
@@ -57,7 +138,12 @@ pub struct OkfFrontmatter {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<OkfSource>,
     pub status: Option<String>,
-    pub stale_after: Option<NaiveDate>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_stale_after",
+        serialize_with = "serialize_rfc3339_opt"
+    )]
+    pub stale_after: Option<DateTime<Utc>>,
 }
 
 /// `verified` accepts either a sequence of actors or a bare single actor
@@ -364,5 +450,100 @@ mod tests {
         let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
         assert_eq!(fm.verified.len(), 1);
         assert_eq!(fm.verified[0].by, "process:nightly");
+    }
+
+    fn dt(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn spec_example_datetimes_parse() {
+        // Examples taken from the OKF v0.2 spec.
+        let yaml = r#"
+type: Concept
+generated:
+  by: human:ahormati
+  at: 2026-04-12T09:00:00Z
+verified:
+  - by: human:ahormati
+    at: 2026-06-25T09:00:00Z
+"#;
+        let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
+        let generated = fm.generated.expect("generated actor");
+        assert_eq!(generated.by, "human:ahormati");
+        assert_eq!(generated.at, Some(dt("2026-04-12T09:00:00Z")));
+        assert_eq!(fm.verified.len(), 1);
+        assert_eq!(fm.verified[0].by, "human:ahormati");
+        assert_eq!(fm.verified[0].at, Some(dt("2026-06-25T09:00:00Z")));
+    }
+
+    #[test]
+    fn spec_example_stale_after_instant_parses() {
+        let yaml = "type: Concept\nstale_after: 2026-09-23T00:00:00Z\n";
+        let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(fm.stale_after, Some(dt("2026-09-23T00:00:00Z")));
+    }
+
+    #[test]
+    fn legacy_integer_at_still_parses() {
+        let yaml = "type: Concept\ngenerated:\n  by: process:nightly\n  at: 1700000000\n";
+        let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
+        let generated = fm.generated.expect("generated actor");
+        assert_eq!(generated.by, "process:nightly");
+        assert_eq!(generated.at.map(|t| t.timestamp()), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn legacy_bare_date_stale_after_still_parses() {
+        for yaml in [
+            "type: Concept\nstale_after: 2026-01-02\n",
+            "type: Concept\nstale_after: '2026-01-02'\n",
+        ] {
+            let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
+            assert_eq!(
+                fm.stale_after,
+                Some(dt("2026-01-02T00:00:00Z")),
+                "yaml: {yaml}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_epoch_stale_after_still_parses() {
+        let yaml = "type: Concept\nstale_after: 1700000000\n";
+        let fm: OkfFrontmatter = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(fm.stale_after.map(|t| t.timestamp()), Some(1_700_000_000));
+    }
+
+    #[test]
+    fn to_md_writes_rfc3339_datetimes() {
+        let fm = OkfFrontmatter {
+            okf_type: "Concept".into(),
+            generated: Some(OkfActor {
+                by: "human:ahormati".into(),
+                at: Some(dt("2026-04-12T09:00:00Z")),
+            }),
+            verified: vec![OkfActor {
+                by: "human:ahormati".into(),
+                at: Some(dt("2026-06-25T09:00:00Z")),
+            }],
+            stale_after: Some(dt("2026-09-23T00:00:00Z")),
+            ..Default::default()
+        };
+        let doc = to_md_with_frontmatter(&fm, "Body").unwrap();
+        // serde_yml quotes timestamp-looking scalars; the value is still the
+        // RFC 3339 instant and round-trips back to the same `DateTime`.
+        assert!(doc.contains("2026-04-12T09:00:00Z"), "doc:\n{doc}");
+        assert!(doc.contains("2026-06-25T09:00:00Z"), "doc:\n{doc}");
+        assert!(doc.contains("2026-09-23T00:00:00Z"), "doc:\n{doc}");
+
+        let (parsed, body) = split_frontmatter(&doc).unwrap();
+        assert_eq!(body, "Body");
+        assert_eq!(
+            parsed.generated.unwrap().at,
+            Some(dt("2026-04-12T09:00:00Z"))
+        );
+        assert_eq!(parsed.verified[0].at, Some(dt("2026-06-25T09:00:00Z")));
+        assert_eq!(parsed.stale_after, Some(dt("2026-09-23T00:00:00Z")));
     }
 }
