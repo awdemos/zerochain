@@ -400,42 +400,69 @@ pub async fn init_repo(workspace: &Path) -> bool {
             return true;
         }
 
-        let result = Command::new("jj")
-            .args(["init", "--git"])
+        // The workspace may not exist yet (engine init creates it later);
+        // jj refuses to spawn with a missing working directory.
+        if let Err(e) = std::fs::create_dir_all(&workspace) {
+            tracing::warn!(error = %e, "failed to create workspace before jj init");
+            return false;
+        }
+
+        // Modern jj (0.28+) removed `jj init`; `jj git init` is the supported
+        // form. Fall back to the legacy invocation for older versions.
+        let modern = Command::new("jj")
+            .args(["git", "init"])
             .current_dir(&workspace)
             .output();
-
-        match result {
-            Ok(output) if output.status.success() => {
-                if let Err(e) = Command::new("jj")
-                    .args(["config", "set", "user.name", "zerochain"])
-                    .current_dir(&workspace)
-                    .output()
-                {
-                    tracing::warn!(error = %e, "failed to set jj user.name");
-                }
-                if let Err(e) = Command::new("jj")
-                    .args(["config", "set", "user.email", "zerochain@daemon"])
-                    .current_dir(&workspace)
-                    .output()
-                {
-                    tracing::warn!(error = %e, "failed to set jj user.email");
-                }
-                tracing::debug!("jj repo initialized");
-                true
-            }
+        let init_ok = match modern {
+            Ok(output) if output.status.success() => true,
             Ok(output) => {
-                tracing::warn!(
-                    stderr = %String::from_utf8_lossy(&output.stderr),
-                    "jj init failed"
-                );
-                false
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                match Command::new("jj")
+                    .args(["init", "--git"])
+                    .current_dir(&workspace)
+                    .output()
+                {
+                    Ok(output) if output.status.success() => true,
+                    Ok(output) => {
+                        tracing::warn!(
+                            stderr = %stderr,
+                            legacy_stderr = %String::from_utf8_lossy(&output.stderr),
+                            "jj init failed"
+                        );
+                        false
+                    }
+                    Err(e) => {
+                        tracing::debug!("jj not available: {e}");
+                        false
+                    }
+                }
             }
             Err(e) => {
                 tracing::debug!("jj not available: {e}");
-                false
+                return false;
             }
+        };
+
+        if !init_ok {
+            return false;
         }
+
+        if let Err(e) = Command::new("jj")
+            .args(["config", "set", "user.name", "zerochain"])
+            .current_dir(&workspace)
+            .output()
+        {
+            tracing::warn!(error = %e, "failed to set jj user.name");
+        }
+        if let Err(e) = Command::new("jj")
+            .args(["config", "set", "user.email", "zerochain@daemon"])
+            .current_dir(&workspace)
+            .output()
+        {
+            tracing::warn!(error = %e, "failed to set jj user.email");
+        }
+        tracing::debug!("jj repo initialized");
+        true
     })
     .await
 }
