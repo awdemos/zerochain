@@ -11,7 +11,7 @@
 **Multi-agent orchestration using the filesystem.**  
 Directories are stages. Files are state. Symlinks are data flow.
 
-[⚡ Quick Start](#-quick-start) · [✨ Highlights](#-highlights) · [🖥️ CLI](#-cli) · [🌐 HTTP API](#-container-zerochaind) · [🏗️ Architecture](#-architecture)
+[⚡ Quick Start](#-quick-start) · [✨ Highlights](#-highlights) · [🖥️ CLI](#-cli) · [🌐 HTTP API](#-container-zerochaind) · [🕸️ Contribution Graph](#️-collective-contribution-graph) · [🧰 LLM Tools](#-llm-tools) · [🏗️ Architecture](#️-architecture)
 
 </div>
 
@@ -34,6 +34,7 @@ Directories are stages. Files are state. Symlinks are data flow.
 | **🔌 Provider-agnostic** | Any OpenAI-compatible API — OpenAI, Ollama, Moonshot, and more. |
 | **🦀 Zero unsafe** | Pure safe Rust. Async I/O with tokio. Every fallible op returns `Result`. |
 | **🏛️ Auditable** | Because state is files, every mutation is a file operation. Layer jj underneath and you get an immutable, queryable audit trail for free — with `jj op log`, `jj undo`, and zero extra infrastructure. |
+| **🕸️ Collective memory** | Workspace-level, append-only contribution graph. Every run chains to prior runs, verifications supersede, and everything is content-addressed and auditable through the same jj trail. |
 | **🧬 Self-modifying workflows** | Optional Lua config engine. Stages can insert/remove subsequent stages at runtime. |
 
 ---
@@ -121,6 +122,9 @@ dagger call publish --registry ttl.sh/$USER-zerochaind:1h
 | `GET` | `/v1/workflows/{id}/output/{stage}` | Read result |
 | `GET` | `/v1/workflows/{id}/subvolumes` | List Btrfs subvolumes (Btrfs-only) |
 | `GET` | `/v1/workflows/{id}/export-okf?output=<dir>` | Export workflow as OKF v0.2 bundle |
+| `GET` | `/v1/graph` | Query the collective contribution graph (views, tags, actors, metric filters) |
+| `POST` | `/v1/graph/contributions` | Publish a contribution (`setup`/`result`/`insight`/`hypothesis`/`report`) |
+| `POST` | `/v1/graph/verifications` | Publish a reproduction verdict against a target contribution |
 
 ### 🔍 Audit Trails
 
@@ -152,19 +156,23 @@ export ZEROCHAIN_OKF_ACTOR="my-org/1.0"
 
 ## 🕸️ Collective Contribution Graph
 
-zerochain keeps a workspace-level, append-only graph of typed contributions so workflows build on past runs instead of starting from scratch. Every workflow init publishes a `setup` node; stages with `index_output: true` publish `result` nodes chained to their lineage; agents publish `insight`/`hypothesis`/`verification` records via the `contribute`, `verify`, and `graph_query` tools (list them in a stage's `tools:` frontmatter). Records live as content-addressed markdown under `.zerochain/graph/` and are auditable through the same jj trail as everything else.
+zerochain keeps a workspace-level, append-only graph of typed contributions so workflows build on past runs instead of starting from scratch — Agora-style shared memory, implemented as files. Every workflow init publishes a `setup` node; stages with `index_output: true` publish `result` nodes chained to their lineage; agents publish `insight`/`hypothesis`/`verification` records via the `contribute`, `verify`, and `graph_query` tools (list them in a stage's `tools:` frontmatter).
+
+Contributions are typed (`setup`, `result`, `insight`, `hypothesis`, `verification`, `report`), content-addressed as `c-<hash>` markdown under `.zerochain/graph/contributions/`, and linked by parent edges — every record names what it builds on, so any claim can be traced back to the exact artifact and lineage that produced it. A `verification` names exactly one target and a verdict (`confirmed`/`partial`/`failed`); each verifier's newest verdict supersedes their older ones at query time, and both stay in the history. Everything is auditable through the same jj trail as the rest of the workspace.
 
 ```bash
 # Link a new workflow to prior contributions
 zerochain init --name run-2 --parent c-9f3a21c7d4e8b601
 
-# Human surfaces
+# Human surfaces (actor recorded as human:$USER)
 zerochain contribute --type insight --body "donor ensembling helps" --parent c-9f3a21c7d4e8b601
 zerochain verify c-9f3a21c7d4e8b601 --verdict confirmed --body "reproduced on H100"
 zerochain graph --view leaders        # recent | leaves | open_hypotheses | unverified | negative | leaders
 ```
 
-Stage outputs can carry a metric via CONTEXT.md frontmatter: `metric: {name: bpb, value: 1.899, direction: lower}`.
+The same graph is exposed over HTTP (`GET /v1/graph`, `POST /v1/graph/contributions`, `POST /v1/graph/verifications`) behind the daemon's bearer auth for non-Rust clients.
+
+Stage outputs can carry a metric via CONTEXT.md frontmatter — `metric: {name: bpb, value: 1.899, direction: lower}` — which the engine attaches to the auto-captured `result` node, alongside content-addressed `b3:` artifact references.
 
 ---
 
@@ -230,6 +238,29 @@ The actor runtime (`zerochain-engine`) executes the graph while keeping zerochai
 
 ---
 
+## 🧰 LLM Tools
+
+Stages can be given tools — reusable capabilities the LLM may invoke mid-run, with results fed back into the conversation in a bounded tool loop. Enable them per stage in CONTEXT.md frontmatter:
+
+```yaml
+---
+tools: [read_file, write_file, shell, contribute, verify, graph_query]
+tool_loop_max_iterations: 8
+---
+```
+
+| Tool | What it does |
+|------|--------------|
+| `read_file` / `write_file` | Read and write files inside the workflow workspace |
+| `shell` | Run a shell command |
+| `http` | Make an HTTP request |
+| `memory_store` / `memory_query` | Store chunks and search vector memory semantically |
+| `contribute` / `verify` / `graph_query` | Publish and query collective contribution graph records |
+
+Tools are registered in `zerochain-tools`; the engine injects workflow context (workspace paths, graph lineage, actor) into every call.
+
+---
+
 ## 🏗️ Architecture
 
 **Content-addressed storage.** All artifacts stored by Blake3 hash. No filenames matter — content identity is the hash.
@@ -245,10 +276,14 @@ The actor runtime (`zerochain-engine`) executes the graph while keeping zerochai
 | Crate | Purpose |
 |-------|---------|
 | `zerochain-cas` | Blake3 content-addressed storage with atomic writes |
-| `zerochain-fs` | Copy-on-write filesystem, advisory locks, stage markers |
+| `zerochain-fs` | Copy-on-write filesystem, advisory locks, Btrfs subvolumes |
 | `zerochain-llm` | Provider-agnostic LLM backend with profiles |
-| `zerochain-core` | Workflow engine, Lua config, Backlog.md parsing, execution graph |
-| `zerochain-daemon` | CLI binary |
+| `zerochain-core` | Workflow/stage model, execution graph, Lua config, frontmatter (tools, metric), OKF |
+| `zerochain-memory` | Vector memory and semantic search, plus the collective contribution graph (records, store, index, embeddings) |
+| `zerochain-tools` | Tool registry with built-in file, shell, HTTP, memory, and graph tools |
+| `zerochain-broker` | Message broker abstraction for cross-pod agent communication |
+| `zerochain-error` | Shared error types for the workspace |
+| `zerochain-daemon` | CLI binary (`zerochain`) |
 | `zerochain-server` | HTTP daemon (zerochaind) |
 
 ---
@@ -314,6 +349,7 @@ The module mounts cargo cache volumes for incremental builds, so repeated runs a
 - [ ] OpenCode TypeScript plugin
 - [x] Dagger CI module
 - [x] Template registry for common workflow patterns
+- [x] Collective contribution graph (Agora-style shared memory)
 
 ---
 
